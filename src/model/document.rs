@@ -1,6 +1,6 @@
 //! High-level typed IDML document aggregate.
 
-use crate::archive::{IdmlPackage, IdmlPackageWriter};
+use crate::archive::{IdmlPackage, IdmlPackageWriter, IdmlPath};
 use crate::core::resolver::{
     ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
 };
@@ -20,6 +20,8 @@ pub struct IdmlDocument {
     pub stories: IndexMap<String, Story>,
     /// Spread models keyed by their `DesignMap` spread ID.
     pub spreads: IndexMap<String, Spread>,
+    /// Raw `DesignMap`-referenced entries that are not typed yet.
+    pub preserved_entries: IndexMap<IdmlPath, Vec<u8>>,
 }
 
 /// Parser limits used when eagerly loading an [`IdmlDocument`] from a package.
@@ -149,6 +151,7 @@ impl IdmlDocument {
             design_map,
             stories: IndexMap::new(),
             spreads: IndexMap::new(),
+            preserved_entries: IndexMap::new(),
         }
     }
 
@@ -162,6 +165,18 @@ impl IdmlDocument {
         self.spreads.insert(id.into(), spread)
     }
 
+    /// Inserts or replaces a raw package entry that should be preserved on write.
+    ///
+    /// The path must be referenced by `DesignMap` as a master spread or another
+    /// package resource before [`IdmlDocument::validate`] will accept it.
+    pub fn insert_preserved_entry(
+        &mut self,
+        path: IdmlPath,
+        data: impl Into<Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        self.preserved_entries.insert(path, data.into())
+    }
+
     /// Creates a deterministic allocator with all current document IDs reserved.
     pub fn id_allocator(&self) -> Result<IdmlIdAllocator> {
         IdmlIdAllocator::from_document(self)
@@ -173,6 +188,7 @@ impl IdmlDocument {
         validate_manifest_models("spread model", &self.design_map.spread_srcs, &self.spreads)?;
         validate_no_unreferenced_models("story", &self.design_map.story_srcs, &self.stories)?;
         validate_no_unreferenced_models("spread", &self.design_map.spread_srcs, &self.spreads)?;
+        self.validate_preserved_entries()?;
         self.validate_story_ids()?;
         self.validate_spread_ids()?;
         self.validate_unique_object_ids()?;
@@ -210,6 +226,9 @@ impl IdmlDocument {
             .iter()
             .map(|(id, path)| (id.clone(), path.clone()))
             .collect::<Vec<_>>();
+        let preserved_refs = referenced_preserved_paths(&design_map)
+            .cloned()
+            .collect::<Vec<_>>();
 
         let mut document = Self::new(design_map);
         for (id, path) in story_refs {
@@ -217,6 +236,10 @@ impl IdmlDocument {
         }
         for (id, path) in spread_refs {
             document.insert_spread(id, package.read_spread(&path)?);
+        }
+        for path in preserved_refs {
+            let data = package.read_entry(&path)?;
+            document.insert_preserved_entry(path, data);
         }
 
         document.validate()?;
@@ -284,6 +307,13 @@ impl IdmlDocument {
                 .expect("validated story presence");
             package.add_story(path.as_str(), story)?;
         }
+        for path in referenced_preserved_paths(&self.design_map) {
+            let data = self
+                .preserved_entries
+                .get(path)
+                .expect("validated preserved entry presence");
+            package.add_file(path.as_str(), data)?;
+        }
         package.finish()
     }
 
@@ -333,6 +363,29 @@ impl IdmlDocument {
         Ok(())
     }
 
+    fn validate_preserved_entries(&self) -> Result<()> {
+        let referenced = referenced_preserved_paths(&self.design_map)
+            .cloned()
+            .collect::<IndexSet<_>>();
+
+        for path in &referenced {
+            if !self.preserved_entries.contains_key(path) {
+                return Err(IdmlError::MissingArchiveEntry(path.to_string()));
+            }
+        }
+        for path in self.preserved_entries.keys() {
+            if !referenced.contains(path) {
+                return Err(IdmlError::InvalidReference {
+                    kind: "preserved package entry",
+                    id: path.to_string(),
+                    reason: "entry is not present in DesignMap",
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     fn validate_unique_object_ids(&self) -> Result<()> {
         let mut seen = IndexSet::new();
 
@@ -356,7 +409,7 @@ impl IdmlDocument {
 
 fn validate_manifest_models<T>(
     kind: &'static str,
-    manifest: &IndexMap<String, crate::archive::IdmlPath>,
+    manifest: &IndexMap<String, IdmlPath>,
     models: &IndexMap<String, T>,
 ) -> Result<()> {
     for id in manifest.keys() {
@@ -372,7 +425,7 @@ fn validate_manifest_models<T>(
 
 fn validate_no_unreferenced_models<T>(
     kind: &'static str,
-    manifest: &IndexMap<String, crate::archive::IdmlPath>,
+    manifest: &IndexMap<String, IdmlPath>,
     models: &IndexMap<String, T>,
 ) -> Result<()> {
     for id in models.keys() {
@@ -385,6 +438,13 @@ fn validate_no_unreferenced_models<T>(
         }
     }
     Ok(())
+}
+
+fn referenced_preserved_paths(design_map: &DesignMap) -> impl Iterator<Item = &IdmlPath> {
+    design_map
+        .master_spread_srcs
+        .values()
+        .chain(design_map.other_package_srcs.values().flatten())
 }
 
 fn validate_optional_self_id(kind: &'static str, id: &str, self_id: Option<&str>) -> Result<()> {
@@ -465,6 +525,70 @@ mod tests {
         let parsed = IdmlDocument::read_from_package(&mut package).unwrap();
 
         assert_eq!(parsed, document);
+    }
+
+    #[test]
+    fn reads_and_writes_preserved_designmap_entries() {
+        let master_path = IdmlPath::new("MasterSpreads/MasterSpread_u20.xml").unwrap();
+        let resource_path = IdmlPath::new("Resources/Graphic.xml").unwrap();
+        let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer
+            .add_file(
+                "designmap.xml",
+                br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:MasterSpread src="MasterSpreads/MasterSpread_u20.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#,
+            )
+            .unwrap();
+        writer
+            .add_file("Spreads/Spread_u10.xml", br#"<Spread Self="u10" />"#)
+            .unwrap();
+        writer
+            .add_file(
+                "Stories/Story_u1.xml",
+                br#"<Story Self="u1"><Content>Generated</Content></Story>"#,
+            )
+            .unwrap();
+        writer
+            .add_file(master_path.as_str(), b"<MasterSpread Self=\"u20\" />")
+            .unwrap();
+        writer
+            .add_file(
+                resource_path.as_str(),
+                b"<Graphic><Data>raw</Data></Graphic>",
+            )
+            .unwrap();
+        let zip = writer.finish().unwrap().into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let document = IdmlDocument::read_from_package(&mut package).unwrap();
+
+        assert_eq!(
+            document.preserved_entries[&master_path],
+            b"<MasterSpread Self=\"u20\" />"
+        );
+        assert_eq!(
+            document.preserved_entries[&resource_path],
+            b"<Graphic><Data>raw</Data></Graphic>"
+        );
+
+        let round_trip = document
+            .write_to(Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(round_trip)).unwrap();
+
+        assert_eq!(
+            package.read_entry(&master_path).unwrap(),
+            b"<MasterSpread Self=\"u20\" />"
+        );
+        assert_eq!(
+            package.read_entry(&resource_path).unwrap(),
+            b"<Graphic><Data>raw</Data></Graphic>"
+        );
     }
 
     #[test]
@@ -758,6 +882,42 @@ mod tests {
                 kind: "document object",
                 id,
             } if id == "u1"
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_preserved_designmap_entry() {
+        let mut document = make_document();
+        document.design_map.other_package_srcs.insert(
+            "idPkg:Graphic".to_owned(),
+            vec![IdmlPath::new("Resources/Graphic.xml").unwrap()],
+        );
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingArchiveEntry(path) if path == "Resources/Graphic.xml"
+        ));
+    }
+
+    #[test]
+    fn rejects_unreferenced_preserved_entry() {
+        let mut document = make_document();
+        document.insert_preserved_entry(
+            IdmlPath::new("Resources/Graphic.xml").unwrap(),
+            b"raw".as_slice(),
+        );
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "preserved package entry",
+                id,
+                reason: "entry is not present in DesignMap",
+            } if id == "Resources/Graphic.xml"
         ));
     }
 
