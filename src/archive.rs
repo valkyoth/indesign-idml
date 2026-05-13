@@ -142,6 +142,11 @@ where
         self.add_file(path, story.to_xml()?.as_bytes())
     }
 
+    /// Serializes and adds a spread XML entry to the package.
+    pub fn add_spread(&mut self, path: impl Into<String>, spread: &Spread) -> Result<()> {
+        self.add_file(path, spread.to_xml()?.as_bytes())
+    }
+
     /// Finishes the ZIP central directory and returns the wrapped writer.
     pub fn finish(self) -> Result<W> {
         Ok(self.writer.finish()?)
@@ -560,8 +565,9 @@ fn validate_archive_path(path: &str) -> Result<()> {
 mod tests {
     use super::{ArchiveLimits, IDML_MIMETYPE, IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::IdmlError;
+    use crate::core::units::Points;
     use crate::model::designmap::DesignMap;
-    use crate::model::spread::Rect;
+    use crate::model::spread::{Rect, Spread, TextFrame};
     use crate::model::story::Story;
     use std::io::{Cursor, Write};
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
@@ -904,6 +910,38 @@ mod tests {
         let parsed = package.resolve_story(&design_map, "u1").unwrap();
 
         assert_eq!(parsed, story);
+    }
+
+    #[test]
+    fn writer_adds_serialized_spread() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+</Document>"#;
+        let spread = Spread {
+            id: Some("u10".to_owned()),
+            text_frames: vec![TextFrame {
+                id: Some("tf1".to_owned()),
+                parent_story: Some("u1".to_owned()),
+                geometric_bounds: Some(Rect::new(
+                    Points::new(0.0),
+                    Points::new(0.0),
+                    Points::new(72.0),
+                    Points::new(144.0),
+                )),
+            }],
+        };
+        let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer.add_file("designmap.xml", designmap).unwrap();
+        writer
+            .add_spread("Spreads/Spread_u10.xml", &spread)
+            .unwrap();
+        let zip = writer.finish().unwrap().into_inner();
+
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let design_map = package.read_designmap().unwrap();
+        let parsed = package.resolve_spread(&design_map, "u10").unwrap();
+
+        assert_eq!(parsed, spread);
     }
 
     #[test]
