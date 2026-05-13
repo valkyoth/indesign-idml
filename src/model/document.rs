@@ -4,7 +4,7 @@ use crate::archive::{IdmlPackage, IdmlPackageWriter};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::DesignMap;
 use crate::model::spread::Spread;
-use crate::model::story::Story;
+use crate::model::story::{Story, StoryParseOptions};
 use indexmap::{IndexMap, IndexSet};
 use std::io::{Read, Seek, Write};
 
@@ -17,6 +17,13 @@ pub struct IdmlDocument {
     pub stories: IndexMap<String, Story>,
     /// Spread models keyed by their `DesignMap` spread ID.
     pub spreads: IndexMap<String, Spread>,
+}
+
+/// Parser limits used when eagerly loading an [`IdmlDocument`] from a package.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct IdmlDocumentReadOptions {
+    /// Story parser limits.
+    pub story: StoryParseOptions,
 }
 
 impl IdmlDocument {
@@ -61,6 +68,17 @@ impl IdmlDocument {
     where
         R: Read + Seek,
     {
+        Self::read_from_package_with_options(package, IdmlDocumentReadOptions::default())
+    }
+
+    /// Reads all manifest-referenced stories and spreads with explicit limits.
+    pub fn read_from_package_with_options<R>(
+        package: &mut IdmlPackage<R>,
+        options: IdmlDocumentReadOptions,
+    ) -> Result<Self>
+    where
+        R: Read + Seek,
+    {
         let design_map = package.read_designmap()?;
         let story_refs = design_map
             .story_srcs
@@ -75,7 +93,7 @@ impl IdmlDocument {
 
         let mut document = Self::new(design_map);
         for (id, path) in story_refs {
-            document.insert_story(id, package.read_story(&path)?);
+            document.insert_story(id, package.read_story_with_options(&path, options.story)?);
         }
         for (id, path) in spread_refs {
             document.insert_spread(id, package.read_spread(&path)?);
@@ -227,13 +245,13 @@ fn remember_object_id(seen: &mut IndexSet<String>, id: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::IdmlDocument;
+    use super::{IdmlDocument, IdmlDocumentReadOptions};
     use crate::IdmlError;
     use crate::archive::{IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::core::units::Points;
     use crate::model::designmap::DesignMap;
     use crate::model::spread::{Rect, Spread, TextFrame};
-    use crate::model::story::Story;
+    use crate::model::story::{Story, StoryParseOptions};
     use std::io::Cursor;
 
     #[test]
@@ -265,6 +283,26 @@ mod tests {
         let parsed = IdmlDocument::read_from_package(&mut package).unwrap();
 
         assert_eq!(parsed, document);
+    }
+
+    #[test]
+    fn read_from_package_with_options_enforces_story_text_limit() {
+        let document = make_document();
+        let zip = document
+            .write_to(Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = IdmlDocument::read_from_package_with_options(
+            &mut package,
+            IdmlDocumentReadOptions {
+                story: StoryParseOptions { max_text_bytes: 4 },
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
     }
 
     #[test]

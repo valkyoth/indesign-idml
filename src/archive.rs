@@ -6,7 +6,7 @@ use crate::core::resolver::{
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::DesignMap;
 use crate::model::spread::{Rect, Spread};
-use crate::model::story::Story;
+use crate::model::story::{Story, StoryParseOptions};
 use indexmap::IndexMap;
 use std::fmt;
 use std::io::{Read, Seek, Write};
@@ -267,9 +267,18 @@ where
 
     /// Reads and parses a story XML entry.
     pub fn read_story(&mut self, path: &IdmlPath) -> Result<Story> {
+        self.read_story_with_options(path, StoryParseOptions::default())
+    }
+
+    /// Reads and parses a story XML entry with explicit parser limits.
+    pub fn read_story_with_options(
+        &mut self,
+        path: &IdmlPath,
+        options: StoryParseOptions,
+    ) -> Result<Story> {
         let bytes = self.read_entry(path)?;
         let xml = std::str::from_utf8(&bytes)?;
-        Story::from_xml(xml)
+        Story::from_xml_with_options(xml, options)
     }
 
     /// Reads and parses a spread XML entry.
@@ -281,6 +290,16 @@ where
 
     /// Resolves a story ID through a parsed design map and parses that story.
     pub fn resolve_story(&mut self, design_map: &DesignMap, story_id: &str) -> Result<Story> {
+        self.resolve_story_with_options(design_map, story_id, StoryParseOptions::default())
+    }
+
+    /// Resolves a story ID through a parsed design map with explicit parser limits.
+    pub fn resolve_story_with_options(
+        &mut self,
+        design_map: &DesignMap,
+        story_id: &str,
+        options: StoryParseOptions,
+    ) -> Result<Story> {
         let path =
             design_map
                 .story_srcs
@@ -289,7 +308,7 @@ where
                     kind: "story",
                     id: story_id.to_owned(),
                 })?;
-        self.read_story(path)
+        self.read_story_with_options(path, options)
     }
 
     /// Resolves a spread ID through a parsed design map and parses that spread.
@@ -307,7 +326,19 @@ where
 
     /// Resolves a story ID and returns only its extracted text.
     pub fn resolve_story_text(&mut self, design_map: &DesignMap, story_id: &str) -> Result<String> {
-        Ok(self.resolve_story(design_map, story_id)?.text)
+        self.resolve_story_text_with_options(design_map, story_id, StoryParseOptions::default())
+    }
+
+    /// Resolves a story ID and returns text with explicit parser limits.
+    pub fn resolve_story_text_with_options(
+        &mut self,
+        design_map: &DesignMap,
+        story_id: &str,
+        options: StoryParseOptions,
+    ) -> Result<String> {
+        Ok(self
+            .resolve_story_with_options(design_map, story_id, options)?
+            .text)
     }
 
     /// Extracts all story text in `designmap.xml` order.
@@ -315,9 +346,18 @@ where
         &mut self,
         design_map: &DesignMap,
     ) -> Result<IndexMap<String, String>> {
+        self.extract_story_texts_with_options(design_map, StoryParseOptions::default())
+    }
+
+    /// Extracts all story text in `designmap.xml` order with explicit parser limits.
+    pub fn extract_story_texts_with_options(
+        &mut self,
+        design_map: &DesignMap,
+        options: StoryParseOptions,
+    ) -> Result<IndexMap<String, String>> {
         let mut texts = IndexMap::with_capacity(design_map.story_srcs.len());
         for (story_id, path) in &design_map.story_srcs {
-            let story = self.read_story(path)?;
+            let story = self.read_story_with_options(path, options)?;
             texts.insert(story_id.clone(), story.text);
         }
         Ok(texts)
@@ -568,7 +608,7 @@ mod tests {
     use crate::core::units::Points;
     use crate::model::designmap::DesignMap;
     use crate::model::spread::{Rect, Spread, TextFrame};
-    use crate::model::story::Story;
+    use crate::model::story::{Story, StoryParseOptions};
     use std::io::{Cursor, Write};
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -651,6 +691,22 @@ mod tests {
 
         assert_eq!(story.id.as_deref(), Some("u2"));
         assert_eq!(story.text, "Hello\nWorld");
+    }
+
+    #[test]
+    fn read_story_with_options_enforces_text_limit() {
+        let zip = make_zip(&[(
+            "Stories/Story_u2.xml",
+            b"<Story Self=\"u2\"><Content>Hello</Content></Story>",
+        )]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let path = IdmlPath::new("Stories/Story_u2.xml").unwrap();
+
+        let err = package
+            .read_story_with_options(&path, StoryParseOptions { max_text_bytes: 4 })
+            .unwrap_err();
+
+        assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
     }
 
     #[test]
