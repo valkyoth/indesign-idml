@@ -292,7 +292,7 @@ impl IdmlDocument {
         entry: PreservedEntry,
     ) -> Result<()> {
         let element = element.into();
-        validate_package_element_name(&element)?;
+        validate_raw_package_element_name(&element)?;
         ensure_new_package_path(&self.design_map, &path)?;
         validate_supported_preserved_compression(entry.compression)?;
 
@@ -502,6 +502,10 @@ impl IdmlDocument {
     }
 
     fn validate_preserved_entries(&self) -> Result<()> {
+        for element in self.design_map.other_package_srcs.keys() {
+            validate_raw_package_element_name(element)?;
+        }
+
         let referenced = referenced_preserved_paths(&self.design_map)
             .cloned()
             .collect::<IndexSet<_>>();
@@ -611,6 +615,21 @@ fn ensure_new_package_path(design_map: &DesignMap, path: &IdmlPath) -> Result<()
             kind: "DesignMap package path",
             id: path.to_string(),
             reason: "path is referenced more than once",
+        });
+    }
+    Ok(())
+}
+
+fn validate_raw_package_element_name(element: &str) -> Result<()> {
+    validate_package_element_name(element)?;
+    if matches!(
+        element,
+        "idPkg:Story" | "idPkg:Spread" | "idPkg:MasterSpread"
+    ) {
+        return Err(IdmlError::InvalidAttribute {
+            element: "DesignMap".to_owned(),
+            attribute: "idPkg element",
+            reason: "typed package element must use a typed registration API",
         });
     }
     Ok(())
@@ -953,6 +972,30 @@ mod tests {
     }
 
     #[test]
+    fn add_package_entry_rejects_typed_element_without_mutating_document() {
+        let mut document = make_document();
+
+        let err = document
+            .add_package_entry(
+                "idPkg:Story",
+                IdmlPath::new("Resources/StoryLike.xml").unwrap(),
+                PreservedEntry::deflated(b"<Story />".as_slice()),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "idPkg element",
+                reason: "typed package element must use a typed registration API",
+            } if element == "DesignMap"
+        ));
+        assert!(document.design_map.other_package_srcs.is_empty());
+        assert!(document.preserved_entries.is_empty());
+    }
+
+    #[test]
     fn add_package_entry_rejects_duplicate_path_without_mutating_document() {
         let mut document = make_document();
 
@@ -974,6 +1017,28 @@ mod tests {
         ));
         assert!(document.design_map.other_package_srcs.is_empty());
         assert!(document.preserved_entries.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_typed_element_in_raw_package_refs() {
+        let mut document = make_document();
+        let path = IdmlPath::new("Resources/StoryLike.xml").unwrap();
+        document
+            .design_map
+            .other_package_srcs
+            .insert("idPkg:Story".to_owned(), vec![path.clone()]);
+        document.insert_preserved_entry(path, b"<Story />".as_slice());
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "idPkg element",
+                reason: "typed package element must use a typed registration API",
+            } if element == "DesignMap"
+        ));
     }
 
     #[test]
