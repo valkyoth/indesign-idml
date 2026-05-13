@@ -12,7 +12,8 @@ pub use crate::model::document::{
     IdmlDocument, IdmlDocumentReadOptions, IdmlIdAllocator, PreservedEntry,
 };
 pub use crate::model::resources::{
-    ResourceArchiveMetadata, ResourceInventory, ResourceKind, ResourceReference,
+    ResourceArchiveMetadata, ResourceIntegrityOptions, ResourceInventory, ResourceKind,
+    ResourceReference,
 };
 pub use crate::model::spread::{Rect, RectMm, Spread, TextFrame};
 pub use crate::model::story::{Story, StoryParseOptions};

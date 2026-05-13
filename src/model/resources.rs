@@ -1,6 +1,6 @@
 //! Resource inventory for untyped IDML package references.
 
-use crate::archive::{ArchiveEntry, IdmlPath};
+use crate::archive::{ArchiveEntry, DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE, IdmlPath};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, validate_package_element_name};
 use indexmap::IndexMap;
@@ -53,6 +53,30 @@ pub struct ResourceArchiveMetadata {
     pub uncompressed_size: u64,
     /// ZIP compression method.
     pub compression: CompressionMethod,
+}
+
+/// Integrity limits for resource inventory metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResourceIntegrityOptions {
+    /// Require archive metadata to be present for every resource.
+    pub require_archive_metadata: bool,
+    /// Maximum uncompressed bytes allowed for one non-graphic resource.
+    pub max_resource_uncompressed_size: u64,
+    /// Maximum uncompressed bytes allowed for one graphic resource.
+    pub max_graphic_uncompressed_size: u64,
+    /// Maximum allowed uncompressed-to-compressed size ratio.
+    pub max_compression_ratio: u64,
+}
+
+impl Default for ResourceIntegrityOptions {
+    fn default() -> Self {
+        Self {
+            require_archive_metadata: true,
+            max_resource_uncompressed_size: DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE,
+            max_graphic_uncompressed_size: DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE,
+            max_compression_ratio: 100,
+        }
+    }
 }
 
 /// Ordered resource inventory derived from a [`DesignMap`].
@@ -133,6 +157,32 @@ impl ResourceInventory {
         self.attach_archive_metadata(entries)?;
         Ok(self)
     }
+
+    /// Validates resource archive metadata against secure default limits.
+    pub fn validate_integrity(&self) -> Result<()> {
+        self.validate_integrity_with_options(ResourceIntegrityOptions::default())
+    }
+
+    /// Validates resource archive metadata against explicit limits.
+    pub fn validate_integrity_with_options(&self, options: ResourceIntegrityOptions) -> Result<()> {
+        for resource in &self.resources {
+            let Some(metadata) = &resource.archive else {
+                if options.require_archive_metadata {
+                    return Err(IdmlError::InvalidReference {
+                        kind: "resource archive metadata",
+                        id: resource.path.to_string(),
+                        reason: "metadata is missing",
+                    });
+                }
+                continue;
+            };
+
+            validate_resource_compression(resource, metadata)?;
+            validate_resource_size(resource, metadata, options)?;
+            validate_resource_compression_ratio(resource, metadata, options)?;
+        }
+        Ok(())
+    }
 }
 
 impl ResourceKind {
@@ -153,9 +203,72 @@ impl ResourceKind {
     }
 }
 
+fn validate_resource_compression(
+    resource: &ResourceReference,
+    metadata: &ResourceArchiveMetadata,
+) -> Result<()> {
+    match metadata.compression {
+        CompressionMethod::Stored | CompressionMethod::Deflated => Ok(()),
+        _ => Err(IdmlError::InvalidReference {
+            kind: "resource archive compression",
+            id: resource.path.to_string(),
+            reason: "unsupported ZIP compression method",
+        }),
+    }
+}
+
+fn validate_resource_size(
+    resource: &ResourceReference,
+    metadata: &ResourceArchiveMetadata,
+    options: ResourceIntegrityOptions,
+) -> Result<()> {
+    let limit = if resource.kind == ResourceKind::Graphics {
+        options.max_graphic_uncompressed_size
+    } else {
+        options.max_resource_uncompressed_size
+    };
+
+    if metadata.uncompressed_size > limit {
+        return Err(IdmlError::LimitExceeded {
+            what: "resource uncompressed size",
+            limit,
+            actual: metadata.uncompressed_size,
+        });
+    }
+    Ok(())
+}
+
+fn validate_resource_compression_ratio(
+    resource: &ResourceReference,
+    metadata: &ResourceArchiveMetadata,
+    options: ResourceIntegrityOptions,
+) -> Result<()> {
+    if metadata.compression != CompressionMethod::Deflated || metadata.uncompressed_size == 0 {
+        return Ok(());
+    }
+    if metadata.compressed_size == 0 {
+        return Err(IdmlError::InvalidReference {
+            kind: "resource archive compression",
+            id: resource.path.to_string(),
+            reason: "compressed size is zero for non-empty deflated resource",
+        });
+    }
+    let ratio = metadata.uncompressed_size / metadata.compressed_size;
+    if ratio > options.max_compression_ratio {
+        return Err(IdmlError::LimitExceeded {
+            what: "resource compression ratio",
+            limit: options.max_compression_ratio,
+            actual: ratio,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ResourceInventory, ResourceKind};
+    use super::{
+        ResourceArchiveMetadata, ResourceIntegrityOptions, ResourceInventory, ResourceKind,
+    };
     use crate::IdmlError;
     use crate::archive::{ArchiveEntry, IdmlPath};
     use crate::model::designmap::DesignMap;
@@ -271,6 +384,157 @@ mod tests {
         assert!(
             matches!(err, IdmlError::MissingArchiveEntry(path) if path == "Resources/Graphic.xml")
         );
+    }
+
+    #[test]
+    fn validates_resource_integrity_with_archive_metadata() {
+        let inventory = inventory_with_archive(
+            ResourceKind::Graphics,
+            "idPkg:Graphic",
+            "Resources/Graphic.xml",
+            ResourceArchiveMetadata {
+                compressed_size: 50,
+                uncompressed_size: 500,
+                compression: CompressionMethod::Deflated,
+            },
+        );
+
+        inventory.validate_integrity().unwrap();
+    }
+
+    #[test]
+    fn integrity_validation_requires_archive_metadata_by_default() {
+        let xml = r#"<Document>
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#;
+        let design_map = DesignMap::from_xml(xml).unwrap();
+        let inventory = ResourceInventory::from_designmap(&design_map).unwrap();
+
+        let err = inventory.validate_integrity().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "resource archive metadata",
+                id,
+                reason: "metadata is missing",
+            } if id == "Resources/Graphic.xml"
+        ));
+    }
+
+    #[test]
+    fn integrity_validation_can_allow_missing_archive_metadata() {
+        let xml = r#"<Document>
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#;
+        let design_map = DesignMap::from_xml(xml).unwrap();
+        let inventory = ResourceInventory::from_designmap(&design_map).unwrap();
+
+        inventory
+            .validate_integrity_with_options(ResourceIntegrityOptions {
+                require_archive_metadata: false,
+                ..ResourceIntegrityOptions::default()
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn integrity_validation_rejects_oversized_resources() {
+        let inventory = inventory_with_archive(
+            ResourceKind::Fonts,
+            "idPkg:Fonts",
+            "Resources/Fonts.xml",
+            ResourceArchiveMetadata {
+                compressed_size: 10,
+                uncompressed_size: 101,
+                compression: CompressionMethod::Deflated,
+            },
+        );
+
+        let err = inventory
+            .validate_integrity_with_options(ResourceIntegrityOptions {
+                max_resource_uncompressed_size: 100,
+                ..ResourceIntegrityOptions::default()
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource uncompressed size",
+                limit: 100,
+                actual: 101,
+            }
+        ));
+    }
+
+    #[test]
+    fn integrity_validation_uses_graphic_size_limit_for_graphics() {
+        let inventory = inventory_with_archive(
+            ResourceKind::Graphics,
+            "idPkg:Graphic",
+            "Resources/Graphic.xml",
+            ResourceArchiveMetadata {
+                compressed_size: 10,
+                uncompressed_size: 150,
+                compression: CompressionMethod::Deflated,
+            },
+        );
+
+        inventory
+            .validate_integrity_with_options(ResourceIntegrityOptions {
+                max_resource_uncompressed_size: 100,
+                max_graphic_uncompressed_size: 200,
+                ..ResourceIntegrityOptions::default()
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn integrity_validation_rejects_extreme_compression_ratio() {
+        let inventory = inventory_with_archive(
+            ResourceKind::Graphics,
+            "idPkg:Graphic",
+            "Resources/Graphic.xml",
+            ResourceArchiveMetadata {
+                compressed_size: 10,
+                uncompressed_size: 2_000,
+                compression: CompressionMethod::Deflated,
+            },
+        );
+
+        let err = inventory
+            .validate_integrity_with_options(ResourceIntegrityOptions {
+                max_compression_ratio: 100,
+                ..ResourceIntegrityOptions::default()
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource compression ratio",
+                limit: 100,
+                actual: 200,
+            }
+        ));
+    }
+
+    fn inventory_with_archive(
+        kind: ResourceKind,
+        element: &str,
+        path: &str,
+        archive: ResourceArchiveMetadata,
+    ) -> ResourceInventory {
+        ResourceInventory {
+            resources: vec![super::ResourceReference {
+                kind,
+                element: element.to_owned(),
+                id: None,
+                path: IdmlPath::new(path).unwrap(),
+                archive: Some(archive),
+            }],
+        }
     }
 
     #[test]
