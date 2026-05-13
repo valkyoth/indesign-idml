@@ -312,6 +312,7 @@ impl IdmlDocument {
 
     /// Validates model presence and cross-file story references.
     pub fn validate(&self) -> Result<()> {
+        self.design_map.validate()?;
         validate_manifest_models("story model", &self.design_map.story_srcs, &self.stories)?;
         validate_manifest_models("spread model", &self.design_map.spread_srcs, &self.spreads)?;
         validate_no_unreferenced_models("story", &self.design_map.story_srcs, &self.stories)?;
@@ -538,6 +539,9 @@ impl IdmlDocument {
             remember_object_id(&mut seen, id)?;
         }
         for id in self.design_map.spread_srcs.keys() {
+            remember_object_id(&mut seen, id)?;
+        }
+        for id in self.design_map.master_spread_srcs.keys() {
             remember_object_id(&mut seen, id)?;
         }
         for spread in self.spreads.values() {
@@ -1042,6 +1046,53 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_duplicate_designmap_package_paths() {
+        let mut document = make_document();
+        let path = IdmlPath::new("Resources/Shared.xml").unwrap();
+        document
+            .design_map
+            .other_package_srcs
+            .insert("idPkg:Graphic".to_owned(), vec![path.clone()]);
+        document
+            .design_map
+            .other_package_srcs
+            .insert("idPkg:Font".to_owned(), vec![path.clone()]);
+        document.insert_preserved_entry(path, b"<Shared />".as_slice());
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "DesignMap package path",
+                id,
+                reason: "path is referenced more than once",
+            } if id == "Resources/Shared.xml"
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_master_spread_id_colliding_with_text_frame() {
+        let mut document = make_document();
+        let path = IdmlPath::new("MasterSpreads/MasterSpread_tf1.xml").unwrap();
+        document
+            .design_map
+            .master_spread_srcs
+            .insert("tf1".to_owned(), path.clone());
+        document.insert_preserved_entry(path, b"<MasterSpread Self=\"tf1\" />".as_slice());
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "tf1"
+        ));
+    }
+
+    #[test]
     fn reads_and_writes_preserved_designmap_entries() {
         let master_path = IdmlPath::new("MasterSpreads/MasterSpread_u20.xml").unwrap();
         let resource_path = IdmlPath::new("Resources/Graphic.xml").unwrap();
@@ -1409,7 +1460,7 @@ mod tests {
         assert!(matches!(
             err,
             IdmlError::DuplicateId {
-                kind: "document object",
+                kind: "DesignMap package",
                 id,
             } if id == "u1"
         ));
