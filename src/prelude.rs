@@ -5,7 +5,9 @@ pub use crate::core::resolver::ResolvedTextFrameData;
 pub use crate::core::units::{Inches, Millimeters, Points};
 pub use crate::encoding::{Base64Mode, decode_standard, encode_standard};
 pub use crate::error::{IdmlError, Result};
-pub use crate::model::designmap::{DesignMap, SpreadPointer, StoryPointer};
+pub use crate::model::designmap::{
+    DesignMap, MasterSpreadPointer, PackageResourcePointer, SpreadPointer, StoryPointer,
+};
 pub use crate::model::document::{
     IdmlDocument, IdmlDocumentReadOptions, IdmlIdAllocator, PreservedEntry,
 };

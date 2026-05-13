@@ -4,7 +4,9 @@ use crate::core::resolver::{
     ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
 };
 use crate::error::{IdmlError, Result};
-use crate::model::designmap::{DesignMap, SpreadPointer, StoryPointer};
+use crate::model::designmap::{
+    DesignMap, MasterSpreadPointer, PackageResourcePointer, SpreadPointer, StoryPointer,
+};
 use crate::model::spread::{Rect, Spread};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::IndexMap;
@@ -305,6 +307,29 @@ where
     /// Resolves a lazy spread pointer and parses that spread.
     pub fn resolve_spread_pointer(&mut self, pointer: SpreadPointer<'_>) -> Result<Spread> {
         self.read_spread(pointer.path())
+    }
+
+    /// Resolves a lazy master spread pointer and returns its raw XML bytes.
+    ///
+    /// Master spreads are preserved as raw package entries until a typed master
+    /// spread model exists. The archive entry limits are still enforced before
+    /// allocation.
+    pub fn resolve_master_spread_pointer(
+        &mut self,
+        pointer: MasterSpreadPointer<'_>,
+    ) -> Result<Vec<u8>> {
+        self.read_entry(pointer.path())
+    }
+
+    /// Resolves a lazy untyped package resource pointer and returns its bytes.
+    ///
+    /// Use [`PackageResourcePointer::element`] to inspect the `idPkg:*` element
+    /// that referenced the entry before choosing a resource-specific parser.
+    pub fn resolve_package_resource_pointer(
+        &mut self,
+        pointer: PackageResourcePointer<'_>,
+    ) -> Result<Vec<u8>> {
+        self.read_entry(pointer.path())
     }
 
     /// Resolves a story ID through a parsed design map and parses that story.
@@ -843,6 +868,46 @@ mod tests {
         assert_eq!(pointer.id(), "u10");
         assert_eq!(spread.id.as_deref(), Some("u10"));
         assert_eq!(spread.text_frames[0].id.as_deref(), Some("tf1"));
+    }
+
+    #[test]
+    fn resolves_master_spread_from_lazy_pointer_as_raw_bytes() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:MasterSpread src="MasterSpreads/MasterSpread_u20.xml" />
+</Document>"#;
+        let master_spread = b"<MasterSpread Self=\"u20\" />";
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("MasterSpreads/MasterSpread_u20.xml", master_spread),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let pointer = design_map.master_spread_pointers().next().unwrap();
+        let bytes = package.resolve_master_spread_pointer(pointer).unwrap();
+
+        assert_eq!(pointer.id(), "u20");
+        assert_eq!(bytes, master_spread);
+    }
+
+    #[test]
+    fn resolves_untyped_resource_from_lazy_pointer_as_raw_bytes() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#;
+        let graphic = b"<Graphic Self=\"g1\" />";
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Resources/Graphic.xml", graphic),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let pointer = design_map.package_resource_pointers().next().unwrap();
+        let bytes = package.resolve_package_resource_pointer(pointer).unwrap();
+
+        assert_eq!(pointer.element(), "idPkg:Graphic");
+        assert_eq!(bytes, graphic);
     }
 
     #[test]

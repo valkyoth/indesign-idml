@@ -67,6 +67,48 @@ impl<'a> SpreadPointer<'a> {
     }
 }
 
+/// Borrowed pointer to a master spread package entry listed in [`DesignMap`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MasterSpreadPointer<'a> {
+    id: &'a str,
+    path: &'a IdmlPath,
+}
+
+impl<'a> MasterSpreadPointer<'a> {
+    /// Returns the master spread ID derived from the package reference.
+    #[must_use]
+    pub const fn id(self) -> &'a str {
+        self.id
+    }
+
+    /// Returns the master spread archive path.
+    #[must_use]
+    pub const fn path(self) -> &'a IdmlPath {
+        self.path
+    }
+}
+
+/// Borrowed pointer to an untyped `idPkg:*` resource listed in [`DesignMap`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PackageResourcePointer<'a> {
+    element: &'a str,
+    path: &'a IdmlPath,
+}
+
+impl<'a> PackageResourcePointer<'a> {
+    /// Returns the qualified `idPkg:*` element name.
+    #[must_use]
+    pub const fn element(self) -> &'a str {
+        self.element
+    }
+
+    /// Returns the resource archive path.
+    #[must_use]
+    pub const fn path(self) -> &'a IdmlPath {
+        self.path
+    }
+}
+
 impl DesignMap {
     /// Parses a `designmap.xml` document.
     pub fn from_xml(xml_content: &str) -> Result<Self> {
@@ -131,6 +173,11 @@ impl DesignMap {
         self.spread_srcs.keys().map(String::as_str)
     }
 
+    /// Returns master spread IDs in package order.
+    pub fn master_spread_ids(&self) -> impl Iterator<Item = &str> {
+        self.master_spread_srcs.keys().map(String::as_str)
+    }
+
     /// Returns lazy story pointers in package order.
     pub fn story_pointers(&self) -> impl Iterator<Item = StoryPointer<'_>> + '_ {
         self.story_srcs
@@ -143,6 +190,25 @@ impl DesignMap {
         self.spread_srcs
             .iter()
             .map(|(id, path)| SpreadPointer { id, path })
+    }
+
+    /// Returns lazy master spread pointers in package order.
+    pub fn master_spread_pointers(&self) -> impl Iterator<Item = MasterSpreadPointer<'_>> + '_ {
+        self.master_spread_srcs
+            .iter()
+            .map(|(id, path)| MasterSpreadPointer { id, path })
+    }
+
+    /// Returns lazy pointers for untyped `idPkg:*` resources in package order.
+    pub fn package_resource_pointers(
+        &self,
+    ) -> impl Iterator<Item = PackageResourcePointer<'_>> + '_ {
+        self.other_package_srcs.iter().flat_map(|(element, paths)| {
+            paths.iter().map(|path| PackageResourcePointer {
+                element: element.as_str(),
+                path,
+            })
+        })
     }
 
     /// Serializes this design map into a standalone `designmap.xml` document.
@@ -409,8 +475,11 @@ mod tests {
         let xml = r#"<Document>
   <idPkg:Spread src="Spreads/Spread_u10.xml" />
   <idPkg:Spread src="Spreads/Spread_u11.xml" />
+  <idPkg:MasterSpread src="MasterSpreads/MasterSpread_u20.xml" />
   <idPkg:Story src="Stories/Story_u2.xml" />
   <idPkg:Story src="Stories/Story_u1.xml" />
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+  <idPkg:Fonts src="Resources/Fonts.xml" />
 </Document>"#;
 
         let design_map = DesignMap::from_xml(xml).unwrap();
@@ -418,9 +487,17 @@ mod tests {
             .spread_pointers()
             .map(|pointer| (pointer.id(), pointer.path().as_str()))
             .collect::<Vec<_>>();
+        let master_spread_pointers = design_map
+            .master_spread_pointers()
+            .map(|pointer| (pointer.id(), pointer.path().as_str()))
+            .collect::<Vec<_>>();
         let story_pointers = design_map
             .story_pointers()
             .map(|pointer| (pointer.id(), pointer.path().as_str()))
+            .collect::<Vec<_>>();
+        let resource_pointers = design_map
+            .package_resource_pointers()
+            .map(|pointer| (pointer.element(), pointer.path().as_str()))
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -431,10 +508,21 @@ mod tests {
             ]
         );
         assert_eq!(
+            master_spread_pointers,
+            [("u20", "MasterSpreads/MasterSpread_u20.xml")]
+        );
+        assert_eq!(
             story_pointers,
             [
                 ("u2", "Stories/Story_u2.xml"),
                 ("u1", "Stories/Story_u1.xml"),
+            ]
+        );
+        assert_eq!(
+            resource_pointers,
+            [
+                ("idPkg:Graphic", "Resources/Graphic.xml"),
+                ("idPkg:Fonts", "Resources/Fonts.xml"),
             ]
         );
     }

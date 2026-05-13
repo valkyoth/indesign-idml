@@ -47,5 +47,7 @@ mod tests {
         let _: Option<crate::prelude::PreservedEntry> = None;
         let _: Option<crate::prelude::StoryPointer<'_>> = None;
         let _: Option<crate::prelude::SpreadPointer<'_>> = None;
+        let _: Option<crate::prelude::MasterSpreadPointer<'_>> = None;
+        let _: Option<crate::prelude::PackageResourcePointer<'_>> = None;
     }
 }
