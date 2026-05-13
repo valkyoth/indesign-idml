@@ -7,7 +7,7 @@ use crate::error::{IdmlError, Result};
 use crate::model::designmap::{
     DesignMap, MasterSpreadPointer, PackageResourcePointer, SpreadPointer, StoryPointer,
 };
-use crate::model::resources::ResourceInventory;
+use crate::model::resources::{ResourceIntegrityOptions, ResourceInventory};
 use crate::model::spread::{Rect, Spread};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::IndexMap;
@@ -275,6 +275,24 @@ where
     pub fn read_resource_inventory(&mut self) -> Result<ResourceInventory> {
         let design_map = self.read_designmap()?;
         ResourceInventory::from_designmap(&design_map)?.with_archive_metadata(&self.entries)
+    }
+
+    /// Reads and validates the package resource inventory with secure defaults.
+    ///
+    /// This validates manifest presence, attaches ZIP metadata, and applies
+    /// resource integrity checks without reading resource entry bodies.
+    pub fn read_checked_resource_inventory(&mut self) -> Result<ResourceInventory> {
+        self.read_checked_resource_inventory_with_options(ResourceIntegrityOptions::default())
+    }
+
+    /// Reads and validates the package resource inventory with explicit limits.
+    pub fn read_checked_resource_inventory_with_options(
+        &mut self,
+        options: ResourceIntegrityOptions,
+    ) -> Result<ResourceInventory> {
+        let inventory = self.read_resource_inventory()?;
+        inventory.validate_integrity_with_options(options)?;
+        Ok(inventory)
     }
 
     /// Reads and parses a story XML entry.
@@ -661,6 +679,7 @@ mod tests {
     use crate::IdmlError;
     use crate::core::units::Points;
     use crate::model::designmap::DesignMap;
+    use crate::model::resources::ResourceIntegrityOptions;
     use crate::model::spread::{Rect, Spread, TextFrame};
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::{Cursor, Write};
@@ -774,6 +793,51 @@ mod tests {
                 "Resources/Fonts.xml",
             ]
         );
+    }
+
+    #[test]
+    fn reads_checked_resource_inventory_with_default_policy() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Resources/Graphic.xml", b"<Graphic />"),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let inventory = package.read_checked_resource_inventory().unwrap();
+
+        assert_eq!(inventory.resources.len(), 1);
+        assert!(inventory.resources[0].archive.is_some());
+    }
+
+    #[test]
+    fn checked_resource_inventory_enforces_explicit_size_policy() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Resources/Graphic.xml", b"<Graphic />"),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = package
+            .read_checked_resource_inventory_with_options(ResourceIntegrityOptions {
+                max_graphic_uncompressed_size: 1,
+                ..ResourceIntegrityOptions::default()
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource uncompressed size",
+                limit: 1,
+                actual,
+            } if actual == b"<Graphic />".len() as u64
+        ));
     }
 
     #[test]
