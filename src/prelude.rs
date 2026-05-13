@@ -1,6 +1,7 @@
 //! Common imports for applications using `indesign-idml`.
 
 pub use crate::archive::{ArchiveLimits, IdmlPackage, IdmlPackageWriter, IdmlPath};
+pub use crate::core::resolver::ResolvedTextFrameData;
 pub use crate::core::units::{Inches, Millimeters, Points};
 pub use crate::encoding::{Base64Mode, decode_standard, encode_standard};
 pub use crate::error::{IdmlError, Result};

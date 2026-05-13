@@ -1,9 +1,12 @@
 //! High-level typed IDML document aggregate.
 
 use crate::archive::{IdmlPackage, IdmlPackageWriter};
+use crate::core::resolver::{
+    ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
+};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::DesignMap;
-use crate::model::spread::Spread;
+use crate::model::spread::{Rect, Spread};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::{IndexMap, IndexSet};
 use std::io::{Read, Seek, Write};
@@ -103,6 +106,44 @@ impl IdmlDocument {
         Ok(document)
     }
 
+    /// Returns all story text in `designmap.xml` order.
+    pub fn story_texts(&self) -> Result<IndexMap<String, String>> {
+        let mut texts = IndexMap::with_capacity(self.design_map.story_srcs.len());
+        for story_id in self.design_map.story_srcs.keys() {
+            let story = self
+                .stories
+                .get(story_id)
+                .ok_or_else(|| IdmlError::MissingReference {
+                    kind: "story model",
+                    id: story_id.clone(),
+                })?;
+            texts.insert(story_id.clone(), story.text.clone());
+        }
+        Ok(texts)
+    }
+
+    /// Resolves all text frames on a spread into owned story text records.
+    pub fn resolve_spread_text_frames(
+        &self,
+        spread_id: &str,
+    ) -> Result<Vec<ResolvedTextFrameData>> {
+        let spread = self.spread(spread_id)?;
+        let story_texts = self.story_texts()?;
+        Ok(to_owned_records(resolve_text_frames(spread, &story_texts)?))
+    }
+
+    /// Resolves text frames on a spread whose direct bounds intersect `query`.
+    pub fn resolve_spread_text_in_rect(
+        &self,
+        spread_id: &str,
+        query: Rect,
+    ) -> Result<Vec<ResolvedTextFrameData>> {
+        let spread = self.spread(spread_id)?;
+        let story_texts = self.story_texts()?;
+        let resolved = resolve_text_frames(spread, &story_texts)?;
+        Ok(to_owned_records(text_frames_intersecting(resolved, query)))
+    }
+
     /// Validates and writes the aggregate as a complete IDML package.
     pub fn write_to<W>(&self, writer: W) -> Result<W>
     where
@@ -127,6 +168,15 @@ impl IdmlDocument {
             package.add_story(path.as_str(), story)?;
         }
         package.finish()
+    }
+
+    fn spread(&self, spread_id: &str) -> Result<&Spread> {
+        self.spreads
+            .get(spread_id)
+            .ok_or_else(|| IdmlError::MissingReference {
+                kind: "spread model",
+                id: spread_id.to_owned(),
+            })
     }
 
     fn validate_story_ids(&self) -> Result<()> {
@@ -283,6 +333,68 @@ mod tests {
         let parsed = IdmlDocument::read_from_package(&mut package).unwrap();
 
         assert_eq!(parsed, document);
+    }
+
+    #[test]
+    fn extracts_story_texts_in_designmap_order() {
+        let document = make_document();
+
+        let texts = document.story_texts().unwrap();
+
+        assert_eq!(
+            texts
+                .iter()
+                .map(|(story_id, text)| (story_id.as_str(), text.as_str()))
+                .collect::<Vec<_>>(),
+            [("u1", "Generated")]
+        );
+    }
+
+    #[test]
+    fn resolves_spread_text_frames_from_loaded_document() {
+        let document = make_document();
+
+        let resolved = document.resolve_spread_text_frames("u10").unwrap();
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].frame_id.as_deref(), Some("tf1"));
+        assert_eq!(resolved[0].story_id, "u1");
+        assert_eq!(resolved[0].text, "Generated");
+    }
+
+    #[test]
+    fn resolves_spread_text_frames_in_rect_from_loaded_document() {
+        let document = make_document();
+
+        let resolved = document
+            .resolve_spread_text_in_rect(
+                "u10",
+                Rect::new(
+                    Points::new(10.0),
+                    Points::new(10.0),
+                    Points::new(80.0),
+                    Points::new(80.0),
+                ),
+            )
+            .unwrap();
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].frame_id.as_deref(), Some("tf1"));
+    }
+
+    #[test]
+    fn resolve_spread_text_frames_reports_unknown_spread() {
+        let document = make_document();
+
+        let err = document.resolve_spread_text_frames("missing").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingReference {
+                kind: "spread model",
+                id,
+            } if id == "missing"
+        ));
     }
 
     #[test]

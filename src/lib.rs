@@ -42,9 +42,10 @@ mod tests {
             _: Option<crate::prelude::Story>,
             _: Option<crate::prelude::Spread>,
             _: Option<crate::prelude::IdmlError>,
+            _: Option<crate::prelude::ResolvedTextFrameData>,
         ) {
         }
 
-        assert_imports(None, None, None, None, None);
+        assert_imports(None, None, None, None, None, None);
     }
 }
