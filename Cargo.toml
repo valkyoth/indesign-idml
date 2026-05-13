@@ -17,6 +17,7 @@ include = [
     "fuzz/**",
     "README.md",
     "SECURITY_IMPLEMENTATION_PLAN.md",
+    "RELEASE_PLAN.md",
     "LICENSE-*",
 ]
 

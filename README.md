@@ -13,3 +13,14 @@ gate.
 
 See [RELEASE_PLAN.md](RELEASE_PLAN.md) for the milestone plan through the fully
 functional 1.0 release.
+
+## License
+
+This project is dual-licensed:
+
+```toml
+license = "MIT OR Apache-2.0"
+```
+
+The full license texts are available in [LICENSE-MIT](LICENSE-MIT) and
+[LICENSE-APACHE](LICENSE-APACHE).

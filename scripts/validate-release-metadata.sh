@@ -23,3 +23,38 @@ for required in description repository homepage documentation readme keywords ca
         exit 1
     fi
 done
+
+test -s LICENSE-MIT
+test -s LICENSE-APACHE
+test -s README.md
+test -s SECURITY_IMPLEMENTATION_PLAN.md
+test -s RELEASE_PLAN.md
+
+if ! grep -q '^The MIT License (MIT)$' LICENSE-MIT; then
+    echo "LICENSE-MIT does not look like the canonical MIT license used by this repo" >&2
+    exit 1
+fi
+
+if ! grep -q 'Apache License' LICENSE-APACHE || ! grep -q 'Version 2.0, January 2004' LICENSE-APACHE; then
+    echo "LICENSE-APACHE does not look like the canonical Apache 2.0 license" >&2
+    exit 1
+fi
+
+package_list="$(
+    cargo package --locked --allow-dirty --list
+)"
+
+for required_package_file in \
+    "Cargo.toml" \
+    "LICENSE-APACHE" \
+    "LICENSE-MIT" \
+    "README.md" \
+    "RELEASE_PLAN.md" \
+    "SECURITY_IMPLEMENTATION_PLAN.md" \
+    "src/lib.rs"
+do
+    if ! printf '%s\n' "$package_list" | grep -qx "$required_package_file"; then
+        echo "published package is missing $required_package_file" >&2
+        exit 1
+    fi
+done
