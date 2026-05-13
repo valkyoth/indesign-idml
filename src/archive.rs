@@ -21,6 +21,9 @@ pub const DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE: u64 = 256 * 1024 * 1024;
 /// Default maximum aggregate uncompressed bytes accepted for an archive.
 pub const DEFAULT_MAX_TOTAL_UNCOMPRESSED_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
+/// IDML package mimetype required by Adobe tooling.
+pub const IDML_MIMETYPE: &[u8] = b"application/vnd.adobe.indesign-idml-package";
+
 /// Logical, normalized path inside an IDML ZIP archive.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct IdmlPath(String);
@@ -256,6 +259,15 @@ where
             let path = IdmlPath::new(file.name().to_owned())?;
             let uncompressed_size = file.size();
             enforce_entry_size(uncompressed_size, limits.max_entry_uncompressed_size)?;
+            enforce_supported_compression(file.compression())?;
+            if index == 0
+                && path.as_str() == "mimetype"
+                && file.compression() != CompressionMethod::Stored
+            {
+                return Err(IdmlError::InvalidPackage(
+                    "mimetype entry must be stored without compression",
+                ));
+            }
             total_uncompressed = total_uncompressed.checked_add(uncompressed_size).ok_or(
                 IdmlError::LimitExceeded {
                     what: "archive total uncompressed size",
@@ -281,6 +293,8 @@ where
                 return Err(IdmlError::DuplicateArchiveEntry(path.to_string()));
             }
         }
+
+        validate_mimetype_entry(&mut archive, &entries)?;
 
         Ok(Self {
             archive,
@@ -345,6 +359,52 @@ fn enforce_entry_count(actual: usize, limit: usize) -> Result<()> {
     Ok(())
 }
 
+fn enforce_supported_compression(compression: CompressionMethod) -> Result<()> {
+    match compression {
+        CompressionMethod::Stored | CompressionMethod::Deflated => Ok(()),
+        _ => Err(IdmlError::InvalidPackage(
+            "unsupported ZIP compression method; only stored and deflated entries are accepted",
+        )),
+    }
+}
+
+fn validate_mimetype_entry<R>(
+    archive: &mut ZipArchive<R>,
+    entries: &IndexMap<IdmlPath, ArchiveEntry>,
+) -> Result<()>
+where
+    R: Read + Seek,
+{
+    let Some((first_path, first_entry)) = entries.get_index(0) else {
+        return Err(IdmlError::InvalidPackage("IDML archive is empty"));
+    };
+
+    if first_path.as_str() != "mimetype" {
+        return Err(IdmlError::InvalidPackage(
+            "mimetype entry must be the first ZIP entry",
+        ));
+    }
+    if first_entry.compression != CompressionMethod::Stored {
+        return Err(IdmlError::InvalidPackage(
+            "mimetype entry must be stored without compression",
+        ));
+    }
+    if first_entry.uncompressed_size != IDML_MIMETYPE.len() as u64 {
+        return Err(IdmlError::InvalidPackage("mimetype entry has invalid size"));
+    }
+
+    let mut file = archive.by_name("mimetype")?;
+    let mut data = Vec::with_capacity(IDML_MIMETYPE.len());
+    file.read_to_end(&mut data)?;
+    if data != IDML_MIMETYPE {
+        return Err(IdmlError::InvalidPackage(
+            "mimetype entry has invalid content",
+        ));
+    }
+
+    Ok(())
+}
+
 fn enforce_entry_size(actual: u64, limit: u64) -> Result<()> {
     if actual > limit {
         return Err(IdmlError::LimitExceeded {
@@ -395,7 +455,7 @@ fn validate_archive_path(path: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArchiveLimits, IdmlPackage, IdmlPath};
+    use super::{ArchiveLimits, IDML_MIMETYPE, IdmlPackage, IdmlPath};
     use crate::IdmlError;
     use crate::model::spread::Rect;
     use std::io::{Cursor, Write};
@@ -420,16 +480,13 @@ mod tests {
 
     #[test]
     fn inventories_and_reads_valid_entries() {
-        let zip = make_zip(&[("mimetype", b"application/vnd.adobe.indesign-idml-package")]);
+        let zip = make_zip(&[]);
         let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
         let path = IdmlPath::new("mimetype").unwrap();
 
         assert!(package.contains(&path));
         assert_eq!(package.entries().len(), 1);
-        assert_eq!(
-            package.read_entry(&path).unwrap(),
-            b"application/vnd.adobe.indesign-idml-package"
-        );
+        assert_eq!(package.read_entry(&path).unwrap(), IDML_MIMETYPE);
     }
 
     #[test]
@@ -439,7 +496,6 @@ mod tests {
   <idPkg:Story src="Stories/Story_u2.xml" />
 </Document>"#;
         let zip = make_zip(&[
-            ("mimetype", b"application/vnd.adobe.indesign-idml-package"),
             ("designmap.xml", designmap),
             ("Spreads/Spread_u1.xml", b"<Spread />"),
             ("Stories/Story_u2.xml", b"<Story />"),
@@ -630,7 +686,7 @@ mod tests {
 
     #[test]
     fn enforces_entry_count_limit() {
-        let zip = make_zip(&[("mimetype", b"idml")]);
+        let zip = make_zip(&[]);
         let err = IdmlPackage::with_limits(
             Cursor::new(zip),
             ArchiveLimits {
@@ -645,11 +701,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rejects_missing_mimetype_entry() {
+        let zip = make_zip_raw(&[("designmap.xml", b"<Document />", CompressionMethod::Stored)]);
+        let err = IdmlPackage::new(Cursor::new(zip)).unwrap_err();
+
+        assert!(matches!(err, IdmlError::InvalidPackage(message) if message.contains("mimetype")));
+    }
+
+    #[test]
+    fn rejects_compressed_mimetype_entry() {
+        let zip = make_zip_raw(&[("mimetype", IDML_MIMETYPE, CompressionMethod::Deflated)]);
+        let err = IdmlPackage::new(Cursor::new(zip)).unwrap_err();
+
+        assert!(matches!(err, IdmlError::InvalidPackage(message) if message.contains("stored")));
+    }
+
+    #[test]
+    fn rejects_invalid_mimetype_content() {
+        let zip = make_zip_raw(&[("mimetype", b"text/plain", CompressionMethod::Stored)]);
+        let err = IdmlPackage::new(Cursor::new(zip)).unwrap_err();
+
+        assert!(matches!(err, IdmlError::InvalidPackage(message) if message.contains("mimetype")));
+    }
+
     fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut all_entries = Vec::with_capacity(entries.len() + 1);
+        all_entries.push(("mimetype", IDML_MIMETYPE, CompressionMethod::Stored));
+        all_entries.extend(
+            entries
+                .iter()
+                .map(|(name, data)| (*name, *data, CompressionMethod::Stored)),
+        );
+        make_zip_raw(&all_entries)
+    }
+
+    fn make_zip_raw(entries: &[(&str, &[u8], CompressionMethod)]) -> Vec<u8> {
         let cursor = Cursor::new(Vec::new());
         let mut writer = ZipWriter::new(cursor);
-        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-        for (name, data) in entries {
+        for (name, data, compression) in entries {
+            let options = SimpleFileOptions::default().compression_method(*compression);
             writer.start_file(*name, options).unwrap();
             writer.write_all(data).unwrap();
         }

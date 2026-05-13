@@ -59,6 +59,10 @@ pub enum IdmlError {
         reason: &'static str,
     },
 
+    /// The IDML container violates packaging requirements.
+    #[error("invalid IDML package: {0}")]
+    InvalidPackage(&'static str),
+
     /// An archive entry path violates the crate path policy.
     #[error("invalid archive path `{path}`: {reason}")]
     InvalidArchivePath {
