@@ -6,6 +6,7 @@ use crate::core::resolver::{
 };
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, validate_package_element_name};
+use crate::model::resources::{ResourceIntegrityOptions, ResourceInventory};
 use crate::model::spread::{Rect, Spread};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::{IndexMap, IndexSet};
@@ -30,6 +31,8 @@ pub struct IdmlDocument {
 pub struct IdmlDocumentReadOptions {
     /// Story parser limits.
     pub story: StoryParseOptions,
+    /// Resource metadata integrity limits applied before preserved entries are read.
+    pub resources: ResourceIntegrityOptions,
 }
 
 /// Raw package entry preserved while a typed model does not exist yet.
@@ -358,6 +361,10 @@ impl IdmlDocument {
         let preserved_refs = referenced_preserved_paths(&design_map)
             .cloned()
             .collect::<Vec<_>>();
+
+        ResourceInventory::from_designmap(&design_map)?
+            .with_archive_metadata(package.entries())?
+            .validate_integrity_with_options(options.resources)?;
 
         let mut document = Self::new(design_map);
         for (id, path) in story_refs {
@@ -704,6 +711,7 @@ mod tests {
     use crate::archive::{IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::core::units::Points;
     use crate::model::designmap::DesignMap;
+    use crate::model::resources::ResourceIntegrityOptions;
     use crate::model::spread::{Rect, Spread, TextFrame};
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::Cursor;
@@ -1302,11 +1310,50 @@ mod tests {
             &mut package,
             IdmlDocumentReadOptions {
                 story: StoryParseOptions { max_text_bytes: 4 },
+                ..IdmlDocumentReadOptions::default()
             },
         )
         .unwrap_err();
 
         assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
+    }
+
+    #[test]
+    fn read_from_package_with_options_enforces_resource_integrity_before_reading() {
+        let mut document = make_document();
+        document
+            .add_package_entry(
+                "idPkg:Graphic",
+                IdmlPath::new("Resources/Graphic.xml").unwrap(),
+                PreservedEntry::deflated(b"<Graphic />".as_slice()),
+            )
+            .unwrap();
+        let zip = document
+            .write_to(Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = IdmlDocument::read_from_package_with_options(
+            &mut package,
+            IdmlDocumentReadOptions {
+                resources: ResourceIntegrityOptions {
+                    max_graphic_uncompressed_size: 1,
+                    ..ResourceIntegrityOptions::default()
+                },
+                ..IdmlDocumentReadOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource uncompressed size",
+                limit: 1,
+                actual,
+            } if actual == b"<Graphic />".len() as u64
+        ));
     }
 
     #[test]
