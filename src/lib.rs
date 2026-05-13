@@ -36,17 +36,13 @@ mod tests {
 
     #[test]
     fn prelude_exports_core_document_types() {
-        fn assert_imports(
-            _: Option<crate::prelude::IdmlDocument>,
-            _: Option<crate::prelude::DesignMap>,
-            _: Option<crate::prelude::Story>,
-            _: Option<crate::prelude::Spread>,
-            _: Option<crate::prelude::IdmlError>,
-            _: Option<crate::prelude::ResolvedTextFrameData>,
-            _: Option<crate::prelude::IdmlIdAllocator>,
-        ) {
-        }
-
-        assert_imports(None, None, None, None, None, None, None);
+        let _: Option<crate::prelude::IdmlDocument> = None;
+        let _: Option<crate::prelude::DesignMap> = None;
+        let _: Option<crate::prelude::Story> = None;
+        let _: Option<crate::prelude::Spread> = None;
+        let _: Option<crate::prelude::IdmlError> = None;
+        let _: Option<crate::prelude::ResolvedTextFrameData> = None;
+        let _: Option<crate::prelude::IdmlIdAllocator> = None;
+        let _: Option<crate::prelude::PreservedEntry> = None;
     }
 }

@@ -10,6 +10,7 @@ use crate::model::spread::{Rect, Spread};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::{IndexMap, IndexSet};
 use std::io::{Read, Seek, Write};
+use zip::CompressionMethod;
 
 /// Typed IDML document parts that can be validated and written as one package.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -21,7 +22,7 @@ pub struct IdmlDocument {
     /// Spread models keyed by their `DesignMap` spread ID.
     pub spreads: IndexMap<String, Spread>,
     /// Raw `DesignMap`-referenced entries that are not typed yet.
-    pub preserved_entries: IndexMap<IdmlPath, Vec<u8>>,
+    pub preserved_entries: IndexMap<IdmlPath, PreservedEntry>,
 }
 
 /// Parser limits used when eagerly loading an [`IdmlDocument`] from a package.
@@ -29,6 +30,47 @@ pub struct IdmlDocument {
 pub struct IdmlDocumentReadOptions {
     /// Story parser limits.
     pub story: StoryParseOptions,
+}
+
+/// Raw package entry preserved while a typed model does not exist yet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreservedEntry {
+    /// Entry bytes after decompression.
+    pub data: Vec<u8>,
+    /// ZIP compression method to use when writing this entry back.
+    pub compression: CompressionMethod,
+}
+
+impl PreservedEntry {
+    /// Creates a preserved entry with an explicitly supported compression method.
+    pub fn with_compression(
+        data: impl Into<Vec<u8>>,
+        compression: CompressionMethod,
+    ) -> Result<Self> {
+        validate_supported_preserved_compression(compression)?;
+        Ok(Self {
+            data: data.into(),
+            compression,
+        })
+    }
+
+    /// Creates a preserved entry using deflate compression on write.
+    #[must_use]
+    pub fn deflated(data: impl Into<Vec<u8>>) -> Self {
+        Self {
+            data: data.into(),
+            compression: CompressionMethod::Deflated,
+        }
+    }
+
+    /// Creates a preserved entry using stored, uncompressed ZIP output.
+    #[must_use]
+    pub fn stored(data: impl Into<Vec<u8>>) -> Self {
+        Self {
+            data: data.into(),
+            compression: CompressionMethod::Stored,
+        }
+    }
 }
 
 /// Deterministic allocator for IDML-style object IDs.
@@ -173,8 +215,18 @@ impl IdmlDocument {
         &mut self,
         path: IdmlPath,
         data: impl Into<Vec<u8>>,
-    ) -> Option<Vec<u8>> {
-        self.preserved_entries.insert(path, data.into())
+    ) -> Option<PreservedEntry> {
+        self.preserved_entries
+            .insert(path, PreservedEntry::deflated(data))
+    }
+
+    /// Inserts or replaces a raw preserved package entry with explicit metadata.
+    pub fn insert_preserved_entry_with_options(
+        &mut self,
+        path: IdmlPath,
+        entry: PreservedEntry,
+    ) -> Option<PreservedEntry> {
+        self.preserved_entries.insert(path, entry)
     }
 
     /// Creates a deterministic allocator with all current document IDs reserved.
@@ -238,8 +290,14 @@ impl IdmlDocument {
             document.insert_spread(id, package.read_spread(&path)?);
         }
         for path in preserved_refs {
+            let compression = package
+                .entries()
+                .get(&path)
+                .ok_or_else(|| IdmlError::MissingArchiveEntry(path.to_string()))?
+                .compression;
             let data = package.read_entry(&path)?;
-            document.insert_preserved_entry(path, data);
+            document
+                .insert_preserved_entry_with_options(path, PreservedEntry { data, compression });
         }
 
         document.validate()?;
@@ -308,11 +366,15 @@ impl IdmlDocument {
             package.add_story(path.as_str(), story)?;
         }
         for path in referenced_preserved_paths(&self.design_map) {
-            let data = self
+            let entry = self
                 .preserved_entries
                 .get(path)
                 .expect("validated preserved entry presence");
-            package.add_file(path.as_str(), data)?;
+            match entry.compression {
+                CompressionMethod::Stored => package.add_stored_file(path.as_str(), &entry.data)?,
+                CompressionMethod::Deflated => package.add_file(path.as_str(), &entry.data)?,
+                _ => return Err(unsupported_preserved_compression_error()),
+            }
         }
         package.finish()
     }
@@ -382,6 +444,9 @@ impl IdmlDocument {
                 });
             }
         }
+        for entry in self.preserved_entries.values() {
+            validate_supported_preserved_compression(entry.compression)?;
+        }
 
         Ok(())
     }
@@ -447,6 +512,19 @@ fn referenced_preserved_paths(design_map: &DesignMap) -> impl Iterator<Item = &I
         .chain(design_map.other_package_srcs.values().flatten())
 }
 
+fn validate_supported_preserved_compression(compression: CompressionMethod) -> Result<()> {
+    match compression {
+        CompressionMethod::Stored | CompressionMethod::Deflated => Ok(()),
+        _ => Err(unsupported_preserved_compression_error()),
+    }
+}
+
+fn unsupported_preserved_compression_error() -> IdmlError {
+    IdmlError::InvalidPackage(
+        "unsupported ZIP compression method; only stored and deflated entries are accepted",
+    )
+}
+
 fn validate_optional_self_id(kind: &'static str, id: &str, self_id: Option<&str>) -> Result<()> {
     if let Some(self_id) = self_id
         && self_id != id
@@ -487,7 +565,7 @@ fn validate_id_prefix(prefix: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{IdmlDocument, IdmlDocumentReadOptions, IdmlIdAllocator};
+    use super::{IdmlDocument, IdmlDocumentReadOptions, IdmlIdAllocator, PreservedEntry};
     use crate::IdmlError;
     use crate::archive::{IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::core::units::Points;
@@ -495,6 +573,7 @@ mod tests {
     use crate::model::spread::{Rect, Spread, TextFrame};
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::Cursor;
+    use zip::CompressionMethod;
 
     #[test]
     fn validates_and_writes_document_package() {
@@ -556,7 +635,7 @@ mod tests {
             .add_file(master_path.as_str(), b"<MasterSpread Self=\"u20\" />")
             .unwrap();
         writer
-            .add_file(
+            .add_stored_file(
                 resource_path.as_str(),
                 b"<Graphic><Data>raw</Data></Graphic>",
             )
@@ -567,12 +646,20 @@ mod tests {
         let document = IdmlDocument::read_from_package(&mut package).unwrap();
 
         assert_eq!(
-            document.preserved_entries[&master_path],
+            document.preserved_entries[&master_path].data.as_slice(),
             b"<MasterSpread Self=\"u20\" />"
         );
         assert_eq!(
-            document.preserved_entries[&resource_path],
+            document.preserved_entries[&master_path].compression,
+            CompressionMethod::Deflated
+        );
+        assert_eq!(
+            document.preserved_entries[&resource_path].data.as_slice(),
             b"<Graphic><Data>raw</Data></Graphic>"
+        );
+        assert_eq!(
+            document.preserved_entries[&resource_path].compression,
+            CompressionMethod::Stored
         );
 
         let round_trip = document
@@ -580,6 +667,14 @@ mod tests {
             .unwrap()
             .into_inner();
         let mut package = IdmlPackage::new(Cursor::new(round_trip)).unwrap();
+        assert_eq!(
+            package.entries()[&master_path].compression,
+            CompressionMethod::Deflated
+        );
+        assert_eq!(
+            package.entries()[&resource_path].compression,
+            CompressionMethod::Stored
+        );
 
         assert_eq!(
             package.read_entry(&master_path).unwrap(),
@@ -919,6 +1014,32 @@ mod tests {
                 reason: "entry is not present in DesignMap",
             } if id == "Resources/Graphic.xml"
         ));
+    }
+
+    #[test]
+    fn rejects_unsupported_preserved_entry_compression() {
+        let err = PreservedEntry::with_compression(b"raw".as_slice(), CompressionMethod::AES)
+            .unwrap_err();
+
+        assert!(matches!(err, IdmlError::InvalidPackage(_)));
+
+        let mut document = make_document();
+        let path = IdmlPath::new("Resources/Graphic.xml").unwrap();
+        document
+            .design_map
+            .other_package_srcs
+            .insert("idPkg:Graphic".to_owned(), vec![path.clone()]);
+        document.insert_preserved_entry_with_options(
+            path,
+            PreservedEntry {
+                data: b"raw".to_vec(),
+                compression: CompressionMethod::AES,
+            },
+        );
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(err, IdmlError::InvalidPackage(_)));
     }
 
     fn make_document() -> IdmlDocument {
