@@ -13,8 +13,10 @@ pub mod core;
 pub mod encoding;
 pub mod error;
 pub mod model;
+pub mod traits;
 
 pub use error::{IdmlError, Result};
+pub use traits::{XmlLoadable, XmlSaveable};
 
 /// Returns the package name as compiled into the crate.
 #[must_use]

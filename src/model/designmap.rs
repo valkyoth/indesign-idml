@@ -2,9 +2,11 @@
 
 use crate::archive::IdmlPath;
 use crate::error::{IdmlError, Result};
+use crate::traits::{XmlLoadable, XmlSaveable};
 use indexmap::IndexMap;
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
+use quick_xml::escape::escape;
 use quick_xml::events::{BytesStart, Event};
 
 /// Represents high-level package references found in `designmap.xml`.
@@ -72,6 +74,23 @@ impl DesignMap {
     pub fn story_ids(&self) -> impl Iterator<Item = &str> {
         self.story_srcs.keys().map(String::as_str)
     }
+
+    /// Serializes this design map into a standalone `designmap.xml` document.
+    pub fn to_xml(&self) -> Result<String> {
+        serialize_designmap(self)
+    }
+}
+
+impl XmlLoadable for DesignMap {
+    fn from_xml(xml: &str) -> Result<Self> {
+        DesignMap::from_xml(xml)
+    }
+}
+
+impl XmlSaveable for DesignMap {
+    fn to_xml(&self) -> Result<String> {
+        serialize_designmap(self)
+    }
 }
 
 fn parse_package_ref(
@@ -123,6 +142,77 @@ fn id_from_package_src(src: &str) -> String {
         .or_else(|| stem.strip_prefix("MasterSpread_"))
         .unwrap_or(stem)
         .to_owned()
+}
+
+fn serialize_designmap(design_map: &DesignMap) -> Result<String> {
+    let mut xml = String::new();
+    xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Document");
+    if !design_map.id.is_empty() {
+        push_attr(&mut xml, "Self", &design_map.id);
+    }
+    xml.push_str(" xmlns:idPkg=\"http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging\">\n");
+
+    push_package_refs(&mut xml, "idPkg:Spread", design_map.spread_srcs.values())?;
+    push_package_refs(
+        &mut xml,
+        "idPkg:MasterSpread",
+        design_map.master_spread_srcs.values(),
+    )?;
+    push_package_refs(&mut xml, "idPkg:Story", design_map.story_srcs.values())?;
+
+    for (element, srcs) in &design_map.other_package_srcs {
+        push_package_refs(&mut xml, element, srcs.iter())?;
+    }
+
+    xml.push_str("</Document>\n");
+    Ok(xml)
+}
+
+fn push_package_refs<'a>(
+    xml: &mut String,
+    element: &str,
+    srcs: impl IntoIterator<Item = &'a IdmlPath>,
+) -> Result<()> {
+    validate_package_element_name(element)?;
+    for src in srcs {
+        xml.push_str("  <");
+        xml.push_str(element);
+        push_attr(xml, "src", src.as_str());
+        xml.push_str(" />\n");
+    }
+    Ok(())
+}
+
+fn push_attr(xml: &mut String, name: &str, value: &str) {
+    xml.push(' ');
+    xml.push_str(name);
+    xml.push_str("=\"");
+    xml.push_str(escape(value).as_ref());
+    xml.push('"');
+}
+
+fn validate_package_element_name(element: &str) -> Result<()> {
+    let Some(local) = element.strip_prefix("idPkg:") else {
+        return Err(invalid_package_element_name());
+    };
+    if local.is_empty() {
+        return Err(invalid_package_element_name());
+    }
+    if !local
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        return Err(invalid_package_element_name());
+    }
+    Ok(())
+}
+
+fn invalid_package_element_name() -> IdmlError {
+    IdmlError::InvalidAttribute {
+        element: "DesignMap".to_owned(),
+        attribute: "idPkg element",
+        reason: "invalid XML element name",
+    }
 }
 
 #[cfg(test)]
@@ -195,5 +285,58 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, IdmlError::InvalidArchivePath { .. }));
+    }
+
+    #[test]
+    fn serializes_designmap_with_escaped_attributes_and_round_trips() {
+        let mut design_map = DesignMap {
+            id: "d&\"1".to_owned(),
+            ..DesignMap::default()
+        };
+        design_map.spread_srcs.insert(
+            "u1".to_owned(),
+            IdmlPath::new("Spreads/Spread_u1.xml").unwrap(),
+        );
+        design_map.story_srcs.insert(
+            "u2".to_owned(),
+            IdmlPath::new("Stories/Story_u2.xml").unwrap(),
+        );
+        design_map.other_package_srcs.insert(
+            "idPkg:Graphic".to_owned(),
+            vec![IdmlPath::new("Resources/A&B.xml").unwrap()],
+        );
+
+        let xml = <DesignMap as crate::XmlSaveable>::to_xml(&design_map).unwrap();
+        let round_trip = <DesignMap as crate::XmlLoadable>::from_xml(&xml).unwrap();
+
+        assert!(xml.contains("Self=\"d&amp;&quot;1\""));
+        assert!(xml.contains("src=\"Resources/A&amp;B.xml\""));
+        assert_eq!(round_trip.id, design_map.id);
+        assert_eq!(round_trip.spread_srcs, design_map.spread_srcs);
+        assert_eq!(round_trip.story_srcs, design_map.story_srcs);
+        assert_eq!(
+            round_trip.other_package_srcs["idPkg:Graphic"],
+            design_map.other_package_srcs["idPkg:Graphic"]
+        );
+    }
+
+    #[test]
+    fn serializer_rejects_invalid_package_element_names() {
+        let mut design_map = DesignMap::default();
+        design_map.other_package_srcs.insert(
+            "bad tag".to_owned(),
+            vec![IdmlPath::new("Resources/Graphic.xml").unwrap()],
+        );
+
+        let err = design_map.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "idPkg element",
+                reason: "invalid XML element name",
+            } if element == "DesignMap"
+        ));
     }
 }
