@@ -249,7 +249,7 @@ fn push_attr(xml: &mut String, name: &str, value: &str) {
     xml.push('"');
 }
 
-fn validate_package_element_name(element: &str) -> Result<()> {
+pub(crate) fn validate_package_element_name(element: &str) -> Result<()> {
     let Some(local) = element.strip_prefix("idPkg:") else {
         return Err(invalid_package_element_name());
     };

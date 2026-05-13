@@ -5,7 +5,7 @@ use crate::core::resolver::{
     ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
 };
 use crate::error::{IdmlError, Result};
-use crate::model::designmap::DesignMap;
+use crate::model::designmap::{DesignMap, validate_package_element_name};
 use crate::model::spread::{Rect, Spread};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::{IndexMap, IndexSet};
@@ -262,6 +262,47 @@ impl IdmlDocument {
         entry: PreservedEntry,
     ) -> Option<PreservedEntry> {
         self.preserved_entries.insert(path, entry)
+    }
+
+    /// Adds a raw master spread entry and its `DesignMap` reference atomically.
+    pub fn add_master_spread_entry(
+        &mut self,
+        id: impl Into<String>,
+        path: IdmlPath,
+        entry: PreservedEntry,
+    ) -> Result<()> {
+        let id = id.into();
+        ensure_new_document_id(self, &id)?;
+        ensure_new_package_path(&self.design_map, &path)?;
+        validate_supported_preserved_compression(entry.compression)?;
+
+        self.design_map.master_spread_srcs.insert(id, path.clone());
+        self.preserved_entries.insert(path, entry);
+        Ok(())
+    }
+
+    /// Adds a raw `idPkg:*` resource entry and its `DesignMap` reference atomically.
+    ///
+    /// Use this for package references that do not have a typed model yet, such
+    /// as graphics, fonts, preferences, and other resource XML files.
+    pub fn add_package_entry(
+        &mut self,
+        element: impl Into<String>,
+        path: IdmlPath,
+        entry: PreservedEntry,
+    ) -> Result<()> {
+        let element = element.into();
+        validate_package_element_name(&element)?;
+        ensure_new_package_path(&self.design_map, &path)?;
+        validate_supported_preserved_compression(entry.compression)?;
+
+        self.design_map
+            .other_package_srcs
+            .entry(element)
+            .or_default()
+            .push(path.clone());
+        self.preserved_entries.insert(path, entry);
+        Ok(())
     }
 
     /// Creates a deterministic allocator with all current document IDs reserved.
@@ -811,6 +852,128 @@ mod tests {
         ));
         assert!(!document.design_map.story_srcs.contains_key("u2"));
         assert!(!document.stories.contains_key("u2"));
+    }
+
+    #[test]
+    fn add_preserved_entries_register_manifest_and_models() {
+        let mut document = make_document();
+        let master_path = IdmlPath::new("MasterSpreads/MasterSpread_u20.xml").unwrap();
+        let graphic_path = IdmlPath::new("Resources/Graphic.xml").unwrap();
+
+        document
+            .add_master_spread_entry(
+                "u20",
+                master_path.clone(),
+                PreservedEntry::deflated(b"<MasterSpread Self=\"u20\" />".as_slice()),
+            )
+            .unwrap();
+        document
+            .add_package_entry(
+                "idPkg:Graphic",
+                graphic_path.clone(),
+                PreservedEntry::stored(b"<Graphic><Data>raw</Data></Graphic>".as_slice()),
+            )
+            .unwrap();
+
+        document.validate().unwrap();
+        assert_eq!(
+            document
+                .design_map
+                .master_spread_srcs
+                .get("u20")
+                .map(IdmlPath::as_str),
+            Some("MasterSpreads/MasterSpread_u20.xml")
+        );
+        assert_eq!(
+            document.design_map.other_package_srcs["idPkg:Graphic"][0].as_str(),
+            "Resources/Graphic.xml"
+        );
+
+        let zip = document
+            .write_to(Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let parsed = IdmlDocument::read_from_package(&mut package).unwrap();
+
+        assert_eq!(
+            parsed.preserved_entries[&master_path].data.as_slice(),
+            b"<MasterSpread Self=\"u20\" />"
+        );
+        assert_eq!(
+            parsed.preserved_entries[&graphic_path].compression,
+            CompressionMethod::Stored
+        );
+    }
+
+    #[test]
+    fn add_master_spread_rejects_duplicate_id_without_mutating_document() {
+        let mut document = make_document();
+
+        let err = document
+            .add_master_spread_entry(
+                "u1",
+                IdmlPath::new("MasterSpreads/MasterSpread_u1.xml").unwrap(),
+                PreservedEntry::deflated(b"<MasterSpread />".as_slice()),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "u1"
+        ));
+        assert!(document.design_map.master_spread_srcs.is_empty());
+    }
+
+    #[test]
+    fn add_package_entry_rejects_invalid_element_without_mutating_document() {
+        let mut document = make_document();
+
+        let err = document
+            .add_package_entry(
+                "Graphic",
+                IdmlPath::new("Resources/Graphic.xml").unwrap(),
+                PreservedEntry::deflated(b"<Graphic />".as_slice()),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "idPkg element",
+                reason: "invalid XML element name",
+            } if element == "DesignMap"
+        ));
+        assert!(document.design_map.other_package_srcs.is_empty());
+        assert!(document.preserved_entries.is_empty());
+    }
+
+    #[test]
+    fn add_package_entry_rejects_duplicate_path_without_mutating_document() {
+        let mut document = make_document();
+
+        let err = document
+            .add_package_entry(
+                "idPkg:Graphic",
+                IdmlPath::new("Stories/Story_u1.xml").unwrap(),
+                PreservedEntry::deflated(b"<Graphic />".as_slice()),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "DesignMap package path",
+                id,
+                reason: "path is referenced more than once",
+            } if id == "Stories/Story_u1.xml"
+        ));
+        assert!(document.design_map.other_package_srcs.is_empty());
+        assert!(document.preserved_entries.is_empty());
     }
 
     #[test]
