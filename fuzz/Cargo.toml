@@ -18,3 +18,17 @@ path = "fuzz_targets/designmap_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "story_parse"
+path = "fuzz_targets/story_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "spread_parse"
+path = "fuzz_targets/spread_parse.rs"
+test = false
+doc = false
+bench = false

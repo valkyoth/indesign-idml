@@ -7,6 +7,7 @@ cargo test --all-features
 cargo test --no-default-features
 cargo test --no-default-features --features std
 cargo test --no-default-features --features serde
+cargo check --manifest-path fuzz/Cargo.toml
 cargo doc --no-deps --all-features
 scripts/validate-release-metadata.sh
 cargo deny check
