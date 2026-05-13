@@ -9,8 +9,8 @@ use crate::model::spread::{Rect, Spread};
 use crate::model::story::Story;
 use indexmap::IndexMap;
 use std::fmt;
-use std::io::{Read, Seek};
-use zip::{CompressionMethod, ZipArchive};
+use std::io::{Read, Seek, Write};
+use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 /// Default maximum number of entries accepted in an IDML archive.
 pub const DEFAULT_MAX_ENTRIES: usize = 20_000;
@@ -81,6 +81,93 @@ pub struct ArchiveEntry {
     pub uncompressed_size: u64,
     /// ZIP compression method.
     pub compression: CompressionMethod,
+}
+
+/// Streaming writer for IDML ZIP packages.
+///
+/// The writer emits the required `mimetype` entry immediately as the first
+/// archive member, stored without compression. All user-added entries are
+/// validated as logical IDML paths and are duplicate-checked before writing.
+#[derive(Debug)]
+pub struct IdmlPackageWriter<W>
+where
+    W: Write + Seek,
+{
+    writer: ZipWriter<W>,
+    entries: IndexMap<IdmlPath, ()>,
+}
+
+impl<W> IdmlPackageWriter<W>
+where
+    W: Write + Seek,
+{
+    /// Creates a new IDML package writer and writes the required `mimetype`.
+    pub fn new(writer: W) -> Result<Self> {
+        let mut package_writer = Self {
+            writer: ZipWriter::new(writer),
+            entries: IndexMap::new(),
+        };
+        package_writer.write_entry(
+            IdmlPath::new("mimetype")?,
+            IDML_MIMETYPE,
+            CompressionMethod::Stored,
+        )?;
+        Ok(package_writer)
+    }
+
+    /// Adds a deflated entry to the package.
+    ///
+    /// XML package members should normally use this method. The `mimetype`
+    /// member is managed by [`IdmlPackageWriter::new`] and cannot be added by
+    /// callers.
+    pub fn add_file(&mut self, path: impl Into<String>, data: &[u8]) -> Result<()> {
+        self.add_file_with_compression(path, data, CompressionMethod::Deflated)
+    }
+
+    /// Adds a stored, uncompressed entry to the package.
+    ///
+    /// This is useful for payloads that are already compressed. XML entries
+    /// should usually use [`IdmlPackageWriter::add_file`].
+    pub fn add_stored_file(&mut self, path: impl Into<String>, data: &[u8]) -> Result<()> {
+        self.add_file_with_compression(path, data, CompressionMethod::Stored)
+    }
+
+    /// Finishes the ZIP central directory and returns the wrapped writer.
+    pub fn finish(self) -> Result<W> {
+        Ok(self.writer.finish()?)
+    }
+
+    fn add_file_with_compression(
+        &mut self,
+        path: impl Into<String>,
+        data: &[u8],
+        compression: CompressionMethod,
+    ) -> Result<()> {
+        let path = IdmlPath::new(path)?;
+        if path.as_str() == "mimetype" {
+            return Err(IdmlError::InvalidPackage(
+                "mimetype entry is written automatically",
+            ));
+        }
+        enforce_supported_compression(compression)?;
+        self.write_entry(path, data, compression)
+    }
+
+    fn write_entry(
+        &mut self,
+        path: IdmlPath,
+        data: &[u8],
+        compression: CompressionMethod,
+    ) -> Result<()> {
+        if self.entries.insert(path.clone(), ()).is_some() {
+            return Err(IdmlError::DuplicateArchiveEntry(path.to_string()));
+        }
+
+        self.writer
+            .start_file(path.as_str(), deterministic_file_options(compression))?;
+        self.writer.write_all(data)?;
+        Ok(())
+    }
 }
 
 /// Open IDML package with a validated entry inventory.
@@ -368,6 +455,12 @@ fn enforce_supported_compression(compression: CompressionMethod) -> Result<()> {
     }
 }
 
+fn deterministic_file_options(compression: CompressionMethod) -> SimpleFileOptions {
+    SimpleFileOptions::default()
+        .compression_method(compression)
+        .last_modified_time(zip::DateTime::DEFAULT)
+}
+
 fn validate_mimetype_entry<R>(
     archive: &mut ZipArchive<R>,
     entries: &IndexMap<IdmlPath, ArchiveEntry>,
@@ -455,7 +548,7 @@ fn validate_archive_path(path: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArchiveLimits, IDML_MIMETYPE, IdmlPackage, IdmlPath};
+    use super::{ArchiveLimits, IDML_MIMETYPE, IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::IdmlError;
     use crate::model::spread::Rect;
     use std::io::{Cursor, Write};
@@ -725,6 +818,67 @@ mod tests {
         assert!(matches!(err, IdmlError::InvalidPackage(message) if message.contains("mimetype")));
     }
 
+    #[test]
+    fn writer_emits_readable_idml_package() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+        let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer.add_file("designmap.xml", designmap).unwrap();
+        writer
+            .add_file(
+                "Stories/Story_u1.xml",
+                b"<Story Self=\"u1\"><Content>Hello</Content></Story>",
+            )
+            .unwrap();
+        let zip = writer.finish().unwrap().into_inner();
+
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let mimetype = package.entries().get_index(0).unwrap().1;
+        let mimetype_path = mimetype.path.clone();
+        let mimetype_compression = mimetype.compression;
+        let design_map = package.read_designmap().unwrap();
+        let story = package.resolve_story(&design_map, "u1").unwrap();
+
+        assert_eq!(mimetype_path.as_str(), "mimetype");
+        assert_eq!(mimetype_compression, CompressionMethod::Stored);
+        assert_eq!(story.text, "Hello");
+    }
+
+    #[test]
+    fn writer_rejects_duplicate_entries() {
+        let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer.add_file("designmap.xml", b"<Document />").unwrap();
+
+        let err = writer
+            .add_file("designmap.xml", b"<Document />")
+            .unwrap_err();
+
+        assert!(matches!(err, IdmlError::DuplicateArchiveEntry(path) if path == "designmap.xml"));
+    }
+
+    #[test]
+    fn writer_rejects_reserved_mimetype_entry() {
+        let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
+
+        let err = writer
+            .add_stored_file("mimetype", IDML_MIMETYPE)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidPackage(message) if message.contains("automatically")
+        ));
+    }
+
+    #[test]
+    fn writer_output_is_deterministic() {
+        let first = make_writer_zip();
+        let second = make_writer_zip();
+
+        assert_eq!(first, second);
+    }
+
     fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut all_entries = Vec::with_capacity(entries.len() + 1);
         all_entries.push(("mimetype", IDML_MIMETYPE, CompressionMethod::Stored));
@@ -744,6 +898,15 @@ mod tests {
             writer.start_file(*name, options).unwrap();
             writer.write_all(data).unwrap();
         }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn make_writer_zip() -> Vec<u8> {
+        let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer.add_file("designmap.xml", b"<Document />").unwrap();
+        writer
+            .add_file("Resources/Preferences.xml", b"<Preferences />")
+            .unwrap();
         writer.finish().unwrap().into_inner()
     }
 }
