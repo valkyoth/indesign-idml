@@ -3,6 +3,7 @@
 use crate::archive::IdmlPath;
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
+use crate::xml::validate_xml_attribute;
 use indexmap::{IndexMap, IndexSet};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -164,7 +165,7 @@ fn serialize_designmap(design_map: &DesignMap) -> Result<String> {
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Document");
     if !design_map.id.is_empty() {
-        push_attr(&mut xml, "Self", &design_map.id);
+        push_attr(&mut xml, "Document", "Self", &design_map.id)?;
     }
     xml.push_str(" xmlns:idPkg=\"http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging\">\n");
 
@@ -235,18 +236,25 @@ fn push_package_refs<'a>(
     for src in srcs {
         xml.push_str("  <");
         xml.push_str(element);
-        push_attr(xml, "src", src.as_str());
+        push_attr(xml, element, "src", src.as_str())?;
         xml.push_str(" />\n");
     }
     Ok(())
 }
 
-fn push_attr(xml: &mut String, name: &str, value: &str) {
+fn push_attr(
+    xml: &mut String,
+    element: impl Into<String>,
+    name: &'static str,
+    value: &str,
+) -> Result<()> {
+    validate_xml_attribute(element, name, value)?;
     xml.push(' ');
     xml.push_str(name);
     xml.push_str("=\"");
     xml.push_str(escape(value).as_ref());
     xml.push('"');
+    Ok(())
 }
 
 pub(crate) fn validate_package_element_name(element: &str) -> Result<()> {
@@ -477,6 +485,25 @@ mod tests {
                 id,
                 reason: "path is referenced more than once",
             } if id == "Resources/Shared.xml"
+        ));
+    }
+
+    #[test]
+    fn serializer_rejects_xml_forbidden_document_id() {
+        let design_map = DesignMap {
+            id: "d\u{0}".to_owned(),
+            ..DesignMap::default()
+        };
+
+        let err = design_map.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Self",
+                reason: "contains an XML-forbidden character",
+            } if element == "Document"
         ));
     }
 }

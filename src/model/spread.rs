@@ -3,6 +3,7 @@
 use crate::core::units::{Millimeters, Points};
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
+use crate::xml::validate_xml_attribute;
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::escape::escape;
@@ -208,19 +209,21 @@ fn parse_geometric_bounds(value: &str) -> Result<Rect> {
         });
     };
 
-    Ok(Rect {
+    let rect = Rect {
         top: Points::new(*top),
         left: Points::new(*left),
         bottom: Points::new(*bottom),
         right: Points::new(*right),
-    })
+    };
+    validate_finite_bounds(rect)?;
+    Ok(rect)
 }
 
 fn serialize_spread(spread: &Spread) -> Result<String> {
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Spread");
     if let Some(id) = &spread.id {
-        push_attr(&mut xml, "Self", id);
+        push_attr(&mut xml, "Spread", "Self", id)?;
     }
     xml.push_str(">\n");
 
@@ -235,50 +238,68 @@ fn serialize_spread(spread: &Spread) -> Result<String> {
 fn serialize_text_frame(xml: &mut String, frame: &TextFrame) -> Result<()> {
     xml.push_str("  <TextFrame");
     if let Some(id) = &frame.id {
-        push_attr(xml, "Self", id);
+        push_attr(xml, "TextFrame", "Self", id)?;
     }
     if let Some(parent_story) = &frame.parent_story {
-        push_attr(xml, "ParentStory", parent_story);
+        push_attr(xml, "TextFrame", "ParentStory", parent_story)?;
     }
     if let Some(bounds) = frame.geometric_bounds {
         let bounds = format_geometric_bounds(bounds)?;
-        push_attr(xml, "GeometricBounds", &bounds);
+        push_attr(xml, "TextFrame", "GeometricBounds", &bounds)?;
     }
     xml.push_str(" />\n");
     Ok(())
 }
 
 fn format_geometric_bounds(bounds: Rect) -> Result<String> {
+    validate_finite_bounds(bounds)?;
     Ok(format!(
         "{} {} {} {}",
-        format_point(bounds.top)?,
-        format_point(bounds.left)?,
-        format_point(bounds.bottom)?,
-        format_point(bounds.right)?
+        format_point(bounds.top),
+        format_point(bounds.left),
+        format_point(bounds.bottom),
+        format_point(bounds.right)
     ))
 }
 
-fn format_point(point: Points) -> Result<String> {
-    let value = point.as_f64();
-    if !value.is_finite() {
-        return Err(IdmlError::InvalidAttribute {
-            element: "TextFrame".to_owned(),
-            attribute: "GeometricBounds",
-            reason: "coordinate must be finite",
-        });
+fn validate_finite_bounds(bounds: Rect) -> Result<()> {
+    for value in [bounds.top, bounds.left, bounds.bottom, bounds.right] {
+        if !value.as_f64().is_finite() {
+            return Err(non_finite_bounds_error());
+        }
     }
-    if value == 0.0 {
-        return Ok("0".to_owned());
-    }
-    Ok(value.to_string())
+    Ok(())
 }
 
-fn push_attr(xml: &mut String, name: &str, value: &str) {
+fn non_finite_bounds_error() -> IdmlError {
+    IdmlError::InvalidAttribute {
+        element: "TextFrame".to_owned(),
+        attribute: "GeometricBounds",
+        reason: "coordinate must be finite",
+    }
+}
+
+fn format_point(point: Points) -> String {
+    let value = point.as_f64();
+    if value == 0.0 {
+        return "0".to_owned();
+    }
+    value.to_string()
+}
+
+fn push_attr(
+    xml: &mut String,
+    element: &'static str,
+    name: &'static str,
+    value: &str,
+) -> Result<()> {
+    validate_xml_attribute(element, name, value)?;
     xml.push(' ');
     xml.push_str(name);
     xml.push_str("=\"");
     xml.push_str(escape(value).as_ref());
     xml.push('"');
+    Ok(())
 }
 
 #[cfg(test)]
@@ -333,6 +354,22 @@ mod tests {
             err,
             IdmlError::InvalidAttribute {
                 attribute: "GeometricBounds",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_non_finite_geometric_bounds_on_parse() {
+        let err =
+            Spread::from_xml(r#"<Spread><TextFrame GeometricBounds="0 NaN 72 72" /></Spread>"#)
+                .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                attribute: "GeometricBounds",
+                reason: "coordinate must be finite",
                 ..
             }
         ));
@@ -413,6 +450,29 @@ mod tests {
                 reason: "coordinate must be finite",
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn serializer_rejects_xml_forbidden_frame_attributes() {
+        let spread = Spread {
+            id: Some("u1".to_owned()),
+            text_frames: vec![TextFrame {
+                id: Some("tf\u{0}".to_owned()),
+                parent_story: Some("u1".to_owned()),
+                geometric_bounds: None,
+            }],
+        };
+
+        let err = spread.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Self",
+                reason: "contains an XML-forbidden character",
+            } if element == "TextFrame"
         ));
     }
 }

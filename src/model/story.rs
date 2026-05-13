@@ -2,6 +2,7 @@
 
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
+use crate::xml::{validate_xml_attribute, validate_xml_text};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::escape::{EscapeError, escape, partial_escape, resolve_predefined_entity};
@@ -163,12 +164,12 @@ fn push_char_limited(output: &mut String, ch: char, max_text_bytes: usize) -> Re
 }
 
 fn serialize_story(story: &Story) -> Result<String> {
-    validate_xml_text(&story.text)?;
+    validate_xml_text("story text", &story.text)?;
 
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Story");
     if let Some(id) = &story.id {
-        push_attr(&mut xml, "Self", id);
+        push_attr(&mut xml, "Story", "Self", id)?;
     }
     xml.push_str(">\n  <ParagraphStyleRange>\n    <CharacterStyleRange>");
 
@@ -202,29 +203,19 @@ fn push_content_if_needed(xml: &mut String, content: &mut String) {
     content.clear();
 }
 
-fn push_attr(xml: &mut String, name: &str, value: &str) {
+fn push_attr(
+    xml: &mut String,
+    element: &'static str,
+    name: &'static str,
+    value: &str,
+) -> Result<()> {
+    validate_xml_attribute(element, name, value)?;
     xml.push(' ');
     xml.push_str(name);
     xml.push_str("=\"");
     xml.push_str(escape(value).as_ref());
     xml.push('"');
-}
-
-fn validate_xml_text(text: &str) -> Result<()> {
-    if text.chars().any(|ch| !is_xml_char(ch)) {
-        return Err(IdmlError::InvalidText {
-            what: "story text",
-            reason: "contains an XML-forbidden character",
-        });
-    }
     Ok(())
-}
-
-fn is_xml_char(ch: char) -> bool {
-    matches!(ch, '\u{9}' | '\u{A}' | '\u{D}')
-        || ('\u{20}'..='\u{D7FF}').contains(&ch)
-        || ('\u{E000}'..='\u{FFFD}').contains(&ch)
-        || ('\u{10000}'..='\u{10FFFF}').contains(&ch)
 }
 
 #[cfg(test)]
@@ -299,6 +290,25 @@ mod tests {
                 what: "story text",
                 reason: "contains an XML-forbidden character",
             }
+        ));
+    }
+
+    #[test]
+    fn serializer_rejects_xml_forbidden_id_attribute() {
+        let story = Story {
+            id: Some("u\u{0}".to_owned()),
+            text: "valid".to_owned(),
+        };
+
+        let err = story.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Self",
+                reason: "contains an XML-forbidden character",
+            } if element == "Story"
         ));
     }
 }

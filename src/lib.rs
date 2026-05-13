@@ -15,6 +15,7 @@ pub mod error;
 pub mod model;
 pub mod prelude;
 pub mod traits;
+mod xml;
 
 pub use error::{IdmlError, Result};
 pub use traits::{XmlLoadable, XmlSaveable};
