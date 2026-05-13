@@ -2,6 +2,7 @@
 
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::DesignMap;
+use crate::model::story::Story;
 use indexmap::IndexMap;
 use std::fmt;
 use std::io::{Read, Seek};
@@ -153,6 +154,44 @@ where
         let design_map = DesignMap::from_xml(xml)?;
         self.validate_designmap_entries(&design_map)?;
         Ok(design_map)
+    }
+
+    /// Reads and parses a story XML entry.
+    pub fn read_story(&mut self, path: &IdmlPath) -> Result<Story> {
+        let bytes = self.read_entry(path)?;
+        let xml = std::str::from_utf8(&bytes)?;
+        Story::from_xml(xml)
+    }
+
+    /// Resolves a story ID through a parsed design map and parses that story.
+    pub fn resolve_story(&mut self, design_map: &DesignMap, story_id: &str) -> Result<Story> {
+        let path =
+            design_map
+                .story_srcs
+                .get(story_id)
+                .ok_or_else(|| IdmlError::MissingReference {
+                    kind: "story",
+                    id: story_id.to_owned(),
+                })?;
+        self.read_story(path)
+    }
+
+    /// Resolves a story ID and returns only its extracted text.
+    pub fn resolve_story_text(&mut self, design_map: &DesignMap, story_id: &str) -> Result<String> {
+        Ok(self.resolve_story(design_map, story_id)?.text)
+    }
+
+    /// Extracts all story text in `designmap.xml` order.
+    pub fn extract_story_texts(
+        &mut self,
+        design_map: &DesignMap,
+    ) -> Result<IndexMap<String, String>> {
+        let mut texts = IndexMap::with_capacity(design_map.story_srcs.len());
+        for (story_id, path) in &design_map.story_srcs {
+            let story = self.read_story(path)?;
+            texts.insert(story_id.clone(), story.text);
+        }
+        Ok(texts)
     }
 
     fn from_archive(mut archive: ZipArchive<R>, limits: ArchiveLimits) -> Result<Self> {
@@ -344,6 +383,74 @@ mod tests {
         assert!(
             matches!(err, IdmlError::MissingArchiveEntry(path) if path == "Stories/Story_u2.xml")
         );
+    }
+
+    #[test]
+    fn resolves_story_text_from_designmap() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+        let story =
+            br#"<Story Self="u2"><Content>Hello</Content><Br/><Content>World</Content></Story>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Stories/Story_u2.xml", story),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let story = package.resolve_story(&design_map, "u2").unwrap();
+
+        assert_eq!(story.id.as_deref(), Some("u2"));
+        assert_eq!(story.text, "Hello\nWorld");
+    }
+
+    #[test]
+    fn extracts_story_texts_in_designmap_order() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u2.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            (
+                "Stories/Story_u2.xml",
+                b"<Story><Content>Second</Content></Story>",
+            ),
+            (
+                "Stories/Story_u1.xml",
+                b"<Story><Content>First</Content></Story>",
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let texts = package.extract_story_texts(&design_map).unwrap();
+
+        assert_eq!(
+            texts
+                .iter()
+                .map(|(story_id, text)| (story_id.as_str(), text.as_str()))
+                .collect::<Vec<_>>(),
+            [("u2", "Second"), ("u1", "First")]
+        );
+    }
+
+    #[test]
+    fn resolve_story_reports_unknown_story_id() {
+        let design_map = crate::model::designmap::DesignMap::default();
+        let zip = make_zip(&[("designmap.xml", b"<Document />")]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = package.resolve_story(&design_map, "u404").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingReference {
+                kind: "story",
+                id
+            } if id == "u404"
+        ));
     }
 
     #[test]

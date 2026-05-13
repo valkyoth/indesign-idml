@@ -67,6 +67,11 @@ impl DesignMap {
 
         Ok(design_map)
     }
+
+    /// Returns story IDs in package order.
+    pub fn story_ids(&self) -> impl Iterator<Item = &str> {
+        self.story_srcs.keys().map(String::as_str)
+    }
 }
 
 fn parse_package_ref(
@@ -167,6 +172,19 @@ mod tests {
                 attribute: "src"
             } if element == "idPkg:Story"
         ));
+    }
+
+    #[test]
+    fn story_ids_follow_designmap_order() {
+        let xml = r#"<Document>
+  <idPkg:Story src="Stories/Story_u2.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+
+        let design_map = DesignMap::from_xml(xml).unwrap();
+        let ids = design_map.story_ids().collect::<Vec<_>>();
+
+        assert_eq!(ids, ["u2", "u1"]);
     }
 
     #[test]

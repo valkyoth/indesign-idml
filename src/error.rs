@@ -23,6 +23,14 @@ pub enum IdmlError {
     #[error("XML attribute error: {0}")]
     XmlAttribute(#[from] quick_xml::events::attributes::AttrError),
 
+    /// XML text decoding failed.
+    #[error("XML encoding error: {0}")]
+    XmlEncoding(#[from] quick_xml::encoding::EncodingError),
+
+    /// XML entity unescaping failed.
+    #[error("XML escape error: {0}")]
+    XmlEscape(#[from] quick_xml::escape::EscapeError),
+
     /// UTF-8 decoding failed for an XML entry.
     #[error("UTF-8 error: {0}")]
     Utf8(#[from] std::str::Utf8Error),
@@ -52,6 +60,15 @@ pub enum IdmlError {
     /// The requested archive entry is absent.
     #[error("missing archive entry `{0}`")]
     MissingArchiveEntry(String),
+
+    /// A requested ID was not present in the parsed package manifest.
+    #[error("missing {kind} reference `{id}`")]
+    MissingReference {
+        /// Reference kind.
+        kind: &'static str,
+        /// Requested ID.
+        id: String,
+    },
 
     /// A configured parser or archive size limit was exceeded.
     #[error("limit exceeded for {what}: limit {limit}, actual {actual}")]
