@@ -207,6 +207,41 @@ impl IdmlDocument {
         self.spreads.insert(id.into(), spread)
     }
 
+    /// Adds a story model and its `DesignMap` package reference atomically.
+    ///
+    /// This is the preferred generator API for new story entries because it
+    /// prevents the model map and `designmap.xml` manifest from drifting apart.
+    pub fn add_story(&mut self, id: impl Into<String>, path: IdmlPath, story: Story) -> Result<()> {
+        let id = id.into();
+        ensure_new_document_id(self, &id)?;
+        ensure_new_package_path(&self.design_map, &path)?;
+        validate_optional_self_id("story", &id, story.id.as_deref())?;
+
+        self.design_map.story_srcs.insert(id.clone(), path);
+        self.stories.insert(id, story);
+        Ok(())
+    }
+
+    /// Adds a spread model and its `DesignMap` package reference atomically.
+    ///
+    /// This is the preferred generator API for new spread entries because it
+    /// prevents the model map and `designmap.xml` manifest from drifting apart.
+    pub fn add_spread(
+        &mut self,
+        id: impl Into<String>,
+        path: IdmlPath,
+        spread: Spread,
+    ) -> Result<()> {
+        let id = id.into();
+        ensure_new_document_id(self, &id)?;
+        ensure_new_package_path(&self.design_map, &path)?;
+        validate_optional_self_id("spread", &id, spread.id.as_deref())?;
+
+        self.design_map.spread_srcs.insert(id.clone(), path);
+        self.spreads.insert(id, spread);
+        Ok(())
+    }
+
     /// Inserts or replaces a raw package entry that should be preserved on write.
     ///
     /// The path must be referenced by `DesignMap` as a master spread or another
@@ -505,6 +540,41 @@ fn validate_no_unreferenced_models<T>(
     Ok(())
 }
 
+fn ensure_new_document_id(document: &IdmlDocument, id: &str) -> Result<()> {
+    let id_exists = document.design_map.story_srcs.contains_key(id)
+        || document.design_map.spread_srcs.contains_key(id)
+        || document.design_map.master_spread_srcs.contains_key(id)
+        || document.stories.contains_key(id)
+        || document.spreads.contains_key(id);
+
+    if id_exists {
+        return Err(IdmlError::DuplicateId {
+            kind: "document object",
+            id: id.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn ensure_new_package_path(design_map: &DesignMap, path: &IdmlPath) -> Result<()> {
+    let path_exists = design_map
+        .story_srcs
+        .values()
+        .chain(design_map.spread_srcs.values())
+        .chain(design_map.master_spread_srcs.values())
+        .chain(design_map.other_package_srcs.values().flatten())
+        .any(|existing| existing == path);
+
+    if path_exists {
+        return Err(IdmlError::InvalidReference {
+            kind: "DesignMap package path",
+            id: path.to_string(),
+            reason: "path is referenced more than once",
+        });
+    }
+    Ok(())
+}
+
 fn referenced_preserved_paths(design_map: &DesignMap) -> impl Iterator<Item = &IdmlPath> {
     design_map
         .master_spread_srcs
@@ -604,6 +674,143 @@ mod tests {
         let parsed = IdmlDocument::read_from_package(&mut package).unwrap();
 
         assert_eq!(parsed, document);
+    }
+
+    #[test]
+    fn add_story_and_spread_register_manifest_and_models() {
+        let design_map = DesignMap {
+            id: "d1".to_owned(),
+            ..DesignMap::default()
+        };
+        let mut document = IdmlDocument::new(design_map);
+
+        document
+            .add_story(
+                "u1",
+                IdmlPath::new("Stories/Story_u1.xml").unwrap(),
+                Story {
+                    id: Some("u1".to_owned()),
+                    text: "Generated".to_owned(),
+                },
+            )
+            .unwrap();
+        document
+            .add_spread(
+                "u10",
+                IdmlPath::new("Spreads/Spread_u10.xml").unwrap(),
+                Spread {
+                    id: Some("u10".to_owned()),
+                    text_frames: vec![TextFrame {
+                        id: Some("tf1".to_owned()),
+                        parent_story: Some("u1".to_owned()),
+                        geometric_bounds: None,
+                    }],
+                },
+            )
+            .unwrap();
+
+        document.validate().unwrap();
+        assert_eq!(
+            document
+                .design_map
+                .story_srcs
+                .get("u1")
+                .map(IdmlPath::as_str),
+            Some("Stories/Story_u1.xml")
+        );
+        assert_eq!(
+            document
+                .design_map
+                .spread_srcs
+                .get("u10")
+                .map(IdmlPath::as_str),
+            Some("Spreads/Spread_u10.xml")
+        );
+
+        let zip = document
+            .write_to(Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let parsed = IdmlDocument::read_from_package(&mut package).unwrap();
+
+        assert_eq!(parsed, document);
+    }
+
+    #[test]
+    fn add_story_rejects_duplicate_document_id() {
+        let mut document = make_document();
+
+        let err = document
+            .add_story(
+                "u10",
+                IdmlPath::new("Stories/Story_u10.xml").unwrap(),
+                Story {
+                    id: Some("u10".to_owned()),
+                    text: "duplicate".to_owned(),
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "u10"
+        ));
+    }
+
+    #[test]
+    fn add_spread_rejects_duplicate_package_path() {
+        let mut document = make_document();
+
+        let err = document
+            .add_spread(
+                "u11",
+                IdmlPath::new("Stories/Story_u1.xml").unwrap(),
+                Spread {
+                    id: Some("u11".to_owned()),
+                    text_frames: Vec::new(),
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "DesignMap package path",
+                id,
+                reason: "path is referenced more than once",
+            } if id == "Stories/Story_u1.xml"
+        ));
+    }
+
+    #[test]
+    fn add_story_rejects_self_id_mismatch_without_mutating_document() {
+        let mut document = make_document();
+
+        let err = document
+            .add_story(
+                "u2",
+                IdmlPath::new("Stories/Story_u2.xml").unwrap(),
+                Story {
+                    id: Some("wrong".to_owned()),
+                    text: "bad".to_owned(),
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "story",
+                id,
+                reason: "model Self ID does not match DesignMap ID",
+            } if id == "u2"
+        ));
+        assert!(!document.design_map.story_srcs.contains_key("u2"));
+        assert!(!document.stories.contains_key("u2"));
     }
 
     #[test]
