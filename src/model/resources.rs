@@ -92,7 +92,9 @@ impl ResourceInventory {
 }
 
 impl ResourceKind {
-    fn from_idpkg_element(element: &str) -> Self {
+    /// Classifies an `idPkg:*` element name into a broad resource kind.
+    #[must_use]
+    pub fn from_idpkg_element(element: &str) -> Self {
         let local = element.strip_prefix("idPkg:").unwrap_or(element);
         match local {
             "Style" | "Styles" => Self::Styles,
@@ -159,6 +161,26 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(graphics, ["Resources/A.xml", "Resources/B.xml"]);
+    }
+
+    #[test]
+    fn classifies_known_idpkg_elements() {
+        assert_eq!(
+            ResourceKind::from_idpkg_element("idPkg:Style"),
+            ResourceKind::Styles
+        );
+        assert_eq!(
+            ResourceKind::from_idpkg_element("idPkg:Color"),
+            ResourceKind::Swatches
+        );
+        assert_eq!(
+            ResourceKind::from_idpkg_element("idPkg:Link"),
+            ResourceKind::Links
+        );
+        assert_eq!(
+            ResourceKind::from_idpkg_element("idPkg:Custom"),
+            ResourceKind::Other("idPkg:Custom".to_owned())
+        );
     }
 
     #[test]

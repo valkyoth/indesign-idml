@@ -7,6 +7,7 @@ use crate::error::{IdmlError, Result};
 use crate::model::designmap::{
     DesignMap, MasterSpreadPointer, PackageResourcePointer, SpreadPointer, StoryPointer,
 };
+use crate::model::resources::ResourceInventory;
 use crate::model::spread::{Rect, Spread};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::IndexMap;
@@ -265,6 +266,15 @@ where
         let design_map = DesignMap::from_xml(xml)?;
         self.validate_designmap_entries(&design_map)?;
         Ok(design_map)
+    }
+
+    /// Reads `designmap.xml` and returns an inventory of non-story/spread resources.
+    ///
+    /// This method validates that all manifest-referenced entries are present,
+    /// but it does not read resource entry bodies.
+    pub fn read_resource_inventory(&mut self) -> Result<ResourceInventory> {
+        let design_map = self.read_designmap()?;
+        ResourceInventory::from_designmap(&design_map)
     }
 
     /// Reads and parses a story XML entry.
@@ -714,6 +724,56 @@ mod tests {
 
         assert!(
             matches!(err, IdmlError::MissingArchiveEntry(path) if path == "Stories/Story_u2.xml")
+        );
+    }
+
+    #[test]
+    fn reads_resource_inventory_without_loading_resource_bodies() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u2.xml" />
+  <idPkg:MasterSpread src="MasterSpreads/MasterSpread_u20.xml" />
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+  <idPkg:Fonts src="Resources/Fonts.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Stories/Story_u2.xml", b"<Story />"),
+            ("MasterSpreads/MasterSpread_u20.xml", b"<MasterSpread />"),
+            ("Resources/Graphic.xml", b"<Graphic />"),
+            ("Resources/Fonts.xml", b"<Fonts />"),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let inventory = package.read_resource_inventory().unwrap();
+
+        assert_eq!(inventory.resources.len(), 3);
+        assert_eq!(inventory.resources[0].id.as_deref(), Some("u20"));
+        assert_eq!(
+            inventory
+                .resources
+                .iter()
+                .map(|resource| resource.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "MasterSpreads/MasterSpread_u20.xml",
+                "Resources/Graphic.xml",
+                "Resources/Fonts.xml",
+            ]
+        );
+    }
+
+    #[test]
+    fn read_resource_inventory_rejects_missing_resources() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Graphic src="Resources/Missing.xml" />
+</Document>"#;
+        let zip = make_zip(&[("designmap.xml", designmap)]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = package.read_resource_inventory().unwrap_err();
+
+        assert!(
+            matches!(err, IdmlError::MissingArchiveEntry(path) if path == "Resources/Missing.xml")
         );
     }
 
