@@ -29,6 +29,118 @@ pub struct IdmlDocumentReadOptions {
     pub story: StoryParseOptions,
 }
 
+/// Deterministic allocator for IDML-style object IDs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdmlIdAllocator {
+    prefix: String,
+    next: u64,
+    reserved: IndexSet<String>,
+}
+
+impl Default for IdmlIdAllocator {
+    fn default() -> Self {
+        Self {
+            prefix: "u".to_owned(),
+            next: 1,
+            reserved: IndexSet::new(),
+        }
+    }
+}
+
+impl IdmlIdAllocator {
+    /// Creates an allocator that emits IDs like `u1`, `u2`, and so on.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates an allocator with a validated prefix and starting counter.
+    pub fn with_prefix(prefix: impl Into<String>, next: u64) -> Result<Self> {
+        let prefix = prefix.into();
+        validate_id_prefix(&prefix)?;
+        Ok(Self {
+            prefix,
+            next,
+            reserved: IndexSet::new(),
+        })
+    }
+
+    /// Creates an allocator with all IDs currently used by `document` reserved.
+    pub fn from_document(document: &IdmlDocument) -> Result<Self> {
+        let mut allocator = Self::default();
+        allocator.reserve_document(document)?;
+        Ok(allocator)
+    }
+
+    /// Reserves an existing ID so it will not be allocated later.
+    pub fn reserve(&mut self, id: impl Into<String>) -> Result<()> {
+        let id = id.into();
+        if self.reserved.insert(id.clone()) {
+            return Ok(());
+        }
+        Err(IdmlError::DuplicateId {
+            kind: "allocated object",
+            id,
+        })
+    }
+
+    /// Returns the next unused ID and reserves it.
+    pub fn allocate(&mut self) -> Result<String> {
+        loop {
+            let current = self.next;
+            let id = format!("{}{}", self.prefix, current);
+            if current == u64::MAX {
+                if self.reserved.insert(id.clone()) {
+                    return Ok(id);
+                }
+                return Err(IdmlError::LimitExceeded {
+                    what: "ID allocator counter",
+                    limit: u64::MAX,
+                    actual: u64::MAX,
+                });
+            }
+            self.next = current + 1;
+            if self.reserved.insert(id.clone()) {
+                return Ok(id);
+            }
+        }
+    }
+
+    fn reserve_document(&mut self, document: &IdmlDocument) -> Result<()> {
+        document.validate()?;
+
+        for id in document
+            .design_map
+            .story_srcs
+            .keys()
+            .chain(document.design_map.spread_srcs.keys())
+            .chain(document.design_map.master_spread_srcs.keys())
+        {
+            self.reserve_existing(id);
+        }
+        for story in document.stories.values() {
+            if let Some(id) = &story.id {
+                self.reserve_existing(id);
+            }
+        }
+        for spread in document.spreads.values() {
+            if let Some(id) = &spread.id {
+                self.reserve_existing(id);
+            }
+            for frame in &spread.text_frames {
+                if let Some(id) = &frame.id {
+                    self.reserve_existing(id);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn reserve_existing(&mut self, id: &str) {
+        self.reserved.insert(id.to_owned());
+    }
+}
+
 impl IdmlDocument {
     /// Creates an empty document aggregate around a `DesignMap`.
     #[must_use]
@@ -48,6 +160,11 @@ impl IdmlDocument {
     /// Inserts or replaces a spread by `DesignMap` spread ID.
     pub fn insert_spread(&mut self, id: impl Into<String>, spread: Spread) -> Option<Spread> {
         self.spreads.insert(id.into(), spread)
+    }
+
+    /// Creates a deterministic allocator with all current document IDs reserved.
+    pub fn id_allocator(&self) -> Result<IdmlIdAllocator> {
+        IdmlIdAllocator::from_document(self)
     }
 
     /// Validates model presence and cross-file story references.
@@ -293,9 +410,24 @@ fn remember_object_id(seen: &mut IndexSet<String>, id: &str) -> Result<()> {
     })
 }
 
+fn validate_id_prefix(prefix: &str) -> Result<()> {
+    let valid = !prefix.is_empty()
+        && prefix
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    if valid {
+        return Ok(());
+    }
+    Err(IdmlError::InvalidAttribute {
+        element: "IdmlIdAllocator".to_owned(),
+        attribute: "prefix",
+        reason: "prefix must be non-empty ASCII alphanumeric, underscore, or hyphen",
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{IdmlDocument, IdmlDocumentReadOptions};
+    use super::{IdmlDocument, IdmlDocumentReadOptions, IdmlIdAllocator};
     use crate::IdmlError;
     use crate::archive::{IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::core::units::Points;
@@ -394,6 +526,61 @@ mod tests {
                 kind: "spread model",
                 id,
             } if id == "missing"
+        ));
+    }
+
+    #[test]
+    fn id_allocator_skips_document_ids() {
+        let document = make_document();
+        let mut allocator = document.id_allocator().unwrap();
+
+        assert_eq!(allocator.allocate().unwrap(), "u2");
+        assert_eq!(allocator.allocate().unwrap(), "u3");
+    }
+
+    #[test]
+    fn id_allocator_rejects_duplicate_reservations() {
+        let mut allocator = IdmlIdAllocator::new();
+        allocator.reserve("u1").unwrap();
+
+        let err = allocator.reserve("u1").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "allocated object",
+                id,
+            } if id == "u1"
+        ));
+    }
+
+    #[test]
+    fn id_allocator_rejects_invalid_prefixes() {
+        let err = IdmlIdAllocator::with_prefix("bad prefix", 1).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "prefix",
+                reason: "prefix must be non-empty ASCII alphanumeric, underscore, or hyphen",
+            } if element == "IdmlIdAllocator"
+        ));
+    }
+
+    #[test]
+    fn id_allocator_reports_counter_exhaustion() {
+        let mut allocator = IdmlIdAllocator::with_prefix("u", u64::MAX).unwrap();
+        allocator.reserve(format!("u{}", u64::MAX)).unwrap();
+
+        let err = allocator.allocate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "ID allocator counter",
+                ..
+            }
         ));
     }
 
