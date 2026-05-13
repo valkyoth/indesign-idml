@@ -11,6 +11,7 @@ pub use crate::model::designmap::{
 pub use crate::model::document::{
     IdmlDocument, IdmlDocumentReadOptions, IdmlIdAllocator, PreservedEntry,
 };
+pub use crate::model::resources::{ResourceInventory, ResourceKind, ResourceReference};
 pub use crate::model::spread::{Rect, RectMm, Spread, TextFrame};
 pub use crate::model::story::{Story, StoryParseOptions};
 pub use crate::traits::{XmlLoadable, XmlSaveable};
