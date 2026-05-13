@@ -1,12 +1,12 @@
 //! High-level typed IDML document aggregate.
 
-use crate::archive::IdmlPackageWriter;
+use crate::archive::{IdmlPackage, IdmlPackageWriter};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::DesignMap;
 use crate::model::spread::Spread;
 use crate::model::story::Story;
 use indexmap::{IndexMap, IndexSet};
-use std::io::{Seek, Write};
+use std::io::{Read, Seek, Write};
 
 /// Typed IDML document parts that can be validated and written as one package.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -51,6 +51,38 @@ impl IdmlDocument {
         self.validate_unique_object_ids()?;
         self.validate_parent_stories()?;
         Ok(())
+    }
+
+    /// Reads all manifest-referenced stories and spreads from a package.
+    ///
+    /// This eagerly loads the typed document model. Archive entry validation and
+    /// per-entry size limits are still enforced by [`IdmlPackage`].
+    pub fn read_from_package<R>(package: &mut IdmlPackage<R>) -> Result<Self>
+    where
+        R: Read + Seek,
+    {
+        let design_map = package.read_designmap()?;
+        let story_refs = design_map
+            .story_srcs
+            .iter()
+            .map(|(id, path)| (id.clone(), path.clone()))
+            .collect::<Vec<_>>();
+        let spread_refs = design_map
+            .spread_srcs
+            .iter()
+            .map(|(id, path)| (id.clone(), path.clone()))
+            .collect::<Vec<_>>();
+
+        let mut document = Self::new(design_map);
+        for (id, path) in story_refs {
+            document.insert_story(id, package.read_story(&path)?);
+        }
+        for (id, path) in spread_refs {
+            document.insert_spread(id, package.read_spread(&path)?);
+        }
+
+        document.validate()?;
+        Ok(document)
     }
 
     /// Validates and writes the aggregate as a complete IDML package.
@@ -197,7 +229,7 @@ fn remember_object_id(seen: &mut IndexSet<String>, id: &str) -> Result<()> {
 mod tests {
     use super::IdmlDocument;
     use crate::IdmlError;
-    use crate::archive::{IdmlPackage, IdmlPath};
+    use crate::archive::{IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::core::units::Points;
     use crate::model::designmap::DesignMap;
     use crate::model::spread::{Rect, Spread, TextFrame};
@@ -219,6 +251,53 @@ mod tests {
 
         assert_eq!(story.text, "Generated");
         assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn reads_document_from_package_and_validates_it() {
+        let document = make_document();
+        let zip = document
+            .write_to(Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let parsed = IdmlDocument::read_from_package(&mut package).unwrap();
+
+        assert_eq!(parsed, document);
+    }
+
+    #[test]
+    fn read_from_package_rejects_invalid_parent_story() {
+        let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer
+            .add_file(
+                "designmap.xml",
+                br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+</Document>"#,
+            )
+            .unwrap();
+        writer
+            .add_file(
+                "Spreads/Spread_u10.xml",
+                br#"<Spread Self="u10">
+  <TextFrame Self="tf1" ParentStory="missing" GeometricBounds="0 0 72 144" />
+</Spread>"#,
+            )
+            .unwrap();
+        let zip = writer.finish().unwrap().into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = IdmlDocument::read_from_package(&mut package).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingReference {
+                kind: "text frame parent story",
+                id
+            } if id == "missing"
+        ));
     }
 
     #[test]
