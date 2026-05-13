@@ -137,6 +137,11 @@ where
         self.add_file("designmap.xml", design_map.to_xml()?.as_bytes())
     }
 
+    /// Serializes and adds a story XML entry to the package.
+    pub fn add_story(&mut self, path: impl Into<String>, story: &Story) -> Result<()> {
+        self.add_file(path, story.to_xml()?.as_bytes())
+    }
+
     /// Finishes the ZIP central directory and returns the wrapped writer.
     pub fn finish(self) -> Result<W> {
         Ok(self.writer.finish()?)
@@ -557,6 +562,7 @@ mod tests {
     use crate::IdmlError;
     use crate::model::designmap::DesignMap;
     use crate::model::spread::Rect;
+    use crate::model::story::Story;
     use std::io::{Cursor, Write};
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -877,6 +883,27 @@ mod tests {
 
         assert_eq!(parsed, design_map);
         assert_eq!(story.text, "Typed root");
+    }
+
+    #[test]
+    fn writer_adds_serialized_story() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+        let story = Story {
+            id: Some("u1".to_owned()),
+            text: "Generated & safe\nline".to_owned(),
+        };
+        let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer.add_file("designmap.xml", designmap).unwrap();
+        writer.add_story("Stories/Story_u1.xml", &story).unwrap();
+        let zip = writer.finish().unwrap().into_inner();
+
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let design_map = package.read_designmap().unwrap();
+        let parsed = package.resolve_story(&design_map, "u1").unwrap();
+
+        assert_eq!(parsed, story);
     }
 
     #[test]

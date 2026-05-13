@@ -59,6 +59,15 @@ pub enum IdmlError {
         reason: &'static str,
     },
 
+    /// XML text cannot be represented safely.
+    #[error("invalid XML text in {what}: {reason}")]
+    InvalidText {
+        /// Text context.
+        what: &'static str,
+        /// Rejection reason.
+        reason: &'static str,
+    },
+
     /// The IDML container violates packaging requirements.
     #[error("invalid IDML package: {0}")]
     InvalidPackage(&'static str),

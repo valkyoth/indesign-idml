@@ -1,9 +1,10 @@
 //! Parser for IDML story content XML.
 
 use crate::error::{IdmlError, Result};
+use crate::traits::{XmlLoadable, XmlSaveable};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
-use quick_xml::escape::{EscapeError, resolve_predefined_entity};
+use quick_xml::escape::{EscapeError, escape, partial_escape, resolve_predefined_entity};
 use quick_xml::events::{BytesStart, Event};
 
 /// Default maximum extracted text bytes for one story.
@@ -98,6 +99,23 @@ impl Story {
 
         Ok(Self { id, text })
     }
+
+    /// Serializes this story into a minimal standalone story XML document.
+    pub fn to_xml(&self) -> Result<String> {
+        serialize_story(self)
+    }
+}
+
+impl XmlLoadable for Story {
+    fn from_xml(xml: &str) -> Result<Self> {
+        Story::from_xml(xml)
+    }
+}
+
+impl XmlSaveable for Story {
+    fn to_xml(&self) -> Result<String> {
+        serialize_story(self)
+    }
 }
 
 fn optional_attr(
@@ -144,6 +162,71 @@ fn push_char_limited(output: &mut String, ch: char, max_text_bytes: usize) -> Re
     push_limited(output, ch.encode_utf8(&mut buffer), max_text_bytes)
 }
 
+fn serialize_story(story: &Story) -> Result<String> {
+    validate_xml_text(&story.text)?;
+
+    let mut xml = String::new();
+    xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Story");
+    if let Some(id) = &story.id {
+        push_attr(&mut xml, "Self", id);
+    }
+    xml.push_str(">\n  <ParagraphStyleRange>\n    <CharacterStyleRange>");
+
+    let mut content = String::new();
+    for ch in story.text.chars() {
+        match ch {
+            '\n' => {
+                push_content_if_needed(&mut xml, &mut content);
+                xml.push_str("<Br/>");
+            }
+            '\t' => {
+                push_content_if_needed(&mut xml, &mut content);
+                xml.push_str("<Tab/>");
+            }
+            _ => content.push(ch),
+        }
+    }
+    push_content_if_needed(&mut xml, &mut content);
+
+    xml.push_str("</CharacterStyleRange>\n  </ParagraphStyleRange>\n</Story>\n");
+    Ok(xml)
+}
+
+fn push_content_if_needed(xml: &mut String, content: &mut String) {
+    if content.is_empty() {
+        return;
+    }
+    xml.push_str("<Content>");
+    xml.push_str(partial_escape(content.as_str()).as_ref());
+    xml.push_str("</Content>");
+    content.clear();
+}
+
+fn push_attr(xml: &mut String, name: &str, value: &str) {
+    xml.push(' ');
+    xml.push_str(name);
+    xml.push_str("=\"");
+    xml.push_str(escape(value).as_ref());
+    xml.push('"');
+}
+
+fn validate_xml_text(text: &str) -> Result<()> {
+    if text.chars().any(|ch| !is_xml_char(ch)) {
+        return Err(IdmlError::InvalidText {
+            what: "story text",
+            reason: "contains an XML-forbidden character",
+        });
+    }
+    Ok(())
+}
+
+fn is_xml_char(ch: char) -> bool {
+    matches!(ch, '\u{9}' | '\u{A}' | '\u{D}')
+        || ('\u{20}'..='\u{D7FF}').contains(&ch)
+        || ('\u{E000}'..='\u{FFFD}').contains(&ch)
+        || ('\u{10000}'..='\u{10FFFF}').contains(&ch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Story, StoryParseOptions};
@@ -183,5 +266,39 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
+    }
+
+    #[test]
+    fn serializes_story_text_with_markers_and_escaping() {
+        let story = Story {
+            id: Some("u&\"2".to_owned()),
+            text: "Hello & <world>\nNext\tCell".to_owned(),
+        };
+
+        let xml = <Story as crate::XmlSaveable>::to_xml(&story).unwrap();
+        let parsed = <Story as crate::XmlLoadable>::from_xml(&xml).unwrap();
+
+        assert!(xml.contains("Self=\"u&amp;&quot;2\""));
+        assert!(xml.contains("<Content>Hello &amp; &lt;world&gt;</Content><Br/>"));
+        assert!(xml.contains("<Tab/><Content>Cell</Content>"));
+        assert_eq!(parsed, story);
+    }
+
+    #[test]
+    fn serializer_rejects_xml_forbidden_control_characters() {
+        let story = Story {
+            id: Some("u1".to_owned()),
+            text: "bad\u{0}".to_owned(),
+        };
+
+        let err = story.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidText {
+                what: "story text",
+                reason: "contains an XML-forbidden character",
+            }
+        ));
     }
 }
