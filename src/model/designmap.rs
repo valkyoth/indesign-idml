@@ -3,7 +3,7 @@
 use crate::archive::IdmlPath;
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::escape::escape;
@@ -67,7 +67,15 @@ impl DesignMap {
             }
         }
 
+        design_map.validate()?;
         Ok(design_map)
+    }
+
+    /// Validates known package IDs and package reference paths.
+    pub fn validate(&self) -> Result<()> {
+        validate_unique_known_ids(self)?;
+        validate_unique_package_paths(self)?;
+        Ok(())
     }
 
     /// Returns story IDs in package order.
@@ -101,6 +109,12 @@ fn parse_package_ref(
 ) -> Result<()> {
     let src = required_attr(event, element, "src", reader)?;
     let id = id_from_package_src(&src);
+    if map.contains_key(&id) {
+        return Err(IdmlError::DuplicateId {
+            kind: "DesignMap package",
+            id,
+        });
+    }
     map.insert(id, IdmlPath::new(src)?);
     Ok(())
 }
@@ -145,6 +159,8 @@ fn id_from_package_src(src: &str) -> String {
 }
 
 fn serialize_designmap(design_map: &DesignMap) -> Result<String> {
+    design_map.validate()?;
+
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Document");
     if !design_map.id.is_empty() {
@@ -166,6 +182,48 @@ fn serialize_designmap(design_map: &DesignMap) -> Result<String> {
 
     xml.push_str("</Document>\n");
     Ok(xml)
+}
+
+fn validate_unique_known_ids(design_map: &DesignMap) -> Result<()> {
+    let mut seen = IndexSet::new();
+
+    for id in design_map
+        .spread_srcs
+        .keys()
+        .chain(design_map.story_srcs.keys())
+        .chain(design_map.master_spread_srcs.keys())
+    {
+        if !seen.insert(id.as_str()) {
+            return Err(IdmlError::DuplicateId {
+                kind: "DesignMap package",
+                id: id.clone(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_unique_package_paths(design_map: &DesignMap) -> Result<()> {
+    let mut seen = IndexSet::new();
+
+    for path in design_map
+        .spread_srcs
+        .values()
+        .chain(design_map.story_srcs.values())
+        .chain(design_map.master_spread_srcs.values())
+        .chain(design_map.other_package_srcs.values().flatten())
+    {
+        if !seen.insert(path.clone()) {
+            return Err(IdmlError::InvalidReference {
+                kind: "DesignMap package path",
+                id: path.to_string(),
+                reason: "path is referenced more than once",
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn push_package_refs<'a>(
@@ -288,6 +346,64 @@ mod tests {
     }
 
     #[test]
+    fn rejects_duplicate_known_package_ids() {
+        let err = DesignMap::from_xml(
+            r#"<Document>
+  <idPkg:Story src="Stories/Story_u1.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "DesignMap package",
+                id,
+            } if id == "u1"
+        ));
+    }
+
+    #[test]
+    fn rejects_cross_type_known_package_id_collisions() {
+        let err = DesignMap::from_xml(
+            r#"<Document>
+  <idPkg:Spread src="Spreads/Spread_u1.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "DesignMap package",
+                id,
+            } if id == "u1"
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_package_paths() {
+        let err = DesignMap::from_xml(
+            r#"<Document>
+  <idPkg:Story src="Resources/Shared.xml" />
+  <idPkg:Graphic src="Resources/Shared.xml" />
+</Document>"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "DesignMap package path",
+                id,
+                reason: "path is referenced more than once",
+            } if id == "Resources/Shared.xml"
+        ));
+    }
+
+    #[test]
     fn serializes_designmap_with_escaped_attributes_and_round_trips() {
         let mut design_map = DesignMap {
             id: "d&\"1".to_owned(),
@@ -337,6 +453,30 @@ mod tests {
                 attribute: "idPkg element",
                 reason: "invalid XML element name",
             } if element == "DesignMap"
+        ));
+    }
+
+    #[test]
+    fn serializer_rejects_duplicate_package_paths() {
+        let mut design_map = DesignMap::default();
+        design_map.story_srcs.insert(
+            "u1".to_owned(),
+            IdmlPath::new("Resources/Shared.xml").unwrap(),
+        );
+        design_map.other_package_srcs.insert(
+            "idPkg:Graphic".to_owned(),
+            vec![IdmlPath::new("Resources/Shared.xml").unwrap()],
+        );
+
+        let err = design_map.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "DesignMap package path",
+                id,
+                reason: "path is referenced more than once",
+            } if id == "Resources/Shared.xml"
         ));
     }
 }
