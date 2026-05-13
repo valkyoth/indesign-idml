@@ -436,24 +436,30 @@ impl IdmlDocument {
         let mut package = IdmlPackageWriter::new(writer)?;
         package.add_designmap(&self.design_map)?;
         for (spread_id, path) in &self.design_map.spread_srcs {
-            let spread = self
-                .spreads
-                .get(spread_id)
-                .expect("validated spread presence");
+            let spread =
+                self.spreads
+                    .get(spread_id)
+                    .ok_or_else(|| IdmlError::MissingReference {
+                        kind: "spread model",
+                        id: spread_id.clone(),
+                    })?;
             package.add_spread(path.as_str(), spread)?;
         }
         for (story_id, path) in &self.design_map.story_srcs {
             let story = self
                 .stories
                 .get(story_id)
-                .expect("validated story presence");
+                .ok_or_else(|| IdmlError::MissingReference {
+                    kind: "story model",
+                    id: story_id.clone(),
+                })?;
             package.add_story(path.as_str(), story)?;
         }
         for path in referenced_preserved_paths(&self.design_map) {
             let entry = self
                 .preserved_entries
                 .get(path)
-                .expect("validated preserved entry presence");
+                .ok_or_else(|| IdmlError::MissingArchiveEntry(path.to_string()))?;
             match entry.compression {
                 CompressionMethod::Stored => package.add_stored_file(path.as_str(), &entry.data)?,
                 CompressionMethod::Deflated => package.add_file(path.as_str(), &entry.data)?,
