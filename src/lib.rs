@@ -51,6 +51,7 @@ mod tests {
         let _: Option<crate::prelude::PackageResourcePointer<'_>> = None;
         let _: Option<crate::prelude::ResourceInventory> = None;
         let _: Option<crate::prelude::ResourceReference> = None;
+        let _: Option<crate::prelude::ResourceArchiveMetadata> = None;
         let _: Option<crate::prelude::ResourceKind> = None;
     }
 }

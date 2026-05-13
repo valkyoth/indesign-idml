@@ -274,7 +274,7 @@ where
     /// but it does not read resource entry bodies.
     pub fn read_resource_inventory(&mut self) -> Result<ResourceInventory> {
         let design_map = self.read_designmap()?;
-        ResourceInventory::from_designmap(&design_map)
+        ResourceInventory::from_designmap(&design_map)?.with_archive_metadata(&self.entries)
     }
 
     /// Reads and parses a story XML entry.
@@ -748,6 +748,20 @@ mod tests {
 
         assert_eq!(inventory.resources.len(), 3);
         assert_eq!(inventory.resources[0].id.as_deref(), Some("u20"));
+        assert_eq!(
+            inventory.resources[0]
+                .archive
+                .as_ref()
+                .map(|metadata| metadata.uncompressed_size),
+            Some(b"<MasterSpread />".len() as u64)
+        );
+        assert_eq!(
+            inventory.resources[1]
+                .archive
+                .as_ref()
+                .map(|metadata| metadata.compression),
+            Some(CompressionMethod::Stored)
+        );
         assert_eq!(
             inventory
                 .resources

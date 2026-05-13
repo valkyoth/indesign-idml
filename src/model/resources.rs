@@ -1,8 +1,10 @@
 //! Resource inventory for untyped IDML package references.
 
-use crate::archive::IdmlPath;
-use crate::error::Result;
+use crate::archive::{ArchiveEntry, IdmlPath};
+use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, validate_package_element_name};
+use indexmap::IndexMap;
+use zip::CompressionMethod;
 
 /// Broad resource category inferred from a `designmap.xml` package reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,6 +40,19 @@ pub struct ResourceReference {
     pub id: Option<String>,
     /// Logical archive path for the resource.
     pub path: IdmlPath,
+    /// ZIP metadata when the inventory was built from an opened package.
+    pub archive: Option<ResourceArchiveMetadata>,
+}
+
+/// Archive metadata for one manifest-referenced resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResourceArchiveMetadata {
+    /// Compressed byte size from ZIP metadata.
+    pub compressed_size: u64,
+    /// Uncompressed byte size from ZIP metadata.
+    pub uncompressed_size: u64,
+    /// ZIP compression method.
+    pub compression: CompressionMethod,
 }
 
 /// Ordered resource inventory derived from a [`DesignMap`].
@@ -67,6 +82,7 @@ impl ResourceInventory {
                 element: "idPkg:MasterSpread".to_owned(),
                 id: Some(pointer.id().to_owned()),
                 path: pointer.path().clone(),
+                archive: None,
             });
         }
 
@@ -77,6 +93,7 @@ impl ResourceInventory {
                 element: pointer.element().to_owned(),
                 id: None,
                 path: pointer.path().clone(),
+                archive: None,
             });
         }
 
@@ -88,6 +105,33 @@ impl ResourceInventory {
         self.resources
             .iter()
             .filter(move |resource| resource.kind == kind)
+    }
+
+    /// Attaches archive metadata for all inventory entries.
+    pub fn attach_archive_metadata(
+        &mut self,
+        entries: &IndexMap<IdmlPath, ArchiveEntry>,
+    ) -> Result<()> {
+        for resource in &mut self.resources {
+            let entry = entries
+                .get(&resource.path)
+                .ok_or_else(|| IdmlError::MissingArchiveEntry(resource.path.to_string()))?;
+            resource.archive = Some(ResourceArchiveMetadata {
+                compressed_size: entry.compressed_size,
+                uncompressed_size: entry.uncompressed_size,
+                compression: entry.compression,
+            });
+        }
+        Ok(())
+    }
+
+    /// Returns a new inventory with archive metadata attached.
+    pub fn with_archive_metadata(
+        mut self,
+        entries: &IndexMap<IdmlPath, ArchiveEntry>,
+    ) -> Result<Self> {
+        self.attach_archive_metadata(entries)?;
+        Ok(self)
     }
 }
 
@@ -113,8 +157,10 @@ impl ResourceKind {
 mod tests {
     use super::{ResourceInventory, ResourceKind};
     use crate::IdmlError;
-    use crate::archive::IdmlPath;
+    use crate::archive::{ArchiveEntry, IdmlPath};
     use crate::model::designmap::DesignMap;
+    use indexmap::IndexMap;
+    use zip::CompressionMethod;
 
     #[test]
     fn inventories_master_spreads_and_untyped_resources() {
@@ -137,6 +183,7 @@ mod tests {
             IdmlPath::new("MasterSpreads/MasterSpread_u20.xml").unwrap()
         );
         assert_eq!(inventory.resources[1].kind, ResourceKind::Graphics);
+        assert_eq!(inventory.resources[1].archive, None);
         assert_eq!(inventory.resources[2].kind, ResourceKind::Fonts);
         assert_eq!(inventory.resources[3].kind, ResourceKind::Swatches);
         assert_eq!(
@@ -180,6 +227,49 @@ mod tests {
         assert_eq!(
             ResourceKind::from_idpkg_element("idPkg:Custom"),
             ResourceKind::Other("idPkg:Custom".to_owned())
+        );
+    }
+
+    #[test]
+    fn attaches_archive_metadata_to_resources() {
+        let xml = r#"<Document>
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#;
+        let design_map = DesignMap::from_xml(xml).unwrap();
+        let mut inventory = ResourceInventory::from_designmap(&design_map).unwrap();
+        let path = IdmlPath::new("Resources/Graphic.xml").unwrap();
+        let entries = IndexMap::from([(
+            path.clone(),
+            ArchiveEntry {
+                path,
+                compressed_size: 12,
+                uncompressed_size: 34,
+                compression: CompressionMethod::Deflated,
+            },
+        )]);
+
+        inventory.attach_archive_metadata(&entries).unwrap();
+
+        let archive = inventory.resources[0].archive.as_ref().unwrap();
+        assert_eq!(archive.compressed_size, 12);
+        assert_eq!(archive.uncompressed_size, 34);
+        assert_eq!(archive.compression, CompressionMethod::Deflated);
+    }
+
+    #[test]
+    fn archive_metadata_requires_present_entries() {
+        let xml = r#"<Document>
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#;
+        let design_map = DesignMap::from_xml(xml).unwrap();
+        let mut inventory = ResourceInventory::from_designmap(&design_map).unwrap();
+
+        let err = inventory
+            .attach_archive_metadata(&IndexMap::new())
+            .unwrap_err();
+
+        assert!(
+            matches!(err, IdmlError::MissingArchiveEntry(path) if path == "Resources/Graphic.xml")
         );
     }
 
