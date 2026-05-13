@@ -42,6 +42,39 @@ fn idml_text_rejects_missing_input() {
         .stderr("idml-text: missing input IDML path\n");
 }
 
+#[test]
+fn idml_text_enforces_story_text_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("sample.idml");
+    fs::write(&input, sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command.arg("--max-story-text-bytes").arg("4").arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for story text bytes: limit 4, actual 5\n");
+}
+
+#[test]
+fn idml_text_rejects_invalid_story_text_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("sample.idml");
+    fs::write(&input, sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--max-story-text-bytes")
+        .arg("not-a-number")
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: invalid value `not-a-number` for --max-story-text-bytes\n");
+}
+
 fn sample_idml() -> Vec<u8> {
     let mut buffer = Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(&mut buffer);

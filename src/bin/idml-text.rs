@@ -2,6 +2,7 @@
 #![deny(rust_2018_idioms)]
 
 use indesign_idml::archive::IdmlPackage;
+use indesign_idml::model::story::StoryParseOptions;
 use std::env;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -21,6 +22,7 @@ fn main() -> ExitCode {
 fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliError> {
     let mut input = None;
     let mut output = OutputTarget::Stdout;
+    let mut story_options = StoryParseOptions::default();
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -35,6 +37,15 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
             output = OutputTarget::File(PathBuf::from(path));
             continue;
         }
+        if arg == "--max-story-text-bytes" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-story-text-bytes",
+                ));
+            };
+            story_options.max_text_bytes = parse_usize(&value, "--max-story-text-bytes")?;
+            continue;
+        }
         if input.replace(PathBuf::from(arg)).is_some() {
             return Err(CliError::Usage("expected exactly one input IDML path"));
         }
@@ -47,7 +58,7 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     let file = File::open(input)?;
     let mut package = IdmlPackage::new(file)?;
     let design_map = package.read_designmap()?;
-    let texts = package.extract_story_texts(&design_map)?;
+    let texts = package.extract_story_texts_with_options(&design_map, story_options)?;
 
     match output {
         OutputTarget::Stdout => {
@@ -86,10 +97,20 @@ fn print_help() -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
     writer.write_all(
-        b"Usage: idml-text [--output PATH] INPUT.idml\n\nExtracts story text in designmap.xml order.\n",
+        b"Usage: idml-text [--output PATH] [--max-story-text-bytes BYTES] INPUT.idml\n\nExtracts story text in designmap.xml order.\n",
     )?;
     writer.flush()?;
     Ok(())
+}
+
+fn parse_usize(value: &std::ffi::OsStr, flag: &'static str) -> Result<usize, CliError> {
+    let Some(value) = value.to_str() else {
+        return Err(CliError::Usage("numeric option must be valid UTF-8"));
+    };
+    value.parse::<usize>().map_err(|_| CliError::InvalidNumber {
+        flag,
+        value: value.to_owned(),
+    })
 }
 
 enum OutputTarget {
@@ -101,6 +122,7 @@ enum OutputTarget {
 enum CliError {
     Idml(indesign_idml::IdmlError),
     Io(io::Error),
+    InvalidNumber { flag: &'static str, value: String },
     Usage(&'static str),
 }
 
@@ -109,6 +131,9 @@ impl std::fmt::Display for CliError {
         match self {
             Self::Idml(error) => write!(formatter, "{error}"),
             Self::Io(error) => write!(formatter, "{error}"),
+            Self::InvalidNumber { flag, value } => {
+                write!(formatter, "invalid value `{value}` for {flag}")
+            }
             Self::Usage(message) => write!(formatter, "{message}"),
         }
     }
