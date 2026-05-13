@@ -4,7 +4,7 @@ use crate::core::resolver::{
     ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
 };
 use crate::error::{IdmlError, Result};
-use crate::model::designmap::DesignMap;
+use crate::model::designmap::{DesignMap, SpreadPointer, StoryPointer};
 use crate::model::spread::{Rect, Spread};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::IndexMap;
@@ -286,6 +286,25 @@ where
         let bytes = self.read_entry(path)?;
         let xml = std::str::from_utf8(&bytes)?;
         Spread::from_xml(xml)
+    }
+
+    /// Resolves a lazy story pointer and parses that story.
+    pub fn resolve_story_pointer(&mut self, pointer: StoryPointer<'_>) -> Result<Story> {
+        self.read_story(pointer.path())
+    }
+
+    /// Resolves a lazy story pointer with explicit parser limits.
+    pub fn resolve_story_pointer_with_options(
+        &mut self,
+        pointer: StoryPointer<'_>,
+        options: StoryParseOptions,
+    ) -> Result<Story> {
+        self.read_story_with_options(pointer.path(), options)
+    }
+
+    /// Resolves a lazy spread pointer and parses that spread.
+    pub fn resolve_spread_pointer(&mut self, pointer: SpreadPointer<'_>) -> Result<Spread> {
+        self.read_spread(pointer.path())
     }
 
     /// Resolves a story ID through a parsed design map and parses that story.
@@ -694,6 +713,47 @@ mod tests {
     }
 
     #[test]
+    fn resolves_story_from_lazy_pointer() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+        let story = br#"<Story Self="u2"><Content>Lazy story</Content></Story>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Stories/Story_u2.xml", story),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let pointer = design_map.story_pointers().next().unwrap();
+        let story = package.resolve_story_pointer(pointer).unwrap();
+
+        assert_eq!(pointer.id(), "u2");
+        assert_eq!(story.text, "Lazy story");
+    }
+
+    #[test]
+    fn lazy_story_pointer_resolution_enforces_text_limit() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+        let story = br#"<Story Self="u2"><Content>too long</Content></Story>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Stories/Story_u2.xml", story),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let pointer = design_map.story_pointers().next().unwrap();
+        let err = package
+            .resolve_story_pointer_with_options(pointer, StoryParseOptions { max_text_bytes: 4 })
+            .unwrap_err();
+
+        assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
+    }
+
+    #[test]
     fn read_story_with_options_enforces_text_limit() {
         let zip = make_zip(&[(
             "Stories/Story_u2.xml",
@@ -760,6 +820,29 @@ mod tests {
         assert_eq!(spread.id.as_deref(), Some("u10"));
         assert_eq!(spread.text_frames.len(), 1);
         assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn resolves_spread_from_lazy_pointer() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+</Document>"#;
+        let spread = br#"<Spread Self="u10">
+  <TextFrame Self="tf1" ParentStory="u2" GeometricBounds="0 0 72 144" />
+</Spread>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Spreads/Spread_u10.xml", spread),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let pointer = design_map.spread_pointers().next().unwrap();
+        let spread = package.resolve_spread_pointer(pointer).unwrap();
+
+        assert_eq!(pointer.id(), "u10");
+        assert_eq!(spread.id.as_deref(), Some("u10"));
+        assert_eq!(spread.text_frames[0].id.as_deref(), Some("tf1"));
     }
 
     #[test]

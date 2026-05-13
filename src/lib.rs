@@ -45,5 +45,7 @@ mod tests {
         let _: Option<crate::prelude::ResolvedTextFrameData> = None;
         let _: Option<crate::prelude::IdmlIdAllocator> = None;
         let _: Option<crate::prelude::PreservedEntry> = None;
+        let _: Option<crate::prelude::StoryPointer<'_>> = None;
+        let _: Option<crate::prelude::SpreadPointer<'_>> = None;
     }
 }

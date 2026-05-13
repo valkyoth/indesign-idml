@@ -25,6 +25,48 @@ pub struct DesignMap {
     pub other_package_srcs: IndexMap<String, Vec<IdmlPath>>,
 }
 
+/// Borrowed pointer to a story package entry listed in [`DesignMap`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StoryPointer<'a> {
+    id: &'a str,
+    path: &'a IdmlPath,
+}
+
+impl<'a> StoryPointer<'a> {
+    /// Returns the story ID derived from the package reference.
+    #[must_use]
+    pub const fn id(self) -> &'a str {
+        self.id
+    }
+
+    /// Returns the story archive path.
+    #[must_use]
+    pub const fn path(self) -> &'a IdmlPath {
+        self.path
+    }
+}
+
+/// Borrowed pointer to a spread package entry listed in [`DesignMap`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpreadPointer<'a> {
+    id: &'a str,
+    path: &'a IdmlPath,
+}
+
+impl<'a> SpreadPointer<'a> {
+    /// Returns the spread ID derived from the package reference.
+    #[must_use]
+    pub const fn id(self) -> &'a str {
+        self.id
+    }
+
+    /// Returns the spread archive path.
+    #[must_use]
+    pub const fn path(self) -> &'a IdmlPath {
+        self.path
+    }
+}
+
 impl DesignMap {
     /// Parses a `designmap.xml` document.
     pub fn from_xml(xml_content: &str) -> Result<Self> {
@@ -82,6 +124,25 @@ impl DesignMap {
     /// Returns story IDs in package order.
     pub fn story_ids(&self) -> impl Iterator<Item = &str> {
         self.story_srcs.keys().map(String::as_str)
+    }
+
+    /// Returns spread IDs in package order.
+    pub fn spread_ids(&self) -> impl Iterator<Item = &str> {
+        self.spread_srcs.keys().map(String::as_str)
+    }
+
+    /// Returns lazy story pointers in package order.
+    pub fn story_pointers(&self) -> impl Iterator<Item = StoryPointer<'_>> + '_ {
+        self.story_srcs
+            .iter()
+            .map(|(id, path)| StoryPointer { id, path })
+    }
+
+    /// Returns lazy spread pointers in package order.
+    pub fn spread_pointers(&self) -> impl Iterator<Item = SpreadPointer<'_>> + '_ {
+        self.spread_srcs
+            .iter()
+            .map(|(id, path)| SpreadPointer { id, path })
     }
 
     /// Serializes this design map into a standalone `designmap.xml` document.
@@ -341,6 +402,41 @@ mod tests {
         let ids = design_map.story_ids().collect::<Vec<_>>();
 
         assert_eq!(ids, ["u2", "u1"]);
+    }
+
+    #[test]
+    fn pointers_follow_designmap_order_without_copying_paths() {
+        let xml = r#"<Document>
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Spread src="Spreads/Spread_u11.xml" />
+  <idPkg:Story src="Stories/Story_u2.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+
+        let design_map = DesignMap::from_xml(xml).unwrap();
+        let spread_pointers = design_map
+            .spread_pointers()
+            .map(|pointer| (pointer.id(), pointer.path().as_str()))
+            .collect::<Vec<_>>();
+        let story_pointers = design_map
+            .story_pointers()
+            .map(|pointer| (pointer.id(), pointer.path().as_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            spread_pointers,
+            [
+                ("u10", "Spreads/Spread_u10.xml"),
+                ("u11", "Spreads/Spread_u11.xml"),
+            ]
+        );
+        assert_eq!(
+            story_pointers,
+            [
+                ("u2", "Stories/Story_u2.xml"),
+                ("u1", "Stories/Story_u1.xml"),
+            ]
+        );
     }
 
     #[test]
