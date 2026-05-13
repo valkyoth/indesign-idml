@@ -9,6 +9,7 @@
 //! reads, strict Base64 decoding, and DesignMap reference inventory.
 
 pub mod archive;
+pub mod core;
 pub mod encoding;
 pub mod error;
 pub mod model;

@@ -1,7 +1,7 @@
 //! Error types for IDML archive, XML, and encoding operations.
 
 /// Crate-wide result type.
-pub type Result<T> = core::result::Result<T, IdmlError>;
+pub type Result<T> = ::core::result::Result<T, IdmlError>;
 
 /// Error type used by all public fallible APIs.
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +35,10 @@ pub enum IdmlError {
     #[error("UTF-8 error: {0}")]
     Utf8(#[from] std::str::Utf8Error),
 
+    /// Numeric parsing failed.
+    #[error("number parse error: {0}")]
+    ParseFloat(#[from] std::num::ParseFloatError),
+
     /// A required XML attribute was not present.
     #[error("missing required attribute `{attribute}` on `{element}`")]
     MissingAttribute {
@@ -42,6 +46,17 @@ pub enum IdmlError {
         element: String,
         /// Attribute name.
         attribute: &'static str,
+    },
+
+    /// An XML attribute value was malformed.
+    #[error("invalid attribute `{attribute}` on `{element}`: {reason}")]
+    InvalidAttribute {
+        /// Element name.
+        element: String,
+        /// Attribute name.
+        attribute: &'static str,
+        /// Rejection reason.
+        reason: &'static str,
     },
 
     /// An archive entry path violates the crate path policy.

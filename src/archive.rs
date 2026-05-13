@@ -2,6 +2,7 @@
 
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::DesignMap;
+use crate::model::spread::Spread;
 use crate::model::story::Story;
 use indexmap::IndexMap;
 use std::fmt;
@@ -163,6 +164,13 @@ where
         Story::from_xml(xml)
     }
 
+    /// Reads and parses a spread XML entry.
+    pub fn read_spread(&mut self, path: &IdmlPath) -> Result<Spread> {
+        let bytes = self.read_entry(path)?;
+        let xml = std::str::from_utf8(&bytes)?;
+        Spread::from_xml(xml)
+    }
+
     /// Resolves a story ID through a parsed design map and parses that story.
     pub fn resolve_story(&mut self, design_map: &DesignMap, story_id: &str) -> Result<Story> {
         let path =
@@ -174,6 +182,19 @@ where
                     id: story_id.to_owned(),
                 })?;
         self.read_story(path)
+    }
+
+    /// Resolves a spread ID through a parsed design map and parses that spread.
+    pub fn resolve_spread(&mut self, design_map: &DesignMap, spread_id: &str) -> Result<Spread> {
+        let path =
+            design_map
+                .spread_srcs
+                .get(spread_id)
+                .ok_or_else(|| IdmlError::MissingReference {
+                    kind: "spread",
+                    id: spread_id.to_owned(),
+                })?;
+        self.read_spread(path)
     }
 
     /// Resolves a story ID and returns only its extracted text.
@@ -434,6 +455,28 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("u2", "Second"), ("u1", "First")]
         );
+    }
+
+    #[test]
+    fn resolves_spread_text_frames_from_designmap() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+</Document>"#;
+        let spread = br#"<Spread Self="u10">
+  <TextFrame Self="tf1" ParentStory="u2" GeometricBounds="0 0 72 144" />
+</Spread>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Spreads/Spread_u10.xml", spread),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let spread = package.resolve_spread(&design_map, "u10").unwrap();
+
+        assert_eq!(spread.id.as_deref(), Some("u10"));
+        assert_eq!(spread.text_frames.len(), 1);
+        assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
     }
 
     #[test]
