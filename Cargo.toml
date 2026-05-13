@@ -1,0 +1,42 @@
+[package]
+name = "indesign-idml"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "Secure Rust library for parsing, inspecting, and generating Adobe InDesign IDML packages."
+repository = "https://github.com/eldryoth/indesign-idml"
+homepage = "https://github.com/eldryoth/indesign-idml"
+documentation = "https://docs.rs/indesign-idml"
+readme = "README.md"
+keywords = ["idml", "indesign", "xml", "publishing", "parser"]
+categories = ["parser-implementations", "encoding", "filesystem"]
+include = [
+    "src/**",
+    "tests/**",
+    "fuzz/**",
+    "README.md",
+    "SECURITY_IMPLEMENTATION_PLAN.md",
+    "LICENSE-*",
+]
+
+[features]
+default = ["std"]
+std = ["base64/std"]
+serde = ["dep:serde", "indexmap/serde"]
+strict-zip = []
+
+[dependencies]
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
+indexmap = "2.14.0"
+quick-xml = "0.40.0"
+thiserror = "2.0.18"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+serde = { version = "1.0.228", optional = true, features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+tempfile = "3.27.0"
+
+[package.metadata.cargo-machete]
+ignored = ["assert_cmd", "tempfile"]
