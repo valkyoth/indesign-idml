@@ -98,6 +98,17 @@ pub enum IdmlError {
         id: String,
     },
 
+    /// A relationship between parsed or generated IDML objects is invalid.
+    #[error("invalid {kind} reference `{id}`: {reason}")]
+    InvalidReference {
+        /// Reference kind.
+        kind: &'static str,
+        /// Reference ID.
+        id: String,
+        /// Rejection reason.
+        reason: &'static str,
+    },
+
     /// A configured parser or archive size limit was exceeded.
     #[error("limit exceeded for {what}: limit {limit}, actual {actual}")]
     LimitExceeded {
