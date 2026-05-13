@@ -85,6 +85,15 @@ pub enum IdmlError {
     #[error("duplicate archive entry `{0}`")]
     DuplicateArchiveEntry(String),
 
+    /// The document contains the same object ID more than once.
+    #[error("duplicate {kind} ID `{id}`")]
+    DuplicateId {
+        /// ID namespace or object kind.
+        kind: &'static str,
+        /// Duplicate ID.
+        id: String,
+    },
+
     /// The requested archive entry is absent.
     #[error("missing archive entry `{0}`")]
     MissingArchiveEntry(String),

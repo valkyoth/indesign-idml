@@ -5,7 +5,7 @@ use crate::error::{IdmlError, Result};
 use crate::model::designmap::DesignMap;
 use crate::model::spread::Spread;
 use crate::model::story::Story;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use std::io::{Seek, Write};
 
 /// Typed IDML document parts that can be validated and written as one package.
@@ -48,6 +48,7 @@ impl IdmlDocument {
         validate_no_unreferenced_models("spread", &self.design_map.spread_srcs, &self.spreads)?;
         self.validate_story_ids()?;
         self.validate_spread_ids()?;
+        self.validate_unique_object_ids()?;
         self.validate_parent_stories()?;
         Ok(())
     }
@@ -114,6 +115,26 @@ impl IdmlDocument {
         }
         Ok(())
     }
+
+    fn validate_unique_object_ids(&self) -> Result<()> {
+        let mut seen = IndexSet::new();
+
+        for id in self.design_map.story_srcs.keys() {
+            remember_object_id(&mut seen, id)?;
+        }
+        for id in self.design_map.spread_srcs.keys() {
+            remember_object_id(&mut seen, id)?;
+        }
+        for spread in self.spreads.values() {
+            for frame in &spread.text_frames {
+                if let Some(id) = &frame.id {
+                    remember_object_id(&mut seen, id)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn validate_manifest_models<T>(
@@ -160,6 +181,16 @@ fn validate_optional_self_id(kind: &'static str, id: &str, self_id: Option<&str>
         });
     }
     Ok(())
+}
+
+fn remember_object_id(seen: &mut IndexSet<String>, id: &str) -> Result<()> {
+    if seen.insert(id.to_owned()) {
+        return Ok(());
+    }
+    Err(IdmlError::DuplicateId {
+        kind: "document object",
+        id: id.to_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -260,6 +291,57 @@ mod tests {
                 kind: "text frame parent story",
                 id
             } if id == "missing"
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_text_frame_ids() {
+        let mut document = make_document();
+        document
+            .spreads
+            .get_mut("u10")
+            .unwrap()
+            .text_frames
+            .push(TextFrame {
+                id: Some("tf1".to_owned()),
+                parent_story: Some("u1".to_owned()),
+                geometric_bounds: None,
+            });
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "tf1"
+        ));
+    }
+
+    #[test]
+    fn rejects_cross_type_id_collisions() {
+        let mut document = make_document();
+        document.design_map.spread_srcs.insert(
+            "u1".to_owned(),
+            IdmlPath::new("Spreads/Spread_u1.xml").unwrap(),
+        );
+        document.insert_spread(
+            "u1",
+            Spread {
+                id: Some("u1".to_owned()),
+                text_frames: Vec::new(),
+            },
+        );
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "u1"
         ));
     }
 
