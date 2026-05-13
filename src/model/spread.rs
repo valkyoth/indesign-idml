@@ -93,6 +93,17 @@ pub struct Rect {
 }
 
 impl Rect {
+    /// Creates a rectangle in point coordinates.
+    #[must_use]
+    pub const fn new(top: Points, left: Points, bottom: Points, right: Points) -> Self {
+        Self {
+            top,
+            left,
+            bottom,
+            right,
+        }
+    }
+
     /// Width in points.
     #[must_use]
     pub fn width(self) -> Points {
@@ -103,6 +114,23 @@ impl Rect {
     #[must_use]
     pub fn height(self) -> Points {
         Points::new(self.bottom.as_f64() - self.top.as_f64())
+    }
+
+    /// Returns true if the rectangle has positive area.
+    #[must_use]
+    pub fn has_positive_area(self) -> bool {
+        self.width().as_f64() > 0.0 && self.height().as_f64() > 0.0
+    }
+
+    /// Returns true when this rectangle intersects another rectangle.
+    #[must_use]
+    pub fn intersects(self, other: Self) -> bool {
+        self.has_positive_area()
+            && other.has_positive_area()
+            && self.left.as_f64() < other.right.as_f64()
+            && self.right.as_f64() > other.left.as_f64()
+            && self.top.as_f64() < other.bottom.as_f64()
+            && self.bottom.as_f64() > other.top.as_f64()
     }
 
     /// Returns the same rectangle converted to millimeters.
@@ -223,5 +251,30 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn detects_rectangle_intersection() {
+        let a = super::Rect::new(
+            crate::core::units::Points::new(0.0),
+            crate::core::units::Points::new(0.0),
+            crate::core::units::Points::new(100.0),
+            crate::core::units::Points::new(100.0),
+        );
+        let b = super::Rect::new(
+            crate::core::units::Points::new(50.0),
+            crate::core::units::Points::new(50.0),
+            crate::core::units::Points::new(150.0),
+            crate::core::units::Points::new(150.0),
+        );
+        let c = super::Rect::new(
+            crate::core::units::Points::new(100.0),
+            crate::core::units::Points::new(100.0),
+            crate::core::units::Points::new(150.0),
+            crate::core::units::Points::new(150.0),
+        );
+
+        assert!(a.intersects(b));
+        assert!(!a.intersects(c));
     }
 }

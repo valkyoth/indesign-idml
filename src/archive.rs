@@ -1,8 +1,11 @@
 //! Secure ZIP archive inventory and bounded read support.
 
+use crate::core::resolver::{
+    ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
+};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::DesignMap;
-use crate::model::spread::Spread;
+use crate::model::spread::{Rect, Spread};
 use crate::model::story::Story;
 use indexmap::IndexMap;
 use std::fmt;
@@ -215,6 +218,33 @@ where
         Ok(texts)
     }
 
+    /// Resolves all text frames on a spread into owned story text records.
+    pub fn resolve_spread_text_frames(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+    ) -> Result<Vec<ResolvedTextFrameData>> {
+        let spread = self.resolve_spread(design_map, spread_id)?;
+        let story_texts = self.extract_required_story_texts(design_map, &spread)?;
+        Ok(to_owned_records(resolve_text_frames(
+            &spread,
+            &story_texts,
+        )?))
+    }
+
+    /// Resolves text frames on a spread whose direct bounds intersect `query`.
+    pub fn resolve_spread_text_in_rect(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        query: Rect,
+    ) -> Result<Vec<ResolvedTextFrameData>> {
+        let spread = self.resolve_spread(design_map, spread_id)?;
+        let story_texts = self.extract_required_story_texts(design_map, &spread)?;
+        let resolved = resolve_text_frames(&spread, &story_texts)?;
+        Ok(to_owned_records(text_frames_intersecting(resolved, query)))
+    }
+
     fn from_archive(mut archive: ZipArchive<R>, limits: ArchiveLimits) -> Result<Self> {
         enforce_entry_count(archive.len(), limits.max_entries)?;
 
@@ -272,6 +302,35 @@ where
             }
         }
         Ok(())
+    }
+
+    fn extract_required_story_texts(
+        &mut self,
+        design_map: &DesignMap,
+        spread: &Spread,
+    ) -> Result<IndexMap<String, String>> {
+        let mut texts = IndexMap::new();
+
+        for frame in &spread.text_frames {
+            let Some(story_id) = frame.parent_story.as_deref() else {
+                continue;
+            };
+            if texts.contains_key(story_id) {
+                continue;
+            }
+            let path =
+                design_map
+                    .story_srcs
+                    .get(story_id)
+                    .ok_or_else(|| IdmlError::MissingReference {
+                        kind: "text frame parent story",
+                        id: story_id.to_owned(),
+                    })?;
+            let story = self.read_story(path)?;
+            texts.insert(story_id.to_owned(), story.text);
+        }
+
+        Ok(texts)
     }
 }
 
@@ -338,6 +397,7 @@ fn validate_archive_path(path: &str) -> Result<()> {
 mod tests {
     use super::{ArchiveLimits, IdmlPackage, IdmlPath};
     use crate::IdmlError;
+    use crate::model::spread::Rect;
     use std::io::{Cursor, Write};
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -477,6 +537,78 @@ mod tests {
         assert_eq!(spread.id.as_deref(), Some("u10"));
         assert_eq!(spread.text_frames.len(), 1);
         assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn resolves_spread_text_frame_story_text() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+        let spread = br#"<Spread Self="u10">
+  <TextFrame Self="tf1" ParentStory="u2" GeometricBounds="0 0 72 144" />
+</Spread>"#;
+        let story = br#"<Story Self="u2"><Content>Hello layout</Content></Story>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Spreads/Spread_u10.xml", spread),
+            ("Stories/Story_u2.xml", story),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let resolved = package
+            .resolve_spread_text_frames(&design_map, "u10")
+            .unwrap();
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].frame_id.as_deref(), Some("tf1"));
+        assert_eq!(resolved[0].story_id, "u2");
+        assert_eq!(resolved[0].text, "Hello layout");
+    }
+
+    #[test]
+    fn resolves_spread_text_in_query_rectangle() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+        let spread = br#"<Spread Self="u10">
+  <TextFrame Self="hit" ParentStory="u1" GeometricBounds="0 0 72 72" />
+  <TextFrame Self="miss" ParentStory="u2" GeometricBounds="200 200 300 300" />
+</Spread>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Spreads/Spread_u10.xml", spread),
+            (
+                "Stories/Story_u1.xml",
+                b"<Story><Content>Hit</Content></Story>",
+            ),
+            (
+                "Stories/Story_u2.xml",
+                b"<Story><Content>Miss</Content></Story>",
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let resolved = package
+            .resolve_spread_text_in_rect(
+                &design_map,
+                "u10",
+                Rect::new(
+                    crate::core::units::Points::new(10.0),
+                    crate::core::units::Points::new(10.0),
+                    crate::core::units::Points::new(80.0),
+                    crate::core::units::Points::new(80.0),
+                ),
+            )
+            .unwrap();
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].frame_id.as_deref(), Some("hit"));
+        assert_eq!(resolved[0].text, "Hit");
     }
 
     #[test]
