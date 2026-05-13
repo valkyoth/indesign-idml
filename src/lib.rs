@@ -13,6 +13,7 @@ pub mod core;
 pub mod encoding;
 pub mod error;
 pub mod model;
+pub mod prelude;
 pub mod traits;
 
 pub use error::{IdmlError, Result};
@@ -31,5 +32,19 @@ mod tests {
     #[test]
     fn crate_name_matches_package() {
         assert_eq!(crate_name(), "indesign-idml");
+    }
+
+    #[test]
+    fn prelude_exports_core_document_types() {
+        fn assert_imports(
+            _: Option<crate::prelude::IdmlDocument>,
+            _: Option<crate::prelude::DesignMap>,
+            _: Option<crate::prelude::Story>,
+            _: Option<crate::prelude::Spread>,
+            _: Option<crate::prelude::IdmlError>,
+        ) {
+        }
+
+        assert_imports(None, None, None, None, None);
     }
 }
