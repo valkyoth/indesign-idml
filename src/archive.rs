@@ -132,6 +132,11 @@ where
         self.add_file_with_compression(path, data, CompressionMethod::Stored)
     }
 
+    /// Serializes and adds `designmap.xml` to the package.
+    pub fn add_designmap(&mut self, design_map: &DesignMap) -> Result<()> {
+        self.add_file("designmap.xml", design_map.to_xml()?.as_bytes())
+    }
+
     /// Finishes the ZIP central directory and returns the wrapped writer.
     pub fn finish(self) -> Result<W> {
         Ok(self.writer.finish()?)
@@ -550,6 +555,7 @@ fn validate_archive_path(path: &str) -> Result<()> {
 mod tests {
     use super::{ArchiveLimits, IDML_MIMETYPE, IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::IdmlError;
+    use crate::model::designmap::DesignMap;
     use crate::model::spread::Rect;
     use std::io::{Cursor, Write};
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
@@ -843,6 +849,34 @@ mod tests {
         assert_eq!(mimetype_path.as_str(), "mimetype");
         assert_eq!(mimetype_compression, CompressionMethod::Stored);
         assert_eq!(story.text, "Hello");
+    }
+
+    #[test]
+    fn writer_adds_serialized_designmap() {
+        let mut design_map = DesignMap {
+            id: "d1".to_owned(),
+            ..DesignMap::default()
+        };
+        design_map.story_srcs.insert(
+            "u1".to_owned(),
+            IdmlPath::new("Stories/Story_u1.xml").unwrap(),
+        );
+        let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer.add_designmap(&design_map).unwrap();
+        writer
+            .add_file(
+                "Stories/Story_u1.xml",
+                b"<Story Self=\"u1\"><Content>Typed root</Content></Story>",
+            )
+            .unwrap();
+        let zip = writer.finish().unwrap().into_inner();
+
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let parsed = package.read_designmap().unwrap();
+        let story = package.resolve_story(&parsed, "u1").unwrap();
+
+        assert_eq!(parsed, design_map);
+        assert_eq!(story.text, "Typed root");
     }
 
     #[test]
