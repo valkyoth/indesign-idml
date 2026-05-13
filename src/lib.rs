@@ -4,22 +4,16 @@
 
 //! Secure Rust primitives for working with Adobe InDesign IDML packages.
 //!
-//! The implementation will be added in small, validated milestones. The crate
-//! starts with a locked verification gate so parsing and archive behavior can be
-//! developed under audit, license, fuzzing, and feature-matrix checks from day
-//! one.
+//! The crate treats IDML files as untrusted ZIP archives containing relational
+//! XML. The first implemented layers enforce archive path policy, bounded entry
+//! reads, strict Base64 decoding, and DesignMap reference inventory.
 
-/// Crate-wide result type.
-pub type Result<T> = core::result::Result<T, IdmlError>;
+pub mod archive;
+pub mod encoding;
+pub mod error;
+pub mod model;
 
-/// Error type placeholder for the initial security scaffold.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum IdmlError {
-    /// The requested feature or parser path has not been implemented yet.
-    #[error("feature not implemented yet: {0}")]
-    NotImplemented(&'static str),
-}
+pub use error::{IdmlError, Result};
 
 /// Returns the package name as compiled into the crate.
 #[must_use]

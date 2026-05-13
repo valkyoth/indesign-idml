@@ -10,3 +10,6 @@ Adobe.
 See [SECURITY_IMPLEMENTATION_PLAN.md](SECURITY_IMPLEMENTATION_PLAN.md) for the
 implementation plan, threat model, dependency policy, and local verification
 gate.
+
+See [RELEASE_PLAN.md](RELEASE_PLAN.md) for the milestone plan through the fully
+functional 1.0 release.

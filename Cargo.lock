@@ -36,10 +36,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "base64"
-version = "0.22.1"
+name = "base64-ng"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+checksum = "de47ab398fa8c1d74fa94c3e9a32ebee04bfce8c7f1804a01568b498195c42a2"
 
 [[package]]
 name = "bitflags"
@@ -168,7 +168,7 @@ name = "indesign-idml"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
- "base64",
+ "base64-ng",
  "indexmap",
  "quick-xml",
  "serde",

@@ -11,7 +11,7 @@ Current baseline:
 - Rust stable: 1.95.0.
 - Crate license: `MIT OR Apache-2.0`.
 - Core dependencies: `quick-xml 0.40.0`, `zip 8.6.0`, `indexmap 2.14.0`,
-  `thiserror 2.0.18`, `serde 1.0.228`, `base64 0.22.1`.
+  `thiserror 2.0.18`, `serde 1.0.228`, `base64-ng 0.2.0`.
 - Test dependencies: `assert_cmd 2.2.2`, `tempfile 3.27.0`.
 - Security tools: `cargo-deny 0.19.6`, `cargo-audit`, `cargo-license`,
   `cargo-sbom`.
@@ -71,8 +71,10 @@ Parsing flow:
 
 ## Base64 Policy
 
-Use `base64 0.22.1` through explicit engines only. Do not use deprecated
-global helpers or implicit configs.
+Use published `base64-ng 0.2.0` through explicit engines only. Do not use
+deprecated global helpers or implicit configs. The local sibling checkout may
+be reviewed as development context, but published `indesign-idml` releases must
+not depend on unpublished path crates.
 
 Modern default:
 
