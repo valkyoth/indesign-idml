@@ -47,3 +47,8 @@ tempfile = "3.27.0"
 
 [package.metadata.cargo-machete]
 ignored = ["assert_cmd", "tempfile"]
+
+[lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "deny", priority = -1 }
+missing_docs = "warn"

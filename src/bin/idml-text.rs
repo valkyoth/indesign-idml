@@ -1,3 +1,5 @@
+//! Companion CLI for bounded IDML text extraction.
+
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 

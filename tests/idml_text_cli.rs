@@ -1,3 +1,5 @@
+//! Integration tests for the `idml-text` companion CLI.
+
 #![cfg(feature = "cli")]
 
 use assert_cmd::Command;
