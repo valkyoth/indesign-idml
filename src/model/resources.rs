@@ -760,15 +760,6 @@ fn collect_resource_attrs_limited(
                 reason: "duplicate attribute",
             });
         }
-        enforce_resource_item_attribute_bytes(attr.value.len(), options.max_item_attribute_bytes)?;
-        let value = attr
-            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
-            .into_owned();
-        validate_xml_attribute(
-            String::from_utf8_lossy(event.name().as_ref()).into_owned(),
-            "resource item attribute",
-            &value,
-        )?;
         let next_count = attributes
             .len()
             .checked_add(1)
@@ -784,6 +775,15 @@ fn collect_resource_attrs_limited(
                 actual: next_count as u64,
             });
         }
+        enforce_resource_item_attribute_bytes(attr.value.len(), options.max_item_attribute_bytes)?;
+        let value = attr
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
+            .into_owned();
+        validate_xml_attribute(
+            String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+            "resource item attribute",
+            &value,
+        )?;
         total_bytes = total_bytes
             .checked_add(name.len())
             .and_then(|total| total.checked_add(value.len()))
@@ -1185,6 +1185,29 @@ mod tests {
                 what: "resource item attribute count",
                 limit: 2,
                 actual: 3,
+            }
+        ));
+    }
+
+    #[test]
+    fn resource_item_parser_enforces_attribute_count_before_decoding_values() {
+        let err = extract_resource_items_with_options(
+            r#"<Styles><ParagraphStyle A="b" C="def" /></Styles>"#,
+            ResourceKind::Styles,
+            ResourceItemParseOptions {
+                max_item_attributes: 1,
+                max_item_attribute_bytes: 2,
+                ..ResourceItemParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item attribute count",
+                limit: 1,
+                actual: 2,
             }
         ));
     }
