@@ -7,7 +7,10 @@ use crate::error::{IdmlError, Result};
 use crate::model::designmap::{
     DesignMap, MasterSpreadPointer, PackageResourcePointer, SpreadPointer, StoryPointer,
 };
-use crate::model::resources::{ResourceIntegrityOptions, ResourceInventory};
+use crate::model::resources::{
+    EmbeddedAsset, EmbeddedAssetParseOptions, ResourceIntegrityOptions, ResourceInventory,
+    extract_embedded_assets_with_options,
+};
 use crate::model::spread::{Rect, Spread};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::IndexMap;
@@ -318,6 +321,22 @@ where
         Spread::from_xml(xml)
     }
 
+    /// Reads an XML entry and extracts embedded Base64 assets with secure defaults.
+    pub fn read_embedded_assets(&mut self, path: &IdmlPath) -> Result<Vec<EmbeddedAsset>> {
+        self.read_embedded_assets_with_options(path, EmbeddedAssetParseOptions::default())
+    }
+
+    /// Reads an XML entry and extracts embedded Base64 assets with explicit limits.
+    pub fn read_embedded_assets_with_options(
+        &mut self,
+        path: &IdmlPath,
+        options: EmbeddedAssetParseOptions,
+    ) -> Result<Vec<EmbeddedAsset>> {
+        let bytes = self.read_entry(path)?;
+        let xml = std::str::from_utf8(&bytes)?;
+        extract_embedded_assets_with_options(xml, options)
+    }
+
     /// Resolves a lazy story pointer and parses that story.
     pub fn resolve_story_pointer(&mut self, pointer: StoryPointer<'_>) -> Result<Story> {
         self.read_story(pointer.path())
@@ -358,6 +377,23 @@ where
         pointer: PackageResourcePointer<'_>,
     ) -> Result<Vec<u8>> {
         self.read_entry(pointer.path())
+    }
+
+    /// Resolves a lazy untyped package resource and extracts embedded Base64 assets.
+    pub fn resolve_package_resource_embedded_assets(
+        &mut self,
+        pointer: PackageResourcePointer<'_>,
+    ) -> Result<Vec<EmbeddedAsset>> {
+        self.read_embedded_assets(pointer.path())
+    }
+
+    /// Resolves a lazy untyped package resource and extracts embedded Base64 assets with limits.
+    pub fn resolve_package_resource_embedded_assets_with_options(
+        &mut self,
+        pointer: PackageResourcePointer<'_>,
+        options: EmbeddedAssetParseOptions,
+    ) -> Result<Vec<EmbeddedAsset>> {
+        self.read_embedded_assets_with_options(pointer.path(), options)
     }
 
     /// Resolves a story ID through a parsed design map and parses that story.
@@ -678,8 +714,9 @@ mod tests {
     use super::{ArchiveLimits, IDML_MIMETYPE, IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::IdmlError;
     use crate::core::units::Points;
+    use crate::encoding::Base64Mode;
     use crate::model::designmap::DesignMap;
-    use crate::model::resources::ResourceIntegrityOptions;
+    use crate::model::resources::{EmbeddedAssetParseOptions, ResourceIntegrityOptions};
     use crate::model::spread::{Rect, Spread, TextFrame};
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::{Cursor, Write};
@@ -1046,6 +1083,69 @@ mod tests {
 
         assert_eq!(pointer.element(), "idPkg:Graphic");
         assert_eq!(bytes, graphic);
+    }
+
+    #[test]
+    fn reads_embedded_assets_from_xml_entry() {
+        let graphic = b"<Image><Contents><![CDATA[aGVs]]><![CDATA[bG8=]]></Contents></Image>";
+        let zip = make_zip(&[("Resources/Graphic.xml", graphic)]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let path = IdmlPath::new("Resources/Graphic.xml").unwrap();
+
+        let assets = package.read_embedded_assets(&path).unwrap();
+
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].bytes, b"hello");
+    }
+
+    #[test]
+    fn read_embedded_assets_with_options_enforces_limits() {
+        let graphic = b"<Image><Contents>aGVsbG8=</Contents></Image>";
+        let zip = make_zip(&[("Resources/Graphic.xml", graphic)]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let path = IdmlPath::new("Resources/Graphic.xml").unwrap();
+
+        let err = package
+            .read_embedded_assets_with_options(
+                &path,
+                EmbeddedAssetParseOptions {
+                    max_decoded_bytes: 4,
+                    ..EmbeddedAssetParseOptions::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(
+            matches!(err, IdmlError::LimitExceeded { what, .. } if what == "base64 decoded length")
+        );
+    }
+
+    #[test]
+    fn resolves_package_resource_pointer_as_embedded_assets() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#;
+        let graphic = b"<Image><Contents> aG\r\nVs\tbG8= </Contents></Image>";
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Resources/Graphic.xml", graphic),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let pointer = design_map.package_resource_pointers().next().unwrap();
+        let assets = package
+            .resolve_package_resource_embedded_assets_with_options(
+                pointer,
+                EmbeddedAssetParseOptions {
+                    base64_mode: Base64Mode::LegacyWhitespace,
+                    ..EmbeddedAssetParseOptions::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(pointer.element(), "idPkg:Graphic");
+        assert_eq!(assets[0].bytes, b"hello");
     }
 
     #[test]
