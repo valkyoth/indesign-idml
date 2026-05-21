@@ -3,3 +3,6 @@
 /.env
 /.env.*
 !/examples/.env.example
+
+# Local IDML samples with unclear licensing or private content.
+/tests/fixtures/private-idml/
