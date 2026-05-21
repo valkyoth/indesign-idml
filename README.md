@@ -14,6 +14,29 @@ gate.
 See [RELEASE_PLAN.md](RELEASE_PLAN.md) for the milestone plan through the fully
 functional 1.0 release.
 
+## CLI
+
+The crate includes an optional companion binary, `idml-text`, behind the `cli`
+feature. It extracts story text from an IDML package in `designmap.xml` order
+and exposes the same archive, manifest, and story parser limits used by the
+library.
+
+```sh
+cargo run --features cli --bin idml-text -- INPUT.idml
+```
+
+Release binaries for `idml-text` are intended to be attached to GitHub Releases
+as companion artifacts. The crates.io package remains the Rust library API.
+
+To build a native CLI release artifact locally:
+
+```sh
+scripts/build-cli-release.sh
+```
+
+The script writes `dist/idml-text-v<VERSION>-<TARGET>` and a matching
+`.sha256` checksum file.
+
 ## License
 
 This project is dual-licensed:

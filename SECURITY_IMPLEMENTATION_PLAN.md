@@ -72,9 +72,9 @@ Parsing flow:
 ## Base64 Policy
 
 Use published `base64-ng 0.2.0` through explicit engines only. Do not use
-deprecated global helpers or implicit configs. The local sibling checkout may
-be reviewed as development context, but published `indesign-idml` releases must
-not depend on unpublished path crates.
+deprecated global helpers or implicit configs. Do not inspect or depend on a
+local sibling checkout for `base64-ng`; published `indesign-idml` releases must
+use the crates.io version only.
 
 Modern default:
 
@@ -119,6 +119,7 @@ The local gate mirrors Fluxheim's style, adapted for a Rust library:
 - `cargo license`
 - SBOM generation
 - reproducible release build check
+- optional `idml-text` CLI release artifact and checksum build
 - libFuzzer harness placeholders for parser targets
 
 Test categories to add as implementation grows:
@@ -158,7 +159,9 @@ Exit criteria: designmap golden tests, malformed XML tests, and fuzz target pass
 
 - Implement story parsing for visible text extraction.
 - Stream large stories without collecting all story XML in one string.
-- Add CLI binary behind a feature or separate package if needed.
+- Add CLI binary behind the `cli` feature.
+- Publish the library crate to crates.io and attach prebuilt companion CLI
+  binaries to GitHub Releases.
 - Decode XML entities correctly and keep text order stable.
 
 Exit criteria: extract text from representative IDML fixtures under memory

@@ -20,6 +20,28 @@ Every release candidate must pass:
 Published releases must not depend on unpublished path crates. `base64-ng` is
 used from crates.io, currently `0.2.0`.
 
+Release channels:
+
+- `crates.io`: publish the `indesign-idml` library crate and docs.rs API.
+- GitHub Releases: attach companion `idml-text` binaries and `.sha256`
+  checksums built from the matching tag.
+- Git tags: use one signed or protected tag per crate release, for example
+  `v0.1.0`.
+
+The companion CLI is built from the same repository with the `cli` feature. It
+must remain optional for library consumers and must not add required runtime
+dependencies to the default library feature set.
+
+Native CLI artifacts can be produced with:
+
+```sh
+scripts/build-cli-release.sh
+```
+
+Set `TARGET=<rust-target-triple>` to build a named target when the local
+toolchain has that target installed. Attach the emitted binary and checksum to
+the GitHub Release after the normal gate passes.
+
 ## 0.1.x: Secure Read Foundation
 
 Goal: safely open untrusted IDML packages and parse the package manifest.
