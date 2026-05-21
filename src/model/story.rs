@@ -261,6 +261,7 @@ fn exit_content_depth(content_depth: &mut usize) -> Result<()> {
 }
 
 fn serialize_story(story: &Story) -> Result<String> {
+    validate_serialized_story_limits(story)?;
     validate_xml_text("story text", &story.text)?;
 
     let mut xml = String::new();
@@ -288,6 +289,25 @@ fn serialize_story(story: &Story) -> Result<String> {
 
     xml.push_str("</CharacterStyleRange>\n  </ParagraphStyleRange>\n</Story>\n");
     Ok(xml)
+}
+
+fn validate_serialized_story_limits(story: &Story) -> Result<()> {
+    if let Some(id) = &story.id {
+        enforce_story_attribute_bytes(id.len(), DEFAULT_MAX_STORY_ATTRIBUTE_BYTES)?;
+    }
+    enforce_serialized_story_text_bytes(story.text.len())?;
+    Ok(())
+}
+
+fn enforce_serialized_story_text_bytes(actual: usize) -> Result<()> {
+    if actual > DEFAULT_MAX_STORY_TEXT_BYTES {
+        return Err(IdmlError::LimitExceeded {
+            what: "story text bytes",
+            limit: DEFAULT_MAX_STORY_TEXT_BYTES as u64,
+            actual: actual as u64,
+        });
+    }
+    Ok(())
 }
 
 fn push_content_if_needed(xml: &mut String, content: &mut String) {
@@ -633,6 +653,44 @@ mod tests {
         assert!(xml.contains("<Content>Hello &amp; &lt;world&gt;</Content><Br/>"));
         assert!(xml.contains("<Tab/><Content>Cell</Content>"));
         assert_eq!(parsed, story);
+    }
+
+    #[test]
+    fn serializer_enforces_text_byte_limit() {
+        let story = Story {
+            id: None,
+            text: "a".repeat(super::DEFAULT_MAX_STORY_TEXT_BYTES + 1),
+        };
+
+        let err = story.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "story text bytes",
+                limit: 67_108_864,
+                actual: 67_108_865,
+            }
+        ));
+    }
+
+    #[test]
+    fn serializer_enforces_id_attribute_byte_limit() {
+        let story = Story {
+            id: Some("u".repeat(super::DEFAULT_MAX_STORY_ATTRIBUTE_BYTES + 1)),
+            text: "valid".to_owned(),
+        };
+
+        let err = story.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "Story XML attribute bytes",
+                limit: 262_144,
+                actual: 262_145,
+            }
+        ));
     }
 
     #[test]

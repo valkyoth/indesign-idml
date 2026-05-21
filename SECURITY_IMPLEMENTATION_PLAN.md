@@ -66,6 +66,8 @@ Hard rules:
   ceilings before XML emission.
 - Spread writer output enforces default page, text frame, and recursive page item
   count ceilings before XML emission.
+- Story writer output enforces default text and attribute byte ceilings before
+  XML emission.
 - Duplicate XML attributes are rejected instead of being silently overwritten or
   interpreted by first-match behavior.
 - Decoded XML attribute values captured into the model are validated against the
