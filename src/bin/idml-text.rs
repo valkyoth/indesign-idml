@@ -349,10 +349,9 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
                     }
                 }
                 (None, None, None) => {
-                    let texts =
-                        package.extract_story_texts_with_options(&design_map, story_options)?;
-                    for text in texts.values() {
-                        writer.write_text(text)?;
+                    for path in design_map.story_srcs.values() {
+                        let story = package.read_story_with_options(path, story_options)?;
+                        writer.write_text(&story.text)?;
                     }
                 }
                 (None, Some(_), _) => {

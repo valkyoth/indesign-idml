@@ -11,7 +11,7 @@ fi
 tmp_list="$(mktemp)"
 trap 'rm -f "$tmp_list"' EXIT HUP INT TERM
 
-find "$fixture_dir" -type f -name '*.idml' -print >"$tmp_list"
+find "$fixture_dir" -type f -name '*.idml' -print | sort >"$tmp_list"
 
 if [ ! -s "$tmp_list" ]; then
     echo "no private .idml fixtures found; skipping"

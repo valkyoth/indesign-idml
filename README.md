@@ -18,11 +18,13 @@ functional 1.0 release.
 
 The crate includes an optional companion binary, `idml-text`, behind the `cli`
 feature. It extracts story text from an IDML package in `designmap.xml` order
-or layout-resolved text from one spread/page. It exposes the same archive,
-manifest, spread, and story parser limits used by the library.
+or layout-resolved text from one spread, page, rectangle, or every spread. It
+exposes the same archive, manifest, spread, and story parser limits used by the
+library.
 
 ```sh
 cargo run --features cli --bin idml-text -- INPUT.idml
+cargo run --features cli --bin idml-text -- --all-spreads INPUT.idml
 cargo run --features cli --bin idml-text -- --spread-id u10 --page-id p1 INPUT.idml
 cargo run --features cli --bin idml-text -- --spread-id u10 --rect-points 0 0 100 100 INPUT.idml
 cargo run --features cli --bin idml-text -- --max-entry-compression-ratio 100 INPUT.idml
