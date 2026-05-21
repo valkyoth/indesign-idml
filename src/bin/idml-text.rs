@@ -3,6 +3,7 @@
 
 use indesign_idml::archive::{ArchiveLimits, IdmlPackage};
 use indesign_idml::model::designmap::DesignMapParseOptions;
+use indesign_idml::model::spread::SpreadParseOptions;
 use indesign_idml::model::story::StoryParseOptions;
 use std::env;
 use std::fs::File;
@@ -25,7 +26,10 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     let mut output = OutputTarget::Stdout;
     let mut archive_limits = ArchiveLimits::default();
     let mut designmap_options = DesignMapParseOptions::default();
+    let mut spread_options = SpreadParseOptions::default();
     let mut story_options = StoryParseOptions::default();
+    let mut spread_id = None;
+    let mut page_id = None;
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -54,6 +58,54 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
                 return Err(CliError::Usage("missing value after --max-story-xml-depth"));
             };
             story_options.max_xml_depth = parse_usize(&value, "--max-story-xml-depth")?;
+            continue;
+        }
+        if arg == "--spread-id" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage("missing value after --spread-id"));
+            };
+            spread_id = Some(parse_string(&value, "--spread-id")?);
+            continue;
+        }
+        if arg == "--page-id" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage("missing value after --page-id"));
+            };
+            page_id = Some(parse_string(&value, "--page-id")?);
+            continue;
+        }
+        if arg == "--max-spread-pages" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage("missing value after --max-spread-pages"));
+            };
+            spread_options.max_pages = parse_usize(&value, "--max-spread-pages")?;
+            continue;
+        }
+        if arg == "--max-spread-text-frames" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-spread-text-frames",
+                ));
+            };
+            spread_options.max_text_frames = parse_usize(&value, "--max-spread-text-frames")?;
+            continue;
+        }
+        if arg == "--max-spread-page-items" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-spread-page-items",
+                ));
+            };
+            spread_options.max_page_items = parse_usize(&value, "--max-spread-page-items")?;
+            continue;
+        }
+        if arg == "--max-spread-xml-depth" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-spread-xml-depth",
+                ));
+            };
+            spread_options.max_xml_depth = parse_usize(&value, "--max-spread-xml-depth")?;
             continue;
         }
         if arg == "--max-designmap-package-refs" {
@@ -110,20 +162,50 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     let Some(input) = input else {
         return Err(CliError::Usage("missing input IDML path"));
     };
+    if page_id.is_some() && spread_id.is_none() {
+        return Err(CliError::Usage("--page-id requires --spread-id"));
+    }
 
     let file = File::open(input)?;
     let mut package = IdmlPackage::with_limits(file, archive_limits)?;
     let design_map = package.read_designmap_with_options(designmap_options)?;
-    let texts = package.extract_story_texts_with_options(&design_map, story_options)?;
+    let texts: Vec<String> = match (spread_id.as_deref(), page_id.as_deref()) {
+        (Some(spread_id), Some(page_id)) => package
+            .resolve_spread_text_on_page_with_options(
+                &design_map,
+                spread_id,
+                page_id,
+                spread_options,
+                story_options,
+            )?
+            .into_iter()
+            .map(|frame| frame.text)
+            .collect(),
+        (Some(spread_id), None) => package
+            .resolve_spread_text_frames_with_options(
+                &design_map,
+                spread_id,
+                spread_options,
+                story_options,
+            )?
+            .into_iter()
+            .map(|frame| frame.text)
+            .collect(),
+        (None, None) => package
+            .extract_story_texts_with_options(&design_map, story_options)?
+            .into_values()
+            .collect(),
+        (None, Some(_)) => unreachable!("page scope is rejected before opening the package"),
+    };
 
     match output {
         OutputTarget::Stdout => {
             let stdout = io::stdout();
-            write_texts(BufWriter::new(stdout.lock()), texts.values())?;
+            write_texts(BufWriter::new(stdout.lock()), &texts)?;
         }
         OutputTarget::File(path) => {
             let file = File::create(path)?;
-            write_texts(BufWriter::new(file), texts.values())?;
+            write_texts(BufWriter::new(file), &texts)?;
         }
     }
 
@@ -153,10 +235,24 @@ fn print_help() -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
     writer.write_all(
-        b"Usage: idml-text [--output PATH] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order.\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-designmap-package-refs COUNT\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-xml-depth DEPTH\n",
+        b"Usage: idml-text [--output PATH] [--spread-id ID [--page-id ID]] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order, or layout-resolved text for one spread/page.\n\nLayout:\n  --spread-id ID\n  --page-id ID\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-designmap-package-refs COUNT\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-xml-depth DEPTH\n  --max-spread-pages COUNT\n  --max-spread-text-frames COUNT\n  --max-spread-page-items COUNT\n  --max-spread-xml-depth DEPTH\n",
     )?;
     writer.flush()?;
     Ok(())
+}
+
+fn parse_string(value: &std::ffi::OsStr, flag: &'static str) -> Result<String, CliError> {
+    let Some(value) = value.to_str() else {
+        return Err(CliError::Usage("ID option must be valid UTF-8"));
+    };
+    if value.is_empty() {
+        return Err(CliError::Usage(match flag {
+            "--spread-id" => "--spread-id cannot be empty",
+            "--page-id" => "--page-id cannot be empty",
+            _ => "ID option cannot be empty",
+        }));
+    }
+    Ok(value.to_owned())
 }
 
 fn parse_usize(value: &std::ffi::OsStr, flag: &'static str) -> Result<usize, CliError> {

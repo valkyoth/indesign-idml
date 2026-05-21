@@ -19,6 +19,35 @@ fn idml_text_extracts_stories_to_stdout() {
 }
 
 #[test]
+fn idml_text_extracts_spread_text_to_stdout() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command.arg("--spread-id").arg("u10").arg(&input);
+
+    command.assert().success().stdout("Page hit\n\nPage miss\n");
+}
+
+#[test]
+fn idml_text_extracts_page_text_to_stdout() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--spread-id")
+        .arg("u10")
+        .arg("--page-id")
+        .arg("p1")
+        .arg(&input);
+
+    command.assert().success().stdout("Page hit\n");
+}
+
+#[test]
 fn idml_text_extracts_stories_to_file() {
     let temp = tempdir().unwrap();
     let input = temp.path().join("sample.idml");
@@ -40,6 +69,21 @@ fn idml_text_rejects_missing_input() {
         .assert()
         .failure()
         .stderr("idml-text: missing input IDML path\n");
+}
+
+#[test]
+fn idml_text_rejects_page_without_spread() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command.arg("--page-id").arg("p1").arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: --page-id requires --spread-id\n");
 }
 
 #[test]
@@ -122,6 +166,26 @@ fn idml_text_enforces_story_xml_depth_limit() {
         .stderr("idml-text: limit exceeded for Story XML depth: limit 1, actual 2\n");
 }
 
+#[test]
+fn idml_text_enforces_spread_text_frame_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--spread-id")
+        .arg("u10")
+        .arg("--max-spread-text-frames")
+        .arg("1")
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for spread text frame count: limit 1, actual 2\n");
+}
+
 fn sample_idml() -> Vec<u8> {
     let mut buffer = Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(&mut buffer);
@@ -152,6 +216,55 @@ fn sample_idml() -> Vec<u8> {
     writer.start_file("Stories/Story_u2.xml", deflated).unwrap();
     writer
         .write_all(br#"<Story Self="u2"><Content>World</Content></Story>"#)
+        .unwrap();
+    writer.finish().unwrap();
+
+    buffer.into_inner()
+}
+
+fn layout_sample_idml() -> Vec<u8> {
+    let mut buffer = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(&mut buffer);
+    let stored = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .last_modified_time(zip::DateTime::DEFAULT);
+    let deflated = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .last_modified_time(zip::DateTime::DEFAULT);
+
+    writer.start_file("mimetype", stored).unwrap();
+    writer
+        .write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    writer.start_file("designmap.xml", deflated).unwrap();
+    writer
+        .write_all(
+            br#"<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#,
+        )
+        .unwrap();
+    writer
+        .start_file("Spreads/Spread_u10.xml", deflated)
+        .unwrap();
+    writer
+        .write_all(
+            br#"<Spread Self="u10">
+  <Page Self="p1" GeometricBounds="0 0 100 100" />
+  <TextFrame Self="hit" ParentStory="u1" GeometricBounds="10 10 20 20" />
+  <TextFrame Self="miss" ParentStory="u2" GeometricBounds="200 200 300 300" />
+</Spread>"#,
+        )
+        .unwrap();
+    writer.start_file("Stories/Story_u1.xml", deflated).unwrap();
+    writer
+        .write_all(br#"<Story Self="u1"><Content>Page hit</Content></Story>"#)
+        .unwrap();
+    writer.start_file("Stories/Story_u2.xml", deflated).unwrap();
+    writer
+        .write_all(br#"<Story Self="u2"><Content>Page miss</Content></Story>"#)
         .unwrap();
     writer.finish().unwrap();
 
