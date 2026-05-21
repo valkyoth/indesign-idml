@@ -4,7 +4,7 @@ use crate::core::units::{Millimeters, Points};
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
-    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
+    AnyRootTracker, DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker,
     configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype,
     reject_xml_entity_reference, validate_xml_attribute,
 };
@@ -94,18 +94,25 @@ impl Spread {
         configure_idml_reader(&mut reader, true);
 
         let mut spread = Self::default();
+        let mut seen_spread = false;
+        let mut in_spread = false;
+        let mut root_name = None;
         let mut page_item_count = 0usize;
         let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "Spread XML depth");
-        let mut root = RootElementTracker::new(b"Spread", "expected Spread root element");
+        let mut root = AnyRootTracker::default();
 
         loop {
             match reader.read_event()? {
                 Event::Start(e) => {
+                    validate_spread_root(&mut root_name, e.name().as_ref())?;
                     root.enter(e.name().as_ref())?;
                     xml_depth.enter()?;
-                    if e.name().as_ref() == b"Spread" && spread.id.is_none() {
+                    if e.name().as_ref() == b"Spread" {
+                        enter_spread_element(&mut seen_spread, &mut in_spread)?;
                         spread.id =
                             optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?;
+                    } else if !in_spread {
+                        continue;
                     } else if e.name().as_ref() == b"Page" {
                         push_page_limited(
                             &mut spread.pages,
@@ -152,11 +159,15 @@ impl Spread {
                     }
                 }
                 Event::Empty(e) => {
+                    validate_spread_root(&mut root_name, e.name().as_ref())?;
                     root.visit_empty(e.name().as_ref())?;
                     xml_depth.visit_empty()?;
-                    if e.name().as_ref() == b"Spread" && spread.id.is_none() {
+                    if e.name().as_ref() == b"Spread" {
+                        enter_empty_spread_element(&mut seen_spread)?;
                         spread.id =
                             optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?;
+                    } else if !in_spread {
+                        continue;
                     } else if e.name().as_ref() == b"Page" {
                         push_page_limited(
                             &mut spread.pages,
@@ -198,6 +209,9 @@ impl Spread {
                 Event::End(e) => {
                     xml_depth.exit()?;
                     root.exit(e.name().as_ref())?;
+                    if e.name().as_ref() == b"Spread" {
+                        in_spread = false;
+                    }
                 }
                 Event::Text(e) => {
                     root.visit_text(e.as_ref())?;
@@ -217,6 +231,14 @@ impl Spread {
 
         root.finish()?;
         xml_depth.finish()?;
+        if !seen_spread {
+            return Err(IdmlError::InvalidElement {
+                element: root_name
+                    .map(|name| String::from_utf8_lossy(&name).into_owned())
+                    .unwrap_or_default(),
+                reason: "missing Spread element",
+            });
+        }
         Ok(spread)
     }
 
@@ -517,6 +539,53 @@ fn enforce_spread_attribute_bytes(actual: usize, max_attribute_bytes: usize) -> 
     Ok(())
 }
 
+fn validate_spread_root(root_name: &mut Option<Vec<u8>>, name: &[u8]) -> Result<()> {
+    if root_name.is_some() {
+        return Ok(());
+    }
+
+    if matches!(name, b"Spread" | b"idPkg:Spread") {
+        *root_name = Some(name.to_vec());
+        return Ok(());
+    }
+
+    Err(IdmlError::InvalidElement {
+        element: String::from_utf8_lossy(name).into_owned(),
+        reason: "expected Spread root element",
+    })
+}
+
+fn enter_spread_element(seen_spread: &mut bool, in_spread: &mut bool) -> Result<()> {
+    if *in_spread {
+        return Err(IdmlError::InvalidElement {
+            element: "Spread".to_owned(),
+            reason: "nested Spread element",
+        });
+    }
+    if *seen_spread {
+        return Err(IdmlError::InvalidElement {
+            element: "Spread".to_owned(),
+            reason: "multiple Spread elements",
+        });
+    }
+
+    *seen_spread = true;
+    *in_spread = true;
+    Ok(())
+}
+
+fn enter_empty_spread_element(seen_spread: &mut bool) -> Result<()> {
+    if *seen_spread {
+        return Err(IdmlError::InvalidElement {
+            element: "Spread".to_owned(),
+            reason: "multiple Spread elements",
+        });
+    }
+
+    *seen_spread = true;
+    Ok(())
+}
+
 fn parse_geometric_bounds(element: &'static str, value: &str) -> Result<Rect> {
     let values = value
         .split_whitespace()
@@ -634,7 +703,7 @@ fn parse_group_contents(
     mut group: Group,
     options: SpreadParseOptions,
     xml_depth: &mut XmlDepthTracker,
-    root: &mut RootElementTracker,
+    root: &mut AnyRootTracker,
     text_frames: &mut Vec<TextFrame>,
     page_item_count: &mut usize,
 ) -> Result<Group> {
@@ -1154,6 +1223,39 @@ mod tests {
         assert_eq!(bounds.height().as_f64(), 144.0);
         assert_eq!(bounds.to_millimeters().left.as_f64(), 25.4);
         assert!(spread.text_frames[1].geometric_bounds.is_none());
+    }
+
+    #[test]
+    fn parses_spread_from_idpkg_wrapper() {
+        let xml = r#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="u10">
+    <Page Self="p1" GeometricBounds="0 0 600 800" />
+    <TextFrame Self="tf1" ParentStory="u2" />
+  </Spread>
+</idPkg:Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.id.as_deref(), Some("u10"));
+        assert_eq!(spread.pages.len(), 1);
+        assert_eq!(spread.text_frames.len(), 1);
+        assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn rejects_idpkg_spread_wrapper_without_spread_model() {
+        let err = Spread::from_xml(
+            r#"<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" />"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "missing Spread element",
+            } if element == "idPkg:Spread"
+        ));
     }
 
     #[test]
