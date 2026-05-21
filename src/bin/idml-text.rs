@@ -276,11 +276,12 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
             .extract_story_texts_with_options(&design_map, story_options)?
             .into_values()
             .collect(),
-        (None, Some(_), _) | (None, None, Some(_)) => {
-            unreachable!("layout scope is rejected before opening the package")
-        }
+        (None, Some(_), _) => return Err(CliError::Usage("--page-id requires --spread-id")),
+        (None, None, Some(_)) => return Err(CliError::Usage("--rect-points requires --spread-id")),
         (Some(_), Some(_), Some(_)) => {
-            unreachable!("conflicting layout scopes are rejected before opening the package")
+            return Err(CliError::Usage(
+                "--page-id and --rect-points cannot be combined",
+            ));
         }
     };
 
