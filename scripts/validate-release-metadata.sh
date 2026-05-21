@@ -52,6 +52,7 @@ for required_package_file in \
     "RELEASE_PLAN.md" \
     "SECURITY_IMPLEMENTATION_PLAN.md" \
     "examples/build_basic.rs" \
+    "examples/edit_story.rs" \
     "examples/read_text.rs" \
     "src/lib.rs"
 do

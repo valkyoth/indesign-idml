@@ -14,3 +14,10 @@ if [ "$build_basic_output" != "u1: Catalog entry" ]; then
     printf '%s\n' "$build_basic_output" >&2
     exit 1
 fi
+
+edit_story_output="$(cargo run --quiet --example edit_story)"
+if [ "$edit_story_output" != "u1: Edited story text" ]; then
+    echo "edit_story example produced unexpected output:" >&2
+    printf '%s\n' "$edit_story_output" >&2
+    exit 1
+fi
