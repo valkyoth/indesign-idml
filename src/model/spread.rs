@@ -767,6 +767,7 @@ fn validate_spread(spread: &Spread) -> Result<()> {
 }
 
 fn serialize_spread(spread: &Spread) -> Result<String> {
+    validate_serialized_spread_counts(spread)?;
     validate_spread(spread)?;
 
     let mut xml = String::new();
@@ -790,6 +791,63 @@ fn serialize_spread(spread: &Spread) -> Result<String> {
 
     xml.push_str("</Spread>\n");
     Ok(xml)
+}
+
+fn validate_serialized_spread_counts(spread: &Spread) -> Result<()> {
+    enforce_serialized_spread_count(
+        spread.pages.len(),
+        DEFAULT_MAX_PAGES_PER_SPREAD,
+        "spread page count",
+    )?;
+    enforce_serialized_spread_count(
+        spread.text_frames.len(),
+        DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD,
+        "spread text frame count",
+    )?;
+    enforce_serialized_spread_count(
+        serialized_page_item_count(spread)?,
+        DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD,
+        "spread page item count",
+    )?;
+    Ok(())
+}
+
+fn serialized_page_item_count(spread: &Spread) -> Result<usize> {
+    if spread.page_items.is_empty() {
+        return Ok(spread.text_frames.len());
+    }
+
+    spread
+        .page_items
+        .iter()
+        .try_fold(0usize, count_serialized_page_item)
+}
+
+fn count_serialized_page_item(count: usize, page_item: &PageItem) -> Result<usize> {
+    let count = count.checked_add(1).ok_or(IdmlError::LimitExceeded {
+        what: "spread page item count",
+        limit: DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD as u64,
+        actual: u64::MAX,
+    })?;
+
+    match page_item {
+        PageItem::TextFrame(_) | PageItem::Rectangle(_) => Ok(count),
+        PageItem::Group(group) => group
+            .page_items
+            .iter()
+            .try_fold(count, count_serialized_page_item),
+    }
+}
+
+fn enforce_serialized_spread_count(actual: usize, limit: usize, what: &'static str) -> Result<()> {
+    if actual > limit {
+        return Err(IdmlError::LimitExceeded {
+            what,
+            limit: limit as u64,
+            actual: actual as u64,
+        });
+    }
+    Ok(())
 }
 
 fn validate_page_items(spread: &Spread) -> Result<()> {
@@ -1756,6 +1814,88 @@ mod tests {
         assert!(xml.contains("ItemLayer=\"layer2\""));
         assert!(xml.contains("ItemLayer=\"layer3\""));
         assert_eq!(parsed, spread);
+    }
+
+    #[test]
+    fn serializer_enforces_page_count_limit() {
+        let spread = Spread {
+            pages: (0..=super::DEFAULT_MAX_PAGES_PER_SPREAD)
+                .map(|index| Page {
+                    id: Some(format!("p{index}")),
+                    geometric_bounds: None,
+                })
+                .collect(),
+            ..Spread::default()
+        };
+
+        let err = spread.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread page count",
+                limit: 10_000,
+                actual: 10_001,
+            }
+        ));
+    }
+
+    #[test]
+    fn serializer_enforces_text_frame_count_limit() {
+        let spread = Spread {
+            text_frames: (0..=super::DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD)
+                .map(|index| TextFrame {
+                    id: Some(format!("tf{index}")),
+                    layer_id: None,
+                    parent_story: None,
+                    geometric_bounds: None,
+                })
+                .collect(),
+            ..Spread::default()
+        };
+
+        let err = spread.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread text frame count",
+                limit: 100_000,
+                actual: 100_001,
+            }
+        ));
+    }
+
+    #[test]
+    fn serializer_enforces_recursive_page_item_count_limit() {
+        let spread = Spread {
+            page_items: vec![PageItem::Group(Group {
+                id: Some("g1".to_owned()),
+                layer_id: None,
+                geometric_bounds: None,
+                page_items: (0..super::DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD)
+                    .map(|index| {
+                        PageItem::Rectangle(Rectangle {
+                            id: Some(format!("r{index}")),
+                            layer_id: None,
+                            geometric_bounds: None,
+                        })
+                    })
+                    .collect(),
+            })],
+            ..Spread::default()
+        };
+
+        let err = spread.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread page item count",
+                limit: 200_000,
+                actual: 200_001,
+            }
+        ));
     }
 
     #[test]

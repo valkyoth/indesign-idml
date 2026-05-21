@@ -64,6 +64,8 @@ Hard rules:
   metadata before allocating or decompressing entry bodies.
 - DesignMap writer output enforces default layer and package reference count
   ceilings before XML emission.
+- Spread writer output enforces default page, text frame, and recursive page item
+  count ceilings before XML emission.
 - Duplicate XML attributes are rejected instead of being silently overwritten or
   interpreted by first-match behavior.
 - Decoded XML attribute values captured into the model are validated against the
