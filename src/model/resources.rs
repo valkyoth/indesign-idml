@@ -456,6 +456,12 @@ pub fn extract_embedded_assets_with_options(
             }
             Event::GeneralRef(_) => {
                 root.visit_reference()?;
+                if contents_depth > 0 {
+                    return Err(IdmlError::InvalidElement {
+                        element: "#reference".to_owned(),
+                        reason: "entity reference inside embedded asset contents",
+                    });
+                }
             }
             Event::DocType(_) => reject_xml_doctype()?,
             Event::Eof => break,
@@ -1913,6 +1919,20 @@ mod tests {
                 element,
                 reason: "non-whitespace character data outside root element",
             } if element == "#text"
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_rejects_entity_reference_inside_contents() {
+        let err =
+            extract_embedded_assets("<Image><Contents>aG&amp;k=</Contents></Image>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "entity reference inside embedded asset contents",
+            } if element == "#reference"
         ));
     }
 
