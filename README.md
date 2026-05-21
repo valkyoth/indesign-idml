@@ -24,6 +24,9 @@ For layout-aware extraction, `try_for_each_spread_text_frame_with_options`,
 `try_for_each_spread_text_on_page_with_options`, and
 `try_for_each_spread_text_in_rect_with_options` resolve only matching frame
 stories as they are visited.
+For loss-aware workflows, `IdmlDocument::try_for_each_preserved_entry` exposes
+master spreads and untyped resource entries in manifest order without requiring
+callers to depend on internal map ordering.
 
 ## CLI
 
