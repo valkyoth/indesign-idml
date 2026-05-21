@@ -65,6 +65,8 @@ Hard rules:
 - Decoded XML attribute values captured into the model are validated against the
   crate XML character policy before they can become IDs, references, or resource
   metadata.
+- DesignMap XML attributes are capped by configured raw byte length before
+  normalization or decoding can allocate their values.
 - Story XML attributes are capped by configured raw byte length before
   normalization or decoding can allocate their values.
 - Spread XML attributes are capped by configured raw byte length before

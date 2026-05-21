@@ -63,12 +63,16 @@ pub struct Layer {
 }
 
 impl Layer {
-    fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
         Ok(Self {
-            id: optional_attr(event, "Self", reader)?,
-            name: optional_attr(event, "Name", reader)?,
-            visible: optional_bool_attr(event, "Visible", reader)?,
-            locked: optional_bool_attr(event, "Locked", reader)?,
+            id: optional_attr(event, "Self", reader, max_attribute_bytes)?,
+            name: optional_attr(event, "Name", reader, max_attribute_bytes)?,
+            visible: optional_bool_attr(event, "Visible", reader, max_attribute_bytes)?,
+            locked: optional_bool_attr(event, "Locked", reader, max_attribute_bytes)?,
         })
     }
 }
@@ -133,6 +137,9 @@ pub const DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS: usize = 20_000;
 /// Default maximum layers accepted in one `designmap.xml`.
 pub const DEFAULT_MAX_DESIGNMAP_LAYERS: usize = 10_000;
 
+/// Default maximum raw bytes accepted for one DesignMap XML attribute value.
+pub const DEFAULT_MAX_DESIGNMAP_ATTRIBUTE_BYTES: usize = 256 * 1024;
+
 /// DesignMap parser limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DesignMapParseOptions {
@@ -144,6 +151,8 @@ pub struct DesignMapParseOptions {
     pub max_package_refs: usize,
     /// Maximum UTF-8 bytes accepted for one package `src` attribute.
     pub max_package_src_bytes: usize,
+    /// Maximum raw bytes accepted for one XML attribute value.
+    pub max_attribute_bytes: usize,
     /// Maximum XML element nesting depth accepted while parsing.
     pub max_xml_depth: usize,
 }
@@ -155,6 +164,7 @@ impl Default for DesignMapParseOptions {
             max_layers: DEFAULT_MAX_DESIGNMAP_LAYERS,
             max_package_refs: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS,
             max_package_src_bytes: DEFAULT_MAX_ARCHIVE_PATH_BYTES,
+            max_attribute_bytes: DEFAULT_MAX_DESIGNMAP_ATTRIBUTE_BYTES,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
@@ -271,13 +281,14 @@ impl DesignMap {
                     root.enter(e.name().as_ref())?;
                     xml_depth.enter()?;
                     if e.name().as_ref() == b"Document"
-                        && let Some(id) = optional_attr(&e, "Self", &reader)?
+                        && let Some(id) =
+                            optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?
                     {
                         design_map.id = id;
                     } else if e.name().as_ref() == b"Layer" {
                         push_layer_limited(
                             &mut design_map.layers,
-                            Layer::from_xml_event(&e, &reader)?,
+                            Layer::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
                             options.max_layers,
                         )?;
                     }
@@ -286,13 +297,14 @@ impl DesignMap {
                     root.visit_empty(e.name().as_ref())?;
                     xml_depth.visit_empty()?;
                     if e.name().as_ref() == b"Document"
-                        && let Some(id) = optional_attr(&e, "Self", &reader)?
+                        && let Some(id) =
+                            optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?
                     {
                         design_map.id = id;
                     } else if e.name().as_ref() == b"Layer" {
                         push_layer_limited(
                             &mut design_map.layers,
-                            Layer::from_xml_event(&e, &reader)?,
+                            Layer::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
                             options.max_layers,
                         )?;
                     } else if e.name().as_ref() == b"idPkg:Spread" {
@@ -303,6 +315,7 @@ impl DesignMap {
                             &reader,
                             &mut design_map.spread_srcs,
                             options.max_package_src_bytes,
+                            options.max_attribute_bytes,
                         )?;
                         design_map.package_refs.push(package_ref);
                     } else if e.name().as_ref() == b"idPkg:Story" {
@@ -313,6 +326,7 @@ impl DesignMap {
                             &reader,
                             &mut design_map.story_srcs,
                             options.max_package_src_bytes,
+                            options.max_attribute_bytes,
                         )?;
                         design_map.package_refs.push(package_ref);
                     } else if e.name().as_ref() == b"idPkg:MasterSpread" {
@@ -323,12 +337,14 @@ impl DesignMap {
                             &reader,
                             &mut design_map.master_spread_srcs,
                             options.max_package_src_bytes,
+                            options.max_attribute_bytes,
                         )?;
                         design_map.package_refs.push(package_ref);
                     } else if e.name().as_ref().starts_with(b"idPkg:") {
                         increment_package_refs(&mut package_refs, options.max_package_refs)?;
                         let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                        let src = required_attr(&e, &name, "src", &reader)?;
+                        let src =
+                            required_attr(&e, &name, "src", &reader, options.max_attribute_bytes)?;
                         enforce_package_src_len(&src, options.max_package_src_bytes)?;
                         let path = IdmlPath::new(src)?;
                         design_map
@@ -512,8 +528,9 @@ fn parse_package_ref(
     reader: &Reader<&[u8]>,
     map: &mut IndexMap<String, IdmlPath>,
     max_package_src_bytes: usize,
+    max_attribute_bytes: usize,
 ) -> Result<DesignMapPackageRef> {
-    let src = required_attr(event, element, "src", reader)?;
+    let src = required_attr(event, element, "src", reader, max_attribute_bytes)?;
     enforce_package_src_len(&src, max_package_src_bytes)?;
     let id = id_from_package_src(&src);
     if map.contains_key(&id) {
@@ -547,10 +564,13 @@ fn required_attr(
     element: &str,
     attribute: &'static str,
     reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
 ) -> Result<String> {
-    optional_attr(event, attribute, reader)?.ok_or_else(|| IdmlError::MissingAttribute {
-        element: element.to_owned(),
-        attribute,
+    optional_attr(event, attribute, reader, max_attribute_bytes)?.ok_or_else(|| {
+        IdmlError::MissingAttribute {
+            element: element.to_owned(),
+            attribute,
+        }
     })
 }
 
@@ -558,6 +578,7 @@ fn optional_attr(
     event: &BytesStart<'_>,
     attribute: &'static str,
     reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
 ) -> Result<Option<String>> {
     let mut value = None;
     for attr in event.attributes() {
@@ -570,6 +591,7 @@ fn optional_attr(
                     reason: "duplicate attribute",
                 });
             }
+            enforce_designmap_attribute_bytes(attr.value.len(), max_attribute_bytes)?;
             let decoded = attr
                 .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
                 .into_owned();
@@ -584,12 +606,24 @@ fn optional_attr(
     Ok(value)
 }
 
+fn enforce_designmap_attribute_bytes(actual: usize, max_attribute_bytes: usize) -> Result<()> {
+    if actual > max_attribute_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what: "DesignMap XML attribute bytes",
+            limit: max_attribute_bytes as u64,
+            actual: actual as u64,
+        });
+    }
+    Ok(())
+}
+
 fn optional_bool_attr(
     event: &BytesStart<'_>,
     attribute: &'static str,
     reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
 ) -> Result<Option<bool>> {
-    let Some(value) = optional_attr(event, attribute, reader)? else {
+    let Some(value) = optional_attr(event, attribute, reader, max_attribute_bytes)? else {
         return Ok(None);
     };
     match value.as_str() {
@@ -1252,6 +1286,27 @@ mod tests {
                 what: "DesignMap layer count",
                 limit: 1,
                 actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_attribute_byte_limit_before_decoding() {
+        let err = DesignMap::from_xml_with_options(
+            r#"<Document Self="doc123" />"#,
+            DesignMapParseOptions {
+                max_attribute_bytes: 5,
+                ..DesignMapParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap XML attribute bytes",
+                limit: 5,
+                actual: 6,
             }
         ));
     }
