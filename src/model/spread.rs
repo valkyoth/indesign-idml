@@ -3,7 +3,7 @@
 use crate::core::units::{Millimeters, Points};
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
-use crate::xml::validate_xml_attribute;
+use crate::xml::{DEFAULT_MAX_XML_DEPTH, XmlDepthTracker, validate_xml_attribute};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::escape::escape;
@@ -26,12 +26,15 @@ pub const DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD: usize = 100_000;
 pub struct SpreadParseOptions {
     /// Maximum `TextFrame` elements collected from one spread.
     pub max_text_frames: usize,
+    /// Maximum XML element nesting depth accepted while parsing.
+    pub max_xml_depth: usize,
 }
 
 impl Default for SpreadParseOptions {
     fn default() -> Self {
         Self {
             max_text_frames: DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD,
+            max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
 }
@@ -48,18 +51,34 @@ impl Spread {
         reader.config_mut().trim_text(true);
 
         let mut spread = Self::default();
+        let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "Spread XML depth");
 
         loop {
             match reader.read_event()? {
-                Event::Start(e) if e.name().as_ref() == b"Spread" && spread.id.is_none() => {
-                    spread.id = optional_attr(&e, "Self", &reader)?;
+                Event::Start(e) => {
+                    xml_depth.enter()?;
+                    if e.name().as_ref() == b"Spread" && spread.id.is_none() {
+                        spread.id = optional_attr(&e, "Self", &reader)?;
+                    } else if e.name().as_ref() == b"TextFrame" {
+                        push_text_frame_limited(
+                            &mut spread.text_frames,
+                            TextFrame::from_xml_event(&e, &reader)?,
+                            options.max_text_frames,
+                        )?;
+                    }
                 }
-                Event::Start(e) | Event::Empty(e) if e.name().as_ref() == b"TextFrame" => {
-                    push_text_frame_limited(
-                        &mut spread.text_frames,
-                        TextFrame::from_xml_event(&e, &reader)?,
-                        options.max_text_frames,
-                    )?;
+                Event::Empty(e) => {
+                    xml_depth.visit_empty()?;
+                    if e.name().as_ref() == b"TextFrame" {
+                        push_text_frame_limited(
+                            &mut spread.text_frames,
+                            TextFrame::from_xml_event(&e, &reader)?,
+                            options.max_text_frames,
+                        )?;
+                    }
+                }
+                Event::End(_) => {
+                    xml_depth.exit();
                 }
                 Event::Eof => break,
                 _ => {}
@@ -430,7 +449,10 @@ mod tests {
     fn enforces_text_frame_count_limit() {
         let err = Spread::from_xml_with_options(
             r#"<Spread><TextFrame Self="tf1" /><TextFrame Self="tf2" /></Spread>"#,
-            SpreadParseOptions { max_text_frames: 1 },
+            SpreadParseOptions {
+                max_text_frames: 1,
+                ..SpreadParseOptions::default()
+            },
         )
         .unwrap_err();
 
@@ -440,6 +462,27 @@ mod tests {
                 what: "spread text frame count",
                 limit: 1,
                 actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_xml_depth_limit() {
+        let err = Spread::from_xml_with_options(
+            r#"<Spread><Group><TextFrame Self="tf1" /></Group></Spread>"#,
+            SpreadParseOptions {
+                max_xml_depth: 2,
+                ..SpreadParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "Spread XML depth",
+                limit: 2,
+                actual: 3,
             }
         ));
     }

@@ -19,6 +19,7 @@ fuzz_target!(|data: &[u8]| {
             max_encoded_bytes: 16 * 1024,
             max_decoded_bytes: 16 * 1024,
             max_total_decoded_bytes: 64 * 1024,
+            max_xml_depth: 256,
         },
     );
 });

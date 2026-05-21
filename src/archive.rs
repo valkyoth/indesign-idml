@@ -867,6 +867,7 @@ mod tests {
         let err = package
             .read_designmap_with_options(DesignMapParseOptions {
                 max_package_refs: 1,
+                ..DesignMapParseOptions::default()
             })
             .unwrap_err();
 
@@ -1052,7 +1053,13 @@ mod tests {
         let design_map = package.read_designmap().unwrap();
         let pointer = design_map.story_pointers().next().unwrap();
         let err = package
-            .resolve_story_pointer_with_options(pointer, StoryParseOptions { max_text_bytes: 4 })
+            .resolve_story_pointer_with_options(
+                pointer,
+                StoryParseOptions {
+                    max_text_bytes: 4,
+                    ..StoryParseOptions::default()
+                },
+            )
             .unwrap_err();
 
         assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
@@ -1068,7 +1075,13 @@ mod tests {
         let path = IdmlPath::new("Stories/Story_u2.xml").unwrap();
 
         let err = package
-            .read_story_with_options(&path, StoryParseOptions { max_text_bytes: 4 })
+            .read_story_with_options(
+                &path,
+                StoryParseOptions {
+                    max_text_bytes: 4,
+                    ..StoryParseOptions::default()
+                },
+            )
             .unwrap_err();
 
         assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
@@ -1084,7 +1097,13 @@ mod tests {
         let path = IdmlPath::new("Spreads/Spread_u10.xml").unwrap();
 
         let err = package
-            .read_spread_with_options(&path, SpreadParseOptions { max_text_frames: 1 })
+            .read_spread_with_options(
+                &path,
+                SpreadParseOptions {
+                    max_text_frames: 1,
+                    ..SpreadParseOptions::default()
+                },
+            )
             .unwrap_err();
 
         assert!(

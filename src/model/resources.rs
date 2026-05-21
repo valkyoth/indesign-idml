@@ -4,6 +4,7 @@ use crate::archive::{ArchiveEntry, DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE, IdmlPath
 use crate::encoding::{Base64Mode, decode_standard, decoded_standard_len};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, validate_package_element_name};
+use crate::xml::{DEFAULT_MAX_XML_DEPTH, XmlDepthTracker};
 use indexmap::IndexMap;
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -100,6 +101,8 @@ pub struct EmbeddedAssetParseOptions {
     pub max_decoded_bytes: usize,
     /// Maximum total decoded bytes accepted across all `Contents` elements.
     pub max_total_decoded_bytes: usize,
+    /// Maximum XML element nesting depth accepted while parsing.
+    pub max_xml_depth: usize,
 }
 
 impl Default for EmbeddedAssetParseOptions {
@@ -110,6 +113,7 @@ impl Default for EmbeddedAssetParseOptions {
             max_encoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_ENCODED_BYTES,
             max_decoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_DECODED_BYTES,
             max_total_decoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_TOTAL_DECODED_BYTES,
+            max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
 }
@@ -263,26 +267,34 @@ pub fn extract_embedded_assets_with_options(
     let mut total_decoded_bytes = 0usize;
     let mut source_element = String::new();
     let mut encoded = String::new();
+    let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "embedded asset XML depth");
 
     loop {
         match reader.read_event()? {
-            Event::Start(e) if is_contents_element(&e) => {
-                if contents_depth == 0 {
-                    source_element = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                    encoded.clear();
+            Event::Start(e) => {
+                xml_depth.enter()?;
+                if is_contents_element(&e) {
+                    if contents_depth == 0 {
+                        source_element = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                        encoded.clear();
+                    }
+                    contents_depth = contents_depth.saturating_add(1);
                 }
-                contents_depth = contents_depth.saturating_add(1);
             }
-            Event::Empty(e) if is_contents_element(&e) => {
-                let bytes = decode_embedded_asset_limited(&[], options, &mut total_decoded_bytes)?;
-                push_asset_limited(
-                    &mut assets,
-                    options.max_assets,
-                    EmbeddedAsset {
-                        source_element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
-                        bytes,
-                    },
-                )?;
+            Event::Empty(e) => {
+                xml_depth.visit_empty()?;
+                if is_contents_element(&e) {
+                    let bytes =
+                        decode_embedded_asset_limited(&[], options, &mut total_decoded_bytes)?;
+                    push_asset_limited(
+                        &mut assets,
+                        options.max_assets,
+                        EmbeddedAsset {
+                            source_element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                            bytes,
+                        },
+                    )?;
+                }
             }
             Event::End(e) if local_name(e.name().as_ref()) == b"Contents" && contents_depth > 0 => {
                 contents_depth -= 1;
@@ -302,6 +314,10 @@ pub fn extract_embedded_assets_with_options(
                     )?;
                     encoded.clear();
                 }
+                xml_depth.exit();
+            }
+            Event::End(_) => {
+                xml_depth.exit();
             }
             Event::Text(e) if contents_depth > 0 => {
                 push_encoded_limited(
@@ -936,6 +952,27 @@ mod tests {
                 what: "embedded asset total decoded bytes",
                 limit: 3,
                 actual: 4,
+            }
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_enforces_xml_depth_limit() {
+        let err = extract_embedded_assets_with_options(
+            "<Image><Wrapper><Contents>aGk=</Contents></Wrapper></Image>",
+            EmbeddedAssetParseOptions {
+                max_xml_depth: 2,
+                ..EmbeddedAssetParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "embedded asset XML depth",
+                limit: 2,
+                actual: 3,
             }
         ));
     }

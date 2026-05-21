@@ -1319,7 +1319,10 @@ mod tests {
         let err = IdmlDocument::read_from_package_with_options(
             &mut package,
             IdmlDocumentReadOptions {
-                story: StoryParseOptions { max_text_bytes: 4 },
+                story: StoryParseOptions {
+                    max_text_bytes: 4,
+                    ..StoryParseOptions::default()
+                },
                 ..IdmlDocumentReadOptions::default()
             },
         )
@@ -1342,6 +1345,7 @@ mod tests {
             IdmlDocumentReadOptions {
                 design_map: DesignMapParseOptions {
                     max_package_refs: 1,
+                    ..DesignMapParseOptions::default()
                 },
                 ..IdmlDocumentReadOptions::default()
             },
@@ -1365,7 +1369,10 @@ mod tests {
         let err = IdmlDocument::read_from_package_with_options(
             &mut package,
             IdmlDocumentReadOptions {
-                spread: SpreadParseOptions { max_text_frames: 0 },
+                spread: SpreadParseOptions {
+                    max_text_frames: 0,
+                    ..SpreadParseOptions::default()
+                },
                 ..IdmlDocumentReadOptions::default()
             },
         )

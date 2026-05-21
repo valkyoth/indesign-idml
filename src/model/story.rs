@@ -2,7 +2,9 @@
 
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
-use crate::xml::{validate_xml_attribute, validate_xml_text};
+use crate::xml::{
+    DEFAULT_MAX_XML_DEPTH, XmlDepthTracker, validate_xml_attribute, validate_xml_text,
+};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::escape::{EscapeError, escape, partial_escape, resolve_predefined_entity};
@@ -16,12 +18,15 @@ pub const DEFAULT_MAX_STORY_TEXT_BYTES: usize = 64 * 1024 * 1024;
 pub struct StoryParseOptions {
     /// Maximum UTF-8 bytes allowed in extracted story text.
     pub max_text_bytes: usize,
+    /// Maximum XML element nesting depth accepted while parsing.
+    pub max_xml_depth: usize,
 }
 
 impl Default for StoryParseOptions {
     fn default() -> Self {
         Self {
             max_text_bytes: DEFAULT_MAX_STORY_TEXT_BYTES,
+            max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
 }
@@ -49,17 +54,24 @@ impl Story {
         let mut id = None;
         let mut text = String::new();
         let mut content_depth = 0usize;
+        let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "Story XML depth");
 
         loop {
             match reader.read_event()? {
-                Event::Start(e) if e.name().as_ref() == b"Story" && id.is_none() => {
-                    id = optional_attr(&e, "Self", &reader)?;
-                }
-                Event::Start(e) if e.name().as_ref() == b"Content" => {
-                    content_depth = content_depth.saturating_add(1);
+                Event::Start(e) => {
+                    xml_depth.enter()?;
+                    if e.name().as_ref() == b"Story" && id.is_none() {
+                        id = optional_attr(&e, "Self", &reader)?;
+                    } else if e.name().as_ref() == b"Content" {
+                        content_depth = content_depth.saturating_add(1);
+                    }
                 }
                 Event::End(e) if e.name().as_ref() == b"Content" => {
                     content_depth = content_depth.saturating_sub(1);
+                    xml_depth.exit();
+                }
+                Event::End(_) => {
+                    xml_depth.exit();
                 }
                 Event::Text(e) if content_depth > 0 => {
                     let decoded = e.decode()?;
@@ -87,11 +99,13 @@ impl Story {
                         push_limited(&mut text, replacement, options.max_text_bytes)?;
                     }
                 }
-                Event::Empty(e) if e.name().as_ref() == b"Br" => {
-                    push_limited(&mut text, "\n", options.max_text_bytes)?;
-                }
-                Event::Empty(e) if e.name().as_ref() == b"Tab" => {
-                    push_limited(&mut text, "\t", options.max_text_bytes)?;
+                Event::Empty(e) => {
+                    xml_depth.visit_empty()?;
+                    if e.name().as_ref() == b"Br" {
+                        push_limited(&mut text, "\n", options.max_text_bytes)?;
+                    } else if e.name().as_ref() == b"Tab" {
+                        push_limited(&mut text, "\t", options.max_text_bytes)?;
+                    }
                 }
                 Event::Eof => break,
                 _ => {}
@@ -252,11 +266,35 @@ mod tests {
     fn enforces_story_text_limit() {
         let err = Story::from_xml_with_options(
             "<Story><Content>hello</Content></Story>",
-            StoryParseOptions { max_text_bytes: 4 },
+            StoryParseOptions {
+                max_text_bytes: 4,
+                ..StoryParseOptions::default()
+            },
         )
         .unwrap_err();
 
         assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
+    }
+
+    #[test]
+    fn enforces_xml_depth_limit() {
+        let err = Story::from_xml_with_options(
+            "<Story><Wrapper><Content>hello</Content></Wrapper></Story>",
+            StoryParseOptions {
+                max_xml_depth: 2,
+                ..StoryParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "Story XML depth",
+                limit: 2,
+                actual: 3,
+            }
+        ));
     }
 
     #[test]

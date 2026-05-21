@@ -3,7 +3,7 @@
 use crate::archive::IdmlPath;
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
-use crate::xml::validate_xml_attribute;
+use crate::xml::{DEFAULT_MAX_XML_DEPTH, XmlDepthTracker, validate_xml_attribute};
 use indexmap::{IndexMap, IndexSet};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -33,12 +33,15 @@ pub const DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS: usize = 20_000;
 pub struct DesignMapParseOptions {
     /// Maximum `idPkg:*` package references collected from one manifest.
     pub max_package_refs: usize,
+    /// Maximum XML element nesting depth accepted while parsing.
+    pub max_xml_depth: usize,
 }
 
 impl Default for DesignMapParseOptions {
     fn default() -> Self {
         Self {
             max_package_refs: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS,
+            max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
 }
@@ -143,40 +146,52 @@ impl DesignMap {
 
         let mut design_map = Self::default();
         let mut package_refs = 0usize;
+        let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "DesignMap XML depth");
 
         loop {
             match reader.read_event()? {
-                Event::Start(e) if e.name().as_ref() == b"Document" => {
-                    if let Some(id) = optional_attr(&e, "Self", &reader)? {
+                Event::Start(e) => {
+                    xml_depth.enter()?;
+                    if e.name().as_ref() == b"Document"
+                        && let Some(id) = optional_attr(&e, "Self", &reader)?
+                    {
                         design_map.id = id;
                     }
                 }
-                Event::Empty(e) if e.name().as_ref() == b"idPkg:Spread" => {
-                    increment_package_refs(&mut package_refs, options.max_package_refs)?;
-                    parse_package_ref(&e, "idPkg:Spread", &reader, &mut design_map.spread_srcs)?;
+                Event::Empty(e) => {
+                    xml_depth.visit_empty()?;
+                    if e.name().as_ref() == b"idPkg:Spread" {
+                        increment_package_refs(&mut package_refs, options.max_package_refs)?;
+                        parse_package_ref(
+                            &e,
+                            "idPkg:Spread",
+                            &reader,
+                            &mut design_map.spread_srcs,
+                        )?;
+                    } else if e.name().as_ref() == b"idPkg:Story" {
+                        increment_package_refs(&mut package_refs, options.max_package_refs)?;
+                        parse_package_ref(&e, "idPkg:Story", &reader, &mut design_map.story_srcs)?;
+                    } else if e.name().as_ref() == b"idPkg:MasterSpread" {
+                        increment_package_refs(&mut package_refs, options.max_package_refs)?;
+                        parse_package_ref(
+                            &e,
+                            "idPkg:MasterSpread",
+                            &reader,
+                            &mut design_map.master_spread_srcs,
+                        )?;
+                    } else if e.name().as_ref().starts_with(b"idPkg:") {
+                        increment_package_refs(&mut package_refs, options.max_package_refs)?;
+                        let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                        let src = required_attr(&e, &name, "src", &reader)?;
+                        design_map
+                            .other_package_srcs
+                            .entry(name)
+                            .or_default()
+                            .push(IdmlPath::new(src)?);
+                    }
                 }
-                Event::Empty(e) if e.name().as_ref() == b"idPkg:Story" => {
-                    increment_package_refs(&mut package_refs, options.max_package_refs)?;
-                    parse_package_ref(&e, "idPkg:Story", &reader, &mut design_map.story_srcs)?;
-                }
-                Event::Empty(e) if e.name().as_ref() == b"idPkg:MasterSpread" => {
-                    increment_package_refs(&mut package_refs, options.max_package_refs)?;
-                    parse_package_ref(
-                        &e,
-                        "idPkg:MasterSpread",
-                        &reader,
-                        &mut design_map.master_spread_srcs,
-                    )?;
-                }
-                Event::Empty(e) if e.name().as_ref().starts_with(b"idPkg:") => {
-                    increment_package_refs(&mut package_refs, options.max_package_refs)?;
-                    let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                    let src = required_attr(&e, &name, "src", &reader)?;
-                    design_map
-                        .other_package_srcs
-                        .entry(name)
-                        .or_default()
-                        .push(IdmlPath::new(src)?);
+                Event::End(_) => {
+                    xml_depth.exit();
                 }
                 Event::Eof => break,
                 _ => {}
@@ -590,6 +605,7 @@ mod tests {
             xml,
             DesignMapParseOptions {
                 max_package_refs: 1,
+                ..DesignMapParseOptions::default()
             },
         )
         .unwrap_err();
@@ -600,6 +616,31 @@ mod tests {
                 what: "DesignMap package reference count",
                 limit: 1,
                 actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_xml_depth_limit() {
+        let xml = r#"<Document>
+  <Wrapper><idPkg:Story src="Stories/Story_u2.xml" /></Wrapper>
+</Document>"#;
+
+        let err = DesignMap::from_xml_with_options(
+            xml,
+            DesignMapParseOptions {
+                max_xml_depth: 2,
+                ..DesignMapParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap XML depth",
+                limit: 2,
+                actual: 3,
             }
         ));
     }

@@ -12,6 +12,7 @@ fuzz_target!(|data: &[u8]| {
         xml,
         SpreadParseOptions {
             max_text_frames: 1024,
+            max_xml_depth: 256,
         },
     );
 });

@@ -13,6 +13,7 @@ fuzz_target!(|data: &[u8]| {
         xml,
         DesignMapParseOptions {
             max_package_refs: 1024,
+            max_xml_depth: 256,
         },
     ) {
         let _ = design_map.validate();
