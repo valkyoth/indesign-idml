@@ -11,7 +11,7 @@ use quick_xml::escape::escape;
 use quick_xml::events::{BytesStart, Event};
 
 /// Represents high-level package references found in `designmap.xml`.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq)]
 pub struct DesignMap {
     /// Document `Self` identifier.
     pub id: String,
@@ -23,6 +23,77 @@ pub struct DesignMap {
     pub master_spread_srcs: IndexMap<String, IdmlPath>,
     /// Other `idPkg:*` references preserved by qualified tag name.
     pub other_package_srcs: IndexMap<String, Vec<IdmlPath>>,
+    /// Exact `idPkg:*` package reference order as parsed from `designmap.xml`.
+    ///
+    /// This list is optional for manually constructed maps. When empty, writer
+    /// output is derived from the typed lookup maps. Parsed maps populate this
+    /// list so mixed spread/story/resource ordering can be preserved.
+    pub package_refs: Vec<DesignMapPackageRef>,
+}
+
+impl PartialEq for DesignMap {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.spread_srcs == other.spread_srcs
+            && self.story_srcs == other.story_srcs
+            && self.master_spread_srcs == other.master_spread_srcs
+            && self.other_package_srcs == other.other_package_srcs
+            && compatible_package_ref_order(self, other)
+    }
+}
+
+/// One ordered package reference from `designmap.xml`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesignMapPackageRef {
+    /// Qualified `idPkg:*` element name.
+    pub element: String,
+    /// Derived ID for typed package references.
+    pub id: Option<String>,
+    /// Logical archive path from the `src` attribute.
+    pub path: IdmlPath,
+}
+
+impl DesignMapPackageRef {
+    /// Creates an ordered spread package reference.
+    #[must_use]
+    pub fn spread(id: impl Into<String>, path: IdmlPath) -> Self {
+        Self {
+            element: "idPkg:Spread".to_owned(),
+            id: Some(id.into()),
+            path,
+        }
+    }
+
+    /// Creates an ordered story package reference.
+    #[must_use]
+    pub fn story(id: impl Into<String>, path: IdmlPath) -> Self {
+        Self {
+            element: "idPkg:Story".to_owned(),
+            id: Some(id.into()),
+            path,
+        }
+    }
+
+    /// Creates an ordered master spread package reference.
+    #[must_use]
+    pub fn master_spread(id: impl Into<String>, path: IdmlPath) -> Self {
+        Self {
+            element: "idPkg:MasterSpread".to_owned(),
+            id: Some(id.into()),
+            path,
+        }
+    }
+
+    /// Creates an ordered untyped package resource reference.
+    pub fn resource(element: impl Into<String>, path: IdmlPath) -> Result<Self> {
+        let element = element.into();
+        validate_package_element_name(&element)?;
+        Ok(Self {
+            element,
+            id: None,
+            path,
+        })
+    }
 }
 
 /// Default maximum package references accepted in one `designmap.xml`.
@@ -162,32 +233,44 @@ impl DesignMap {
                     xml_depth.visit_empty()?;
                     if e.name().as_ref() == b"idPkg:Spread" {
                         increment_package_refs(&mut package_refs, options.max_package_refs)?;
-                        parse_package_ref(
+                        let package_ref = parse_package_ref(
                             &e,
                             "idPkg:Spread",
                             &reader,
                             &mut design_map.spread_srcs,
                         )?;
+                        design_map.package_refs.push(package_ref);
                     } else if e.name().as_ref() == b"idPkg:Story" {
                         increment_package_refs(&mut package_refs, options.max_package_refs)?;
-                        parse_package_ref(&e, "idPkg:Story", &reader, &mut design_map.story_srcs)?;
+                        let package_ref = parse_package_ref(
+                            &e,
+                            "idPkg:Story",
+                            &reader,
+                            &mut design_map.story_srcs,
+                        )?;
+                        design_map.package_refs.push(package_ref);
                     } else if e.name().as_ref() == b"idPkg:MasterSpread" {
                         increment_package_refs(&mut package_refs, options.max_package_refs)?;
-                        parse_package_ref(
+                        let package_ref = parse_package_ref(
                             &e,
                             "idPkg:MasterSpread",
                             &reader,
                             &mut design_map.master_spread_srcs,
                         )?;
+                        design_map.package_refs.push(package_ref);
                     } else if e.name().as_ref().starts_with(b"idPkg:") {
                         increment_package_refs(&mut package_refs, options.max_package_refs)?;
                         let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
                         let src = required_attr(&e, &name, "src", &reader)?;
+                        let path = IdmlPath::new(src)?;
                         design_map
                             .other_package_srcs
-                            .entry(name)
+                            .entry(name.clone())
                             .or_default()
-                            .push(IdmlPath::new(src)?);
+                            .push(path.clone());
+                        design_map
+                            .package_refs
+                            .push(DesignMapPackageRef::resource(name, path)?);
                     }
                 }
                 Event::End(_) => {
@@ -206,6 +289,7 @@ impl DesignMap {
     pub fn validate(&self) -> Result<()> {
         validate_unique_known_ids(self)?;
         validate_unique_package_paths(self)?;
+        validate_ordered_package_refs(self)?;
         Ok(())
     }
 
@@ -249,17 +333,39 @@ impl DesignMap {
     pub fn package_resource_pointers(
         &self,
     ) -> impl Iterator<Item = PackageResourcePointer<'_>> + '_ {
-        self.other_package_srcs.iter().flat_map(|(element, paths)| {
-            paths.iter().map(|path| PackageResourcePointer {
-                element: element.as_str(),
-                path,
-            })
-        })
+        let pointers = if self.package_refs.is_empty() {
+            self.other_package_srcs
+                .iter()
+                .flat_map(|(element, paths)| {
+                    paths.iter().map(|path| PackageResourcePointer {
+                        element: element.as_str(),
+                        path,
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            self.package_refs
+                .iter()
+                .filter(|reference| is_untyped_package_element(&reference.element))
+                .map(|reference| PackageResourcePointer {
+                    element: reference.element.as_str(),
+                    path: &reference.path,
+                })
+                .collect::<Vec<_>>()
+        };
+        pointers.into_iter()
     }
 
     /// Serializes this design map into a standalone `designmap.xml` document.
     pub fn to_xml(&self) -> Result<String> {
         serialize_designmap(self)
+    }
+
+    pub(crate) fn ensure_package_refs_initialized(&mut self) {
+        if !self.package_refs.is_empty() {
+            return;
+        }
+        self.package_refs = package_refs_from_maps(self);
     }
 }
 
@@ -301,7 +407,7 @@ fn parse_package_ref(
     element: &'static str,
     reader: &Reader<&[u8]>,
     map: &mut IndexMap<String, IdmlPath>,
-) -> Result<()> {
+) -> Result<DesignMapPackageRef> {
     let src = required_attr(event, element, "src", reader)?;
     let id = id_from_package_src(&src);
     if map.contains_key(&id) {
@@ -310,8 +416,13 @@ fn parse_package_ref(
             id,
         });
     }
-    map.insert(id, IdmlPath::new(src)?);
-    Ok(())
+    let path = IdmlPath::new(src)?;
+    map.insert(id.clone(), path.clone());
+    Ok(DesignMapPackageRef {
+        element: element.to_owned(),
+        id: Some(id),
+        path,
+    })
 }
 
 fn required_attr(
@@ -363,16 +474,22 @@ fn serialize_designmap(design_map: &DesignMap) -> Result<String> {
     }
     xml.push_str(" xmlns:idPkg=\"http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging\">\n");
 
-    push_package_refs(&mut xml, "idPkg:Spread", design_map.spread_srcs.values())?;
-    push_package_refs(
-        &mut xml,
-        "idPkg:MasterSpread",
-        design_map.master_spread_srcs.values(),
-    )?;
-    push_package_refs(&mut xml, "idPkg:Story", design_map.story_srcs.values())?;
+    if design_map.package_refs.is_empty() {
+        push_package_refs(&mut xml, "idPkg:Spread", design_map.spread_srcs.values())?;
+        push_package_refs(
+            &mut xml,
+            "idPkg:MasterSpread",
+            design_map.master_spread_srcs.values(),
+        )?;
+        push_package_refs(&mut xml, "idPkg:Story", design_map.story_srcs.values())?;
 
-    for (element, srcs) in &design_map.other_package_srcs {
-        push_package_refs(&mut xml, element, srcs.iter())?;
+        for (element, srcs) in &design_map.other_package_srcs {
+            push_package_refs(&mut xml, element, srcs.iter())?;
+        }
+    } else {
+        for reference in &design_map.package_refs {
+            push_package_ref(&mut xml, &reference.element, &reference.path)?;
+        }
     }
 
     xml.push_str("</Document>\n");
@@ -421,6 +538,166 @@ fn validate_unique_package_paths(design_map: &DesignMap) -> Result<()> {
     Ok(())
 }
 
+fn validate_ordered_package_refs(design_map: &DesignMap) -> Result<()> {
+    if design_map.package_refs.is_empty() {
+        return Ok(());
+    }
+
+    let expected = expected_package_ref_keys(design_map)?;
+    if design_map.package_refs.len() != expected.len() {
+        return Err(IdmlError::InvalidReference {
+            kind: "DesignMap package order",
+            id: "package_refs".to_owned(),
+            reason: "ordered package reference count does not match package maps",
+        });
+    }
+
+    let mut actual = IndexSet::with_capacity(design_map.package_refs.len());
+    for reference in &design_map.package_refs {
+        validate_package_element_name(&reference.element)?;
+        let key = package_ref_key(reference)?;
+        if !expected.contains(&key) {
+            return Err(IdmlError::InvalidReference {
+                kind: "DesignMap package order",
+                id: reference.path.to_string(),
+                reason: "ordered package reference is not present in package maps",
+            });
+        }
+        if !actual.insert(key) {
+            return Err(IdmlError::InvalidReference {
+                kind: "DesignMap package order",
+                id: reference.path.to_string(),
+                reason: "ordered package reference is duplicated",
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn expected_package_ref_keys(design_map: &DesignMap) -> Result<IndexSet<PackageRefKey>> {
+    let mut expected = IndexSet::new();
+
+    for (id, path) in &design_map.spread_srcs {
+        expected.insert(PackageRefKey::typed("idPkg:Spread", id, path));
+    }
+    for (id, path) in &design_map.story_srcs {
+        expected.insert(PackageRefKey::typed("idPkg:Story", id, path));
+    }
+    for (id, path) in &design_map.master_spread_srcs {
+        expected.insert(PackageRefKey::typed("idPkg:MasterSpread", id, path));
+    }
+    for (element, paths) in &design_map.other_package_srcs {
+        validate_package_element_name(element)?;
+        for path in paths {
+            expected.insert(PackageRefKey::resource(element, path));
+        }
+    }
+
+    Ok(expected)
+}
+
+fn package_ref_key(reference: &DesignMapPackageRef) -> Result<PackageRefKey> {
+    match reference.element.as_str() {
+        "idPkg:Spread" | "idPkg:Story" | "idPkg:MasterSpread" => {
+            let Some(id) = &reference.id else {
+                return Err(IdmlError::InvalidReference {
+                    kind: "DesignMap package order",
+                    id: reference.path.to_string(),
+                    reason: "typed ordered package reference is missing its ID",
+                });
+            };
+            Ok(PackageRefKey::typed(
+                &reference.element,
+                id,
+                &reference.path,
+            ))
+        }
+        _ => {
+            if reference.id.is_some() {
+                return Err(IdmlError::InvalidReference {
+                    kind: "DesignMap package order",
+                    id: reference.path.to_string(),
+                    reason: "untyped ordered package reference must not carry an ID",
+                });
+            }
+            Ok(PackageRefKey::resource(&reference.element, &reference.path))
+        }
+    }
+}
+
+fn compatible_package_ref_order(left: &DesignMap, right: &DesignMap) -> bool {
+    left.package_refs.is_empty()
+        || right.package_refs.is_empty()
+        || left.package_refs == right.package_refs
+}
+
+fn package_refs_from_maps(design_map: &DesignMap) -> Vec<DesignMapPackageRef> {
+    let mut refs = Vec::with_capacity(
+        design_map.spread_srcs.len()
+            + design_map.master_spread_srcs.len()
+            + design_map.story_srcs.len()
+            + design_map
+                .other_package_srcs
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+    );
+
+    refs.extend(
+        design_map
+            .spread_srcs
+            .iter()
+            .map(|(id, path)| DesignMapPackageRef::spread(id.clone(), path.clone())),
+    );
+    refs.extend(
+        design_map
+            .master_spread_srcs
+            .iter()
+            .map(|(id, path)| DesignMapPackageRef::master_spread(id.clone(), path.clone())),
+    );
+    refs.extend(
+        design_map
+            .story_srcs
+            .iter()
+            .map(|(id, path)| DesignMapPackageRef::story(id.clone(), path.clone())),
+    );
+    for (element, paths) in &design_map.other_package_srcs {
+        refs.extend(paths.iter().map(|path| DesignMapPackageRef {
+            element: element.clone(),
+            id: None,
+            path: path.clone(),
+        }));
+    }
+
+    refs
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct PackageRefKey {
+    element: String,
+    id: Option<String>,
+    path: IdmlPath,
+}
+
+impl PackageRefKey {
+    fn typed(element: &str, id: &str, path: &IdmlPath) -> Self {
+        Self {
+            element: element.to_owned(),
+            id: Some(id.to_owned()),
+            path: path.clone(),
+        }
+    }
+
+    fn resource(element: &str, path: &IdmlPath) -> Self {
+        Self {
+            element: element.to_owned(),
+            id: None,
+            path: path.clone(),
+        }
+    }
+}
+
 fn push_package_refs<'a>(
     xml: &mut String,
     element: &str,
@@ -428,11 +705,17 @@ fn push_package_refs<'a>(
 ) -> Result<()> {
     validate_package_element_name(element)?;
     for src in srcs {
-        xml.push_str("  <");
-        xml.push_str(element);
-        push_attr(xml, element, "src", src.as_str())?;
-        xml.push_str(" />\n");
+        push_package_ref(xml, element, src)?;
     }
+    Ok(())
+}
+
+fn push_package_ref(xml: &mut String, element: &str, src: &IdmlPath) -> Result<()> {
+    validate_package_element_name(element)?;
+    xml.push_str("  <");
+    xml.push_str(element);
+    push_attr(xml, element, "src", src.as_str())?;
+    xml.push_str(" />\n");
     Ok(())
 }
 
@@ -465,6 +748,13 @@ pub(crate) fn validate_package_element_name(element: &str) -> Result<()> {
         return Err(invalid_package_element_name());
     }
     Ok(())
+}
+
+fn is_untyped_package_element(element: &str) -> bool {
+    !matches!(
+        element,
+        "idPkg:Story" | "idPkg:Spread" | "idPkg:MasterSpread"
+    )
 }
 
 fn invalid_package_element_name() -> IdmlError {
@@ -509,6 +799,30 @@ mod tests {
         assert_eq!(
             design_map.other_package_srcs["idPkg:Graphic"],
             vec![IdmlPath::new("Resources/Graphic.xml").unwrap()]
+        );
+        let ordered_refs = design_map
+            .package_refs
+            .iter()
+            .map(|reference| {
+                (
+                    reference.element.as_str(),
+                    reference.id.as_deref(),
+                    reference.path.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordered_refs,
+            [
+                ("idPkg:Spread", Some("u1"), "Spreads/Spread_u1.xml"),
+                ("idPkg:Story", Some("u2"), "Stories/Story_u2.xml"),
+                (
+                    "idPkg:MasterSpread",
+                    Some("u3"),
+                    "MasterSpreads/MasterSpread_u3.xml"
+                ),
+                ("idPkg:Graphic", None, "Resources/Graphic.xml"),
+            ]
         );
     }
 
@@ -806,6 +1120,59 @@ mod tests {
                 attribute: "Self",
                 reason: "contains an XML-forbidden character",
             } if element == "Document"
+        ));
+    }
+
+    #[test]
+    fn serializer_preserves_explicit_mixed_package_order() {
+        let design_map = DesignMap::from_xml(
+            r#"<Document>
+  <idPkg:Story src="Stories/Story_u2.xml" />
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+  <idPkg:Spread src="Spreads/Spread_u1.xml" />
+  <idPkg:MasterSpread src="MasterSpreads/MasterSpread_u3.xml" />
+</Document>"#,
+        )
+        .unwrap();
+
+        let xml = design_map.to_xml().unwrap();
+        let story = xml.find("<idPkg:Story").unwrap();
+        let graphic = xml.find("<idPkg:Graphic").unwrap();
+        let spread = xml.find("<idPkg:Spread").unwrap();
+        let master = xml.find("<idPkg:MasterSpread").unwrap();
+
+        assert!(story < graphic);
+        assert!(graphic < spread);
+        assert!(spread < master);
+        assert_eq!(
+            DesignMap::from_xml(&xml).unwrap().package_refs,
+            design_map.package_refs
+        );
+    }
+
+    #[test]
+    fn validation_rejects_stale_ordered_package_refs() {
+        let mut design_map = DesignMap::default();
+        design_map.story_srcs.insert(
+            "u1".to_owned(),
+            IdmlPath::new("Stories/Story_u1.xml").unwrap(),
+        );
+        design_map
+            .package_refs
+            .push(super::DesignMapPackageRef::story(
+                "u2",
+                IdmlPath::new("Stories/Story_u2.xml").unwrap(),
+            ));
+
+        let err = design_map.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "DesignMap package order",
+                reason: "ordered package reference is not present in package maps",
+                ..
+            }
         ));
     }
 }

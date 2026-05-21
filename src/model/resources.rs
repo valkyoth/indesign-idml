@@ -3,7 +3,7 @@
 use crate::archive::{ArchiveEntry, DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE, IdmlPath};
 use crate::encoding::{Base64Mode, decode_standard, decoded_standard_len};
 use crate::error::{IdmlError, Result};
-use crate::model::designmap::{DesignMap, validate_package_element_name};
+use crate::model::designmap::{DesignMap, PackageResourcePointer, validate_package_element_name};
 use crate::xml::{DEFAULT_MAX_XML_DEPTH, XmlDepthTracker};
 use indexmap::IndexMap;
 use quick_xml::Reader;
@@ -159,25 +159,41 @@ impl ResourceInventory {
                     .sum::<usize>(),
         );
 
-        for pointer in design_map.master_spread_pointers() {
-            resources.push(ResourceReference {
-                kind: ResourceKind::MasterSpread,
-                element: "idPkg:MasterSpread".to_owned(),
-                id: Some(pointer.id().to_owned()),
-                path: pointer.path().clone(),
-                archive: None,
-            });
-        }
+        if design_map.package_refs.is_empty() {
+            for pointer in design_map.master_spread_pointers() {
+                resources.push(ResourceReference {
+                    kind: ResourceKind::MasterSpread,
+                    element: "idPkg:MasterSpread".to_owned(),
+                    id: Some(pointer.id().to_owned()),
+                    path: pointer.path().clone(),
+                    archive: None,
+                });
+            }
 
-        for pointer in design_map.package_resource_pointers() {
-            validate_package_element_name(pointer.element())?;
-            resources.push(ResourceReference {
-                kind: ResourceKind::from_idpkg_element(pointer.element()),
-                element: pointer.element().to_owned(),
-                id: None,
-                path: pointer.path().clone(),
-                archive: None,
-            });
+            for pointer in design_map.package_resource_pointers() {
+                push_resource_pointer(&mut resources, pointer)?;
+            }
+        } else {
+            for reference in &design_map.package_refs {
+                if reference.element == "idPkg:MasterSpread" {
+                    resources.push(ResourceReference {
+                        kind: ResourceKind::MasterSpread,
+                        element: reference.element.clone(),
+                        id: reference.id.clone(),
+                        path: reference.path.clone(),
+                        archive: None,
+                    });
+                } else if !matches!(reference.element.as_str(), "idPkg:Story" | "idPkg:Spread") {
+                    validate_package_element_name(&reference.element)?;
+                    resources.push(ResourceReference {
+                        kind: ResourceKind::from_idpkg_element(&reference.element),
+                        element: reference.element.clone(),
+                        id: None,
+                        path: reference.path.clone(),
+                        archive: None,
+                    });
+                }
+            }
         }
 
         Ok(Self { resources })
@@ -242,6 +258,21 @@ impl ResourceInventory {
         }
         Ok(())
     }
+}
+
+fn push_resource_pointer(
+    resources: &mut Vec<ResourceReference>,
+    pointer: PackageResourcePointer<'_>,
+) -> Result<()> {
+    validate_package_element_name(pointer.element())?;
+    resources.push(ResourceReference {
+        kind: ResourceKind::from_idpkg_element(pointer.element()),
+        element: pointer.element().to_owned(),
+        id: None,
+        path: pointer.path().clone(),
+        archive: None,
+    });
+    Ok(())
 }
 
 /// Extracts embedded Base64 assets from `Contents` elements with secure defaults.
@@ -546,6 +577,43 @@ mod tests {
         assert_eq!(
             inventory.resources[4].kind,
             ResourceKind::Other("idPkg:Custom".to_owned())
+        );
+    }
+
+    #[test]
+    fn inventory_preserves_mixed_manifest_resource_order() {
+        let xml = r#"<Document>
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+  <idPkg:MasterSpread src="MasterSpreads/MasterSpread_u20.xml" />
+  <idPkg:Fonts src="Resources/Fonts.xml" />
+</Document>"#;
+        let design_map = DesignMap::from_xml(xml).unwrap();
+
+        let inventory = ResourceInventory::from_designmap(&design_map).unwrap();
+        let refs = inventory
+            .resources
+            .iter()
+            .map(|resource| {
+                (
+                    resource.element.as_str(),
+                    resource.id.as_deref(),
+                    resource.path.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            refs,
+            [
+                ("idPkg:Graphic", None, "Resources/Graphic.xml"),
+                (
+                    "idPkg:MasterSpread",
+                    Some("u20"),
+                    "MasterSpreads/MasterSpread_u20.xml"
+                ),
+                ("idPkg:Fonts", None, "Resources/Fonts.xml"),
+            ]
         );
     }
 

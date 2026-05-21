@@ -5,7 +5,9 @@ use crate::core::resolver::{
     ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
 };
 use crate::error::{IdmlError, Result};
-use crate::model::designmap::{DesignMap, DesignMapParseOptions, validate_package_element_name};
+use crate::model::designmap::{
+    DesignMap, DesignMapPackageRef, DesignMapParseOptions, validate_package_element_name,
+};
 use crate::model::resources::{ResourceIntegrityOptions, ResourceInventory};
 use crate::model::spread::{Rect, Spread, SpreadParseOptions};
 use crate::model::story::{Story, StoryParseOptions};
@@ -224,7 +226,11 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_optional_self_id("story", &id, story.id.as_deref())?;
 
-        self.design_map.story_srcs.insert(id.clone(), path);
+        self.design_map.ensure_package_refs_initialized();
+        self.design_map.story_srcs.insert(id.clone(), path.clone());
+        self.design_map
+            .package_refs
+            .push(DesignMapPackageRef::story(id.clone(), path));
         self.stories.insert(id, story);
         Ok(())
     }
@@ -244,7 +250,11 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_optional_self_id("spread", &id, spread.id.as_deref())?;
 
-        self.design_map.spread_srcs.insert(id.clone(), path);
+        self.design_map.ensure_package_refs_initialized();
+        self.design_map.spread_srcs.insert(id.clone(), path.clone());
+        self.design_map
+            .package_refs
+            .push(DesignMapPackageRef::spread(id.clone(), path));
         self.spreads.insert(id, spread);
         Ok(())
     }
@@ -283,7 +293,13 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_supported_preserved_compression(entry.compression)?;
 
-        self.design_map.master_spread_srcs.insert(id, path.clone());
+        self.design_map.ensure_package_refs_initialized();
+        self.design_map
+            .master_spread_srcs
+            .insert(id.clone(), path.clone());
+        self.design_map
+            .package_refs
+            .push(DesignMapPackageRef::master_spread(id, path.clone()));
         self.preserved_entries.insert(path, entry);
         Ok(())
     }
@@ -303,11 +319,15 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_supported_preserved_compression(entry.compression)?;
 
+        self.design_map.ensure_package_refs_initialized();
         self.design_map
             .other_package_srcs
-            .entry(element)
+            .entry(element.clone())
             .or_default()
             .push(path.clone());
+        self.design_map
+            .package_refs
+            .push(DesignMapPackageRef::resource(element, path.clone())?);
         self.preserved_entries.insert(path, entry);
         Ok(())
     }
