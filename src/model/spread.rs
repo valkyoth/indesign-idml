@@ -47,6 +47,9 @@ pub const DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD: usize = 200_000;
 /// Default maximum pages accepted in one spread.
 pub const DEFAULT_MAX_PAGES_PER_SPREAD: usize = 10_000;
 
+/// Default maximum raw bytes accepted for one spread XML attribute value.
+pub const DEFAULT_MAX_SPREAD_ATTRIBUTE_BYTES: usize = 256 * 1024;
+
 /// Spread parser limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SpreadParseOptions {
@@ -58,6 +61,8 @@ pub struct SpreadParseOptions {
     pub max_text_frames: usize,
     /// Maximum supported page items collected from one spread.
     pub max_page_items: usize,
+    /// Maximum raw bytes accepted for one XML attribute value.
+    pub max_attribute_bytes: usize,
     /// Maximum XML element nesting depth accepted while parsing.
     pub max_xml_depth: usize,
 }
@@ -69,6 +74,7 @@ impl Default for SpreadParseOptions {
             max_pages: DEFAULT_MAX_PAGES_PER_SPREAD,
             max_text_frames: DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD,
             max_page_items: DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD,
+            max_attribute_bytes: DEFAULT_MAX_SPREAD_ATTRIBUTE_BYTES,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
@@ -98,30 +104,36 @@ impl Spread {
                     root.enter(e.name().as_ref())?;
                     xml_depth.enter()?;
                     if e.name().as_ref() == b"Spread" && spread.id.is_none() {
-                        spread.id = optional_attr(&e, "Self", &reader)?;
+                        spread.id =
+                            optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?;
                     } else if e.name().as_ref() == b"Page" {
                         push_page_limited(
                             &mut spread.pages,
-                            Page::from_xml_event(&e, &reader)?,
+                            Page::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
                             options.max_pages,
                         )?;
                     } else if e.name().as_ref() == b"TextFrame" {
                         push_text_frame_page_item_limited(
                             &mut spread.text_frames,
                             &mut spread.page_items,
-                            TextFrame::from_xml_event(&e, &reader)?,
+                            TextFrame::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
                             options,
                             &mut page_item_count,
                         )?;
                     } else if e.name().as_ref() == b"Rectangle" {
                         push_page_item_limited(
                             &mut spread.page_items,
-                            PageItem::Rectangle(Rectangle::from_xml_event(&e, &reader)?),
+                            PageItem::Rectangle(Rectangle::from_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?),
                             &mut page_item_count,
                             options.max_page_items,
                         )?;
                     } else if e.name().as_ref() == b"Group" {
-                        let group = Group::from_xml_event(&e, &reader)?;
+                        let group =
+                            Group::from_xml_event(&e, &reader, options.max_attribute_bytes)?;
                         let group = parse_group_contents(
                             &mut reader,
                             group,
@@ -143,32 +155,41 @@ impl Spread {
                     root.visit_empty(e.name().as_ref())?;
                     xml_depth.visit_empty()?;
                     if e.name().as_ref() == b"Spread" && spread.id.is_none() {
-                        spread.id = optional_attr(&e, "Self", &reader)?;
+                        spread.id =
+                            optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?;
                     } else if e.name().as_ref() == b"Page" {
                         push_page_limited(
                             &mut spread.pages,
-                            Page::from_xml_event(&e, &reader)?,
+                            Page::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
                             options.max_pages,
                         )?;
                     } else if e.name().as_ref() == b"TextFrame" {
                         push_text_frame_page_item_limited(
                             &mut spread.text_frames,
                             &mut spread.page_items,
-                            TextFrame::from_xml_event(&e, &reader)?,
+                            TextFrame::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
                             options,
                             &mut page_item_count,
                         )?;
                     } else if e.name().as_ref() == b"Rectangle" {
                         push_page_item_limited(
                             &mut spread.page_items,
-                            PageItem::Rectangle(Rectangle::from_xml_event(&e, &reader)?),
+                            PageItem::Rectangle(Rectangle::from_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?),
                             &mut page_item_count,
                             options.max_page_items,
                         )?;
                     } else if e.name().as_ref() == b"Group" {
                         push_page_item_limited(
                             &mut spread.page_items,
-                            PageItem::Group(Group::from_xml_event(&e, &reader)?),
+                            PageItem::Group(Group::from_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?),
                             &mut page_item_count,
                             options.max_page_items,
                         )?;
@@ -242,11 +263,16 @@ pub struct Page {
 }
 
 impl Page {
-    fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
-        let id = optional_attr(event, "Self", reader)?;
-        let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
-            .map(|value| parse_geometric_bounds("Page", &value))
-            .transpose()?;
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
+        let geometric_bounds =
+            optional_attr(event, "GeometricBounds", reader, max_attribute_bytes)?
+                .map(|value| parse_geometric_bounds("Page", &value))
+                .transpose()?;
 
         Ok(Self {
             id,
@@ -280,12 +306,17 @@ pub struct Rectangle {
 }
 
 impl Rectangle {
-    fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
-        let id = optional_attr(event, "Self", reader)?;
-        let layer_id = optional_attr(event, "ItemLayer", reader)?;
-        let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
-            .map(|value| parse_geometric_bounds("Rectangle", &value))
-            .transpose()?;
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
+        let layer_id = optional_attr(event, "ItemLayer", reader, max_attribute_bytes)?;
+        let geometric_bounds =
+            optional_attr(event, "GeometricBounds", reader, max_attribute_bytes)?
+                .map(|value| parse_geometric_bounds("Rectangle", &value))
+                .transpose()?;
 
         Ok(Self {
             id,
@@ -309,12 +340,17 @@ pub struct Group {
 }
 
 impl Group {
-    fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
-        let id = optional_attr(event, "Self", reader)?;
-        let layer_id = optional_attr(event, "ItemLayer", reader)?;
-        let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
-            .map(|value| parse_geometric_bounds("Group", &value))
-            .transpose()?;
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
+        let layer_id = optional_attr(event, "ItemLayer", reader, max_attribute_bytes)?;
+        let geometric_bounds =
+            optional_attr(event, "GeometricBounds", reader, max_attribute_bytes)?
+                .map(|value| parse_geometric_bounds("Group", &value))
+                .transpose()?;
 
         Ok(Self {
             id,
@@ -337,13 +373,18 @@ pub enum PageItem {
 }
 
 impl TextFrame {
-    fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
-        let id = optional_attr(event, "Self", reader)?;
-        let layer_id = optional_attr(event, "ItemLayer", reader)?;
-        let parent_story = optional_attr(event, "ParentStory", reader)?;
-        let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
-            .map(|value| parse_geometric_bounds("TextFrame", &value))
-            .transpose()?;
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
+        let layer_id = optional_attr(event, "ItemLayer", reader, max_attribute_bytes)?;
+        let parent_story = optional_attr(event, "ParentStory", reader, max_attribute_bytes)?;
+        let geometric_bounds =
+            optional_attr(event, "GeometricBounds", reader, max_attribute_bytes)?
+                .map(|value| parse_geometric_bounds("TextFrame", &value))
+                .transpose()?;
 
         Ok(Self {
             id,
@@ -437,6 +478,7 @@ fn optional_attr(
     event: &BytesStart<'_>,
     attribute: &'static str,
     reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
 ) -> Result<Option<String>> {
     let mut value = None;
     for attr in event.attributes() {
@@ -449,6 +491,7 @@ fn optional_attr(
                     reason: "duplicate attribute",
                 });
             }
+            enforce_spread_attribute_bytes(attr.value.len(), max_attribute_bytes)?;
             let decoded = attr
                 .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
                 .into_owned();
@@ -461,6 +504,17 @@ fn optional_attr(
         }
     }
     Ok(value)
+}
+
+fn enforce_spread_attribute_bytes(actual: usize, max_attribute_bytes: usize) -> Result<()> {
+    if actual > max_attribute_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what: "Spread XML attribute bytes",
+            limit: max_attribute_bytes as u64,
+            actual: actual as u64,
+        });
+    }
+    Ok(())
 }
 
 fn parse_geometric_bounds(element: &'static str, value: &str) -> Result<Rect> {
@@ -593,19 +647,23 @@ fn parse_group_contents(
                     push_text_frame_page_item_limited(
                         text_frames,
                         &mut group.page_items,
-                        TextFrame::from_xml_event(&e, reader)?,
+                        TextFrame::from_xml_event(&e, reader, options.max_attribute_bytes)?,
                         options,
                         page_item_count,
                     )?;
                 } else if e.name().as_ref() == b"Rectangle" {
                     push_page_item_limited(
                         &mut group.page_items,
-                        PageItem::Rectangle(Rectangle::from_xml_event(&e, reader)?),
+                        PageItem::Rectangle(Rectangle::from_xml_event(
+                            &e,
+                            reader,
+                            options.max_attribute_bytes,
+                        )?),
                         page_item_count,
                         options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"Group" {
-                    let child = Group::from_xml_event(&e, reader)?;
+                    let child = Group::from_xml_event(&e, reader, options.max_attribute_bytes)?;
                     let child = parse_group_contents(
                         reader,
                         child,
@@ -630,21 +688,29 @@ fn parse_group_contents(
                     push_text_frame_page_item_limited(
                         text_frames,
                         &mut group.page_items,
-                        TextFrame::from_xml_event(&e, reader)?,
+                        TextFrame::from_xml_event(&e, reader, options.max_attribute_bytes)?,
                         options,
                         page_item_count,
                     )?;
                 } else if e.name().as_ref() == b"Rectangle" {
                     push_page_item_limited(
                         &mut group.page_items,
-                        PageItem::Rectangle(Rectangle::from_xml_event(&e, reader)?),
+                        PageItem::Rectangle(Rectangle::from_xml_event(
+                            &e,
+                            reader,
+                            options.max_attribute_bytes,
+                        )?),
                         page_item_count,
                         options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"Group" {
                     push_page_item_limited(
                         &mut group.page_items,
-                        PageItem::Group(Group::from_xml_event(&e, reader)?),
+                        PageItem::Group(Group::from_xml_event(
+                            &e,
+                            reader,
+                            options.max_attribute_bytes,
+                        )?),
                         page_item_count,
                         options.max_page_items,
                     )?;
@@ -1417,6 +1483,27 @@ mod tests {
                 what: "spread page item count",
                 limit: 2,
                 actual: 3,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_attribute_byte_limit_before_decoding() {
+        let err = Spread::from_xml_with_options(
+            r#"<Spread><TextFrame Self="tf1234" /></Spread>"#,
+            SpreadParseOptions {
+                max_attribute_bytes: 5,
+                ..SpreadParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "Spread XML attribute bytes",
+                limit: 5,
+                actual: 6,
             }
         ));
     }

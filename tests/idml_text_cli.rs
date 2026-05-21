@@ -386,6 +386,26 @@ fn idml_text_enforces_spread_text_frame_limit() {
         .stderr("idml-text: limit exceeded for spread text frame count: limit 1, actual 2\n");
 }
 
+#[test]
+fn idml_text_enforces_spread_attribute_byte_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--spread-id")
+        .arg("u10")
+        .arg("--max-spread-attribute-bytes")
+        .arg("2")
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for Spread XML attribute bytes: limit 2, actual 3\n");
+}
+
 fn sample_idml() -> Vec<u8> {
     let mut buffer = Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(&mut buffer);

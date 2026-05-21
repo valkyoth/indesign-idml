@@ -15,6 +15,7 @@ fuzz_target!(|data: &[u8]| {
             max_pages: 128,
             max_text_frames: 1024,
             max_page_items: 2048,
+            max_attribute_bytes: 4096,
             max_xml_depth: 256,
         },
     );
