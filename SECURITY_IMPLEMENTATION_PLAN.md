@@ -60,6 +60,8 @@ Hard rules:
   confusion.
 - Top-level XML parsers reject missing, wrong, or repeated root elements before
   interpreting recognized child tags as a valid model.
+- Resource XML extractors reject missing roots, repeated roots, and non-whitespace
+  data outside the document root.
 - Non-whitespace character data, CDATA, and entity references outside the root
   element are rejected instead of being ignored.
 - EOF before closing the root or a nested Group is rejected as malformed XML

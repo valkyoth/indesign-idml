@@ -5,8 +5,8 @@ use crate::encoding::{Base64Mode, decode_standard, decoded_standard_len};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, PackageResourcePointer, validate_package_element_name};
 use crate::xml::{
-    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, configure_idml_reader,
-    enforce_xml_input_bytes, reject_xml_doctype, validate_xml_attribute,
+    AnyRootTracker, DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker,
+    configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype, validate_xml_attribute,
 };
 use indexmap::IndexMap;
 use quick_xml::Reader;
@@ -378,10 +378,12 @@ pub fn extract_embedded_assets_with_options(
     let mut source_element = String::new();
     let mut encoded = String::new();
     let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "embedded asset XML depth");
+    let mut root = AnyRootTracker::default();
 
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
+                root.enter(e.name().as_ref())?;
                 xml_depth.enter()?;
                 if is_contents_element(&e) {
                     if contents_depth == 0 {
@@ -392,6 +394,7 @@ pub fn extract_embedded_assets_with_options(
                 }
             }
             Event::Empty(e) => {
+                root.visit_empty(e.name().as_ref())?;
                 xml_depth.visit_empty()?;
                 if is_contents_element(&e) {
                     let bytes =
@@ -425,23 +428,34 @@ pub fn extract_embedded_assets_with_options(
                     encoded.clear();
                 }
                 xml_depth.exit();
+                root.exit();
             }
             Event::End(_) => {
                 xml_depth.exit();
+                root.exit();
             }
-            Event::Text(e) if contents_depth > 0 => {
-                push_encoded_limited(
-                    &mut encoded,
-                    e.decode()?.as_ref(),
-                    options.max_encoded_bytes,
-                )?;
+            Event::Text(e) => {
+                root.visit_text(e.as_ref())?;
+                if contents_depth > 0 {
+                    push_encoded_limited(
+                        &mut encoded,
+                        e.decode()?.as_ref(),
+                        options.max_encoded_bytes,
+                    )?;
+                }
             }
-            Event::CData(e) if contents_depth > 0 => {
-                push_encoded_limited(
-                    &mut encoded,
-                    e.xml_content(XmlVersion::Implicit1_0)?.as_ref(),
-                    options.max_encoded_bytes,
-                )?;
+            Event::CData(e) => {
+                root.visit_cdata()?;
+                if contents_depth > 0 {
+                    push_encoded_limited(
+                        &mut encoded,
+                        e.xml_content(XmlVersion::Implicit1_0)?.as_ref(),
+                        options.max_encoded_bytes,
+                    )?;
+                }
+            }
+            Event::GeneralRef(_) => {
+                root.visit_reference()?;
             }
             Event::DocType(_) => reject_xml_doctype()?,
             Event::Eof => break,
@@ -456,6 +470,7 @@ pub fn extract_embedded_assets_with_options(
         });
     }
     xml_depth.finish()?;
+    root.finish()?;
     Ok(assets)
 }
 
@@ -481,19 +496,32 @@ pub fn extract_resource_items_with_options(
 
     let mut items = Vec::new();
     let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "resource item XML depth");
+    let mut root = AnyRootTracker::default();
 
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
+                root.enter(e.name().as_ref())?;
                 xml_depth.enter()?;
                 maybe_push_resource_item(&mut items, &e, &reader, &kind, options)?;
             }
             Event::Empty(e) => {
+                root.visit_empty(e.name().as_ref())?;
                 xml_depth.visit_empty()?;
                 maybe_push_resource_item(&mut items, &e, &reader, &kind, options)?;
             }
             Event::End(_) => {
                 xml_depth.exit();
+                root.exit();
+            }
+            Event::Text(e) => {
+                root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                root.visit_reference()?;
             }
             Event::DocType(_) => reject_xml_doctype()?,
             Event::Eof => break,
@@ -502,6 +530,7 @@ pub fn extract_resource_items_with_options(
     }
 
     xml_depth.finish()?;
+    root.finish()?;
     validate_unique_resource_item_ids(&items)?;
     Ok(items)
 }
@@ -1261,6 +1290,53 @@ mod tests {
     }
 
     #[test]
+    fn resource_item_parser_rejects_missing_root() {
+        let err = extract_resource_items("   \n\t", ResourceKind::Styles).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "missing root element",
+            } if element.is_empty()
+        ));
+    }
+
+    #[test]
+    fn resource_item_parser_rejects_multiple_roots() {
+        let err = extract_resource_items(
+            r#"<Styles /><Styles><ParagraphStyle Self="p1" /></Styles>"#,
+            ResourceKind::Styles,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "multiple root elements",
+            } if element == "Styles"
+        ));
+    }
+
+    #[test]
+    fn resource_item_parser_rejects_trailing_root_text() {
+        let err = extract_resource_items(
+            r#"<Styles><ParagraphStyle Self="p1" /></Styles>tail"#,
+            ResourceKind::Styles,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "non-whitespace character data outside root element",
+            } if element == "#text"
+        ));
+    }
+
+    #[test]
     fn resource_item_parser_rejects_malformed_comments() {
         let err = extract_resource_items(
             r#"<Styles><!-- invalid -- comment --><ParagraphStyle Self="p1" /></Styles>"#,
@@ -1796,6 +1872,47 @@ mod tests {
                 element,
                 reason: "unclosed Contents element",
             } if element == "Contents"
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_rejects_missing_root() {
+        let err = extract_embedded_assets("   \n\t").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "missing root element",
+            } if element.is_empty()
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_rejects_multiple_roots() {
+        let err = extract_embedded_assets("<Image /><Image><Contents>aGk=</Contents></Image>")
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "multiple root elements",
+            } if element == "Image"
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_rejects_trailing_root_text() {
+        let err =
+            extract_embedded_assets("<Image><Contents>aGk=</Contents></Image>tail").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "non-whitespace character data outside root element",
+            } if element == "#text"
         ));
     }
 

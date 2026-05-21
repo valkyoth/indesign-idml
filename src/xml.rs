@@ -142,6 +142,100 @@ impl RootElementTracker {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AnyRootTracker {
+    root_name: Option<String>,
+    depth: usize,
+    closed: bool,
+}
+
+impl AnyRootTracker {
+    pub(crate) fn enter(&mut self, name: &[u8]) -> Result<()> {
+        if self.closed {
+            return Err(invalid_element(name, "multiple root elements"));
+        }
+        if self.root_name.is_none() {
+            self.root_name = Some(String::from_utf8_lossy(name).into_owned());
+        }
+        self.depth = self
+            .depth
+            .checked_add(1)
+            .ok_or_else(|| IdmlError::InvalidElement {
+                element: String::from_utf8_lossy(name).into_owned(),
+                reason: "root depth overflow",
+            })?;
+        Ok(())
+    }
+
+    pub(crate) fn visit_empty(&mut self, name: &[u8]) -> Result<()> {
+        if self.closed {
+            return Err(invalid_element(name, "multiple root elements"));
+        }
+        if self.root_name.is_none() {
+            self.root_name = Some(String::from_utf8_lossy(name).into_owned());
+            self.closed = true;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn exit(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+        if self.root_name.is_some() && self.depth == 0 {
+            self.closed = true;
+        }
+    }
+
+    pub(crate) fn visit_text(&self, text: &[u8]) -> Result<()> {
+        if self.is_outside_root() && !is_xml_space(text) {
+            return Err(IdmlError::InvalidElement {
+                element: "#text".to_owned(),
+                reason: "non-whitespace character data outside root element",
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn visit_cdata(&self) -> Result<()> {
+        if self.is_outside_root() {
+            return Err(IdmlError::InvalidElement {
+                element: "#cdata".to_owned(),
+                reason: "CDATA outside root element",
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn visit_reference(&self) -> Result<()> {
+        if self.is_outside_root() {
+            return Err(IdmlError::InvalidElement {
+                element: "#reference".to_owned(),
+                reason: "entity reference outside root element",
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> Result<()> {
+        let Some(root_name) = self.root_name else {
+            return Err(IdmlError::InvalidElement {
+                element: String::new(),
+                reason: "missing root element",
+            });
+        };
+        if !self.closed {
+            return Err(IdmlError::InvalidElement {
+                element: root_name,
+                reason: "unclosed root element",
+            });
+        }
+        Ok(())
+    }
+
+    fn is_outside_root(&self) -> bool {
+        self.root_name.is_none() || self.closed
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct XmlDepthTracker {
     current: usize,
@@ -253,4 +347,11 @@ fn is_xml_space(bytes: &[u8]) -> bool {
     bytes
         .iter()
         .all(|byte| matches!(byte, b'\t' | b'\n' | b'\r' | b' '))
+}
+
+fn invalid_element(name: &[u8], reason: &'static str) -> IdmlError {
+    IdmlError::InvalidElement {
+        element: String::from_utf8_lossy(name).into_owned(),
+        reason,
+    }
 }
