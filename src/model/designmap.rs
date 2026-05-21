@@ -5,7 +5,7 @@ use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
     DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
-    configure_idml_reader, enforce_xml_input_bytes, validate_xml_attribute,
+    configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype, validate_xml_attribute,
 };
 use indexmap::{IndexMap, IndexSet};
 use quick_xml::Reader;
@@ -346,6 +346,7 @@ impl DesignMap {
                 Event::GeneralRef(_) => {
                     root.visit_reference()?;
                 }
+                Event::DocType(_) => reject_xml_doctype()?,
                 Event::Eof => break,
                 _ => {}
             }

@@ -4,7 +4,8 @@ use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
     DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
-    configure_idml_reader, enforce_xml_input_bytes, validate_xml_attribute, validate_xml_text,
+    configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype, validate_xml_attribute,
+    validate_xml_text,
 };
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -129,6 +130,7 @@ impl Story {
                         push_limited(&mut text, "\t", options.max_text_bytes)?;
                     }
                 }
+                Event::DocType(_) => reject_xml_doctype()?,
                 Event::Eof => break,
                 _ => {}
             }
@@ -366,6 +368,20 @@ mod tests {
         let err = Story::from_xml("<Story><Content>x</Story></Content>").unwrap_err();
 
         assert!(matches!(err, IdmlError::Xml(_)));
+    }
+
+    #[test]
+    fn rejects_xml_doctype_declarations() {
+        let err =
+            Story::from_xml("<!DOCTYPE Story><Story><Content>x</Content></Story>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "DOCTYPE declarations are not supported",
+            } if element == "!DOCTYPE"
+        ));
     }
 
     #[test]

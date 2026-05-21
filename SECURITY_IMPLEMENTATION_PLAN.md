@@ -68,6 +68,8 @@ Hard rules:
   elements, including partial embedded `Contents` payloads.
 - XML readers are centrally configured to keep end-tag name validation enabled
   and reject malformed comments instead of silently skipping invalid XML.
+- `DOCTYPE` declarations are rejected by IDML XML parsers to keep DTD/entity
+  processing out of the trusted parse surface.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.

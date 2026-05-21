@@ -13,6 +13,13 @@ pub(crate) fn configure_idml_reader(reader: &mut Reader<&[u8]>, trim_text: bool)
     config.check_end_names = true;
 }
 
+pub(crate) fn reject_xml_doctype() -> Result<()> {
+    Err(IdmlError::InvalidElement {
+        element: "!DOCTYPE".to_owned(),
+        reason: "DOCTYPE declarations are not supported",
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RootElementTracker {
     expected_name: &'static [u8],

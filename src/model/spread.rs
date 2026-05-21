@@ -5,7 +5,7 @@ use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
     DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
-    configure_idml_reader, enforce_xml_input_bytes, validate_xml_attribute,
+    configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype, validate_xml_attribute,
 };
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -186,6 +186,7 @@ impl Spread {
                 Event::GeneralRef(_) => {
                     root.visit_reference()?;
                 }
+                Event::DocType(_) => reject_xml_doctype()?,
                 Event::Eof => break,
                 _ => {}
             }
@@ -663,6 +664,7 @@ fn parse_group_contents(
             Event::GeneralRef(_) => {
                 root.visit_reference()?;
             }
+            Event::DocType(_) => reject_xml_doctype()?,
             Event::Eof => {
                 return Err(IdmlError::InvalidElement {
                     element: "Group".to_owned(),
