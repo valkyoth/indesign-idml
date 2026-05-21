@@ -226,6 +226,8 @@ impl Page {
 pub struct TextFrame {
     /// Text frame `Self` identifier, when present.
     pub id: Option<String>,
+    /// Layer ID from `ItemLayer`, when present.
+    pub layer_id: Option<String>,
     /// Linked story ID from `ParentStory`, when present.
     pub parent_story: Option<String>,
     /// Geometric bounds in points, when represented directly.
@@ -237,6 +239,8 @@ pub struct TextFrame {
 pub struct Rectangle {
     /// Rectangle `Self` identifier, when present.
     pub id: Option<String>,
+    /// Layer ID from `ItemLayer`, when present.
+    pub layer_id: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
 }
@@ -244,12 +248,14 @@ pub struct Rectangle {
 impl Rectangle {
     fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
         let id = optional_attr(event, "Self", reader)?;
+        let layer_id = optional_attr(event, "ItemLayer", reader)?;
         let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
             .map(|value| parse_geometric_bounds("Rectangle", &value))
             .transpose()?;
 
         Ok(Self {
             id,
+            layer_id,
             geometric_bounds,
         })
     }
@@ -260,6 +266,8 @@ impl Rectangle {
 pub struct Group {
     /// Group `Self` identifier, when present.
     pub id: Option<String>,
+    /// Layer ID from `ItemLayer`, when present.
+    pub layer_id: Option<String>,
     /// Group geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
     /// Child page items in XML order.
@@ -269,12 +277,14 @@ pub struct Group {
 impl Group {
     fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
         let id = optional_attr(event, "Self", reader)?;
+        let layer_id = optional_attr(event, "ItemLayer", reader)?;
         let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
             .map(|value| parse_geometric_bounds("Group", &value))
             .transpose()?;
 
         Ok(Self {
             id,
+            layer_id,
             geometric_bounds,
             page_items: Vec::new(),
         })
@@ -295,6 +305,7 @@ pub enum PageItem {
 impl TextFrame {
     fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
         let id = optional_attr(event, "Self", reader)?;
+        let layer_id = optional_attr(event, "ItemLayer", reader)?;
         let parent_story = optional_attr(event, "ParentStory", reader)?;
         let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
             .map(|value| parse_geometric_bounds("TextFrame", &value))
@@ -302,6 +313,7 @@ impl TextFrame {
 
         Ok(Self {
             id,
+            layer_id,
             parent_story,
             geometric_bounds,
         })
@@ -721,6 +733,9 @@ fn serialize_text_frame_with_indent(
     if let Some(id) = &frame.id {
         push_attr(xml, "TextFrame", "Self", id)?;
     }
+    if let Some(layer_id) = &frame.layer_id {
+        push_attr(xml, "TextFrame", "ItemLayer", layer_id)?;
+    }
     if let Some(parent_story) = &frame.parent_story {
         push_attr(xml, "TextFrame", "ParentStory", parent_story)?;
     }
@@ -742,6 +757,9 @@ fn serialize_rectangle_with_indent(
     if let Some(id) = &rectangle.id {
         push_attr(xml, "Rectangle", "Self", id)?;
     }
+    if let Some(layer_id) = &rectangle.layer_id {
+        push_attr(xml, "Rectangle", "ItemLayer", layer_id)?;
+    }
     if let Some(bounds) = rectangle.geometric_bounds {
         let bounds = format_geometric_bounds("Rectangle", bounds)?;
         push_attr(xml, "Rectangle", "GeometricBounds", &bounds)?;
@@ -755,6 +773,9 @@ fn serialize_group(xml: &mut String, group: &Group, indent: usize) -> Result<()>
     xml.push_str("<Group");
     if let Some(id) = &group.id {
         push_attr(xml, "Group", "Self", id)?;
+    }
+    if let Some(layer_id) = &group.layer_id {
+        push_attr(xml, "Group", "ItemLayer", layer_id)?;
     }
     if let Some(bounds) = group.geometric_bounds {
         let bounds = format_geometric_bounds("Group", bounds)?;
@@ -892,7 +913,8 @@ mod tests {
             &spread.page_items[0],
             PageItem::Rectangle(Rectangle {
                 id,
-                geometric_bounds: Some(_)
+                geometric_bounds: Some(_),
+                ..
             }) if id.as_deref() == Some("r1")
         ));
         assert!(matches!(
@@ -903,7 +925,8 @@ mod tests {
             &spread.page_items[2],
             PageItem::Rectangle(Rectangle {
                 id,
-                geometric_bounds: None
+                geometric_bounds: None,
+                ..
             }) if id.as_deref() == Some("r2")
         ));
     }
@@ -933,6 +956,7 @@ mod tests {
                 id,
                 geometric_bounds: Some(_),
                 page_items,
+                ..
             }) if id.as_deref() == Some("g1") && page_items.len() == 2
         ));
 
@@ -947,6 +971,35 @@ mod tests {
             &group.page_items[1],
             PageItem::Group(Group { id, page_items, .. })
                 if id.as_deref() == Some("g2") && page_items.len() == 2
+        ));
+    }
+
+    #[test]
+    fn parses_item_layer_references_on_page_items() {
+        let xml = r#"<Spread Self="u10">
+  <TextFrame Self="tf1" ItemLayer="layer1" ParentStory="u2" />
+  <Rectangle Self="r1" ItemLayer="layer2" />
+  <Group Self="g1" ItemLayer="layer3">
+    <TextFrame Self="tf2" ItemLayer="layer3" ParentStory="u3" />
+  </Group>
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.text_frames[0].layer_id.as_deref(), Some("layer1"));
+        assert!(matches!(
+            &spread.page_items[1],
+            PageItem::Rectangle(Rectangle { layer_id, .. })
+                if layer_id.as_deref() == Some("layer2")
+        ));
+        let PageItem::Group(group) = &spread.page_items[2] else {
+            panic!("expected group page item");
+        };
+        assert_eq!(group.layer_id.as_deref(), Some("layer3"));
+        assert!(matches!(
+            &group.page_items[0],
+            PageItem::TextFrame(TextFrame { layer_id, .. })
+                if layer_id.as_deref() == Some("layer3")
         ));
     }
 
@@ -1134,6 +1187,7 @@ mod tests {
             pages: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf&1".to_owned()),
+                layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: Some(Rect::new(
                     Points::new(0.0),
@@ -1158,6 +1212,7 @@ mod tests {
     fn serializer_writes_pages_before_page_items() {
         let text_frame = TextFrame {
             id: Some("tf1".to_owned()),
+            layer_id: None,
             parent_story: Some("u2".to_owned()),
             geometric_bounds: None,
         };
@@ -1190,6 +1245,7 @@ mod tests {
     fn serializer_preserves_page_item_order() {
         let text_frame = TextFrame {
             id: Some("tf1".to_owned()),
+            layer_id: None,
             parent_story: Some("u2".to_owned()),
             geometric_bounds: Some(Rect::new(
                 Points::new(72.0),
@@ -1205,6 +1261,7 @@ mod tests {
             page_items: vec![
                 PageItem::Rectangle(Rectangle {
                     id: Some("r1".to_owned()),
+                    layer_id: None,
                     geometric_bounds: Some(Rect::new(
                         Points::new(0.0),
                         Points::new(0.0),
@@ -1230,6 +1287,7 @@ mod tests {
     fn serializes_group_page_items_and_round_trips() {
         let text_frame = TextFrame {
             id: Some("tf1".to_owned()),
+            layer_id: None,
             parent_story: Some("u2".to_owned()),
             geometric_bounds: None,
         };
@@ -1239,6 +1297,7 @@ mod tests {
             text_frames: vec![text_frame.clone()],
             page_items: vec![PageItem::Group(Group {
                 id: Some("g1".to_owned()),
+                layer_id: None,
                 geometric_bounds: Some(Rect::new(
                     Points::new(0.0),
                     Points::new(0.0),
@@ -1248,6 +1307,7 @@ mod tests {
                 page_items: vec![
                     PageItem::Rectangle(Rectangle {
                         id: Some("r1".to_owned()),
+                        layer_id: None,
                         geometric_bounds: None,
                     }),
                     PageItem::TextFrame(text_frame),
@@ -1267,17 +1327,56 @@ mod tests {
     }
 
     #[test]
+    fn serializes_item_layer_references_and_round_trips() {
+        let text_frame = TextFrame {
+            id: Some("tf1".to_owned()),
+            layer_id: Some("layer1".to_owned()),
+            parent_story: Some("u2".to_owned()),
+            geometric_bounds: None,
+        };
+        let spread = Spread {
+            id: Some("u10".to_owned()),
+            pages: Vec::new(),
+            text_frames: vec![text_frame.clone()],
+            page_items: vec![
+                PageItem::TextFrame(text_frame),
+                PageItem::Rectangle(Rectangle {
+                    id: Some("r1".to_owned()),
+                    layer_id: Some("layer2".to_owned()),
+                    geometric_bounds: None,
+                }),
+                PageItem::Group(Group {
+                    id: Some("g1".to_owned()),
+                    layer_id: Some("layer3".to_owned()),
+                    geometric_bounds: None,
+                    page_items: Vec::new(),
+                }),
+            ],
+        };
+
+        let xml = spread.to_xml().unwrap();
+        let parsed = Spread::from_xml(&xml).unwrap();
+
+        assert!(xml.contains("ItemLayer=\"layer1\""));
+        assert!(xml.contains("ItemLayer=\"layer2\""));
+        assert!(xml.contains("ItemLayer=\"layer3\""));
+        assert_eq!(parsed, spread);
+    }
+
+    #[test]
     fn serializer_rejects_stale_page_item_index() {
         let spread = Spread {
             id: Some("u10".to_owned()),
             pages: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
+                layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
             }],
             page_items: vec![PageItem::TextFrame(TextFrame {
                 id: Some("tf2".to_owned()),
+                layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
             })],
@@ -1302,6 +1401,7 @@ mod tests {
             pages: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
+                layer_id: None,
                 parent_story: Some("u1".to_owned()),
                 geometric_bounds: Some(Rect::new(
                     Points::new(0.0),
@@ -1332,6 +1432,7 @@ mod tests {
             pages: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf\u{0}".to_owned()),
+                layer_id: None,
                 parent_story: Some("u1".to_owned()),
                 geometric_bounds: None,
             }],

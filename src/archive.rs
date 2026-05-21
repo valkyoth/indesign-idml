@@ -1955,6 +1955,7 @@ mod tests {
             pages: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
+                layer_id: None,
                 parent_story: Some("u1".to_owned()),
                 geometric_bounds: Some(Rect::new(
                     Points::new(0.0),
