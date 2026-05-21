@@ -507,9 +507,7 @@ where
         options: ResourceItemParseOptions,
     ) -> Result<Vec<ResourceItem>> {
         let kind = ResourceKind::from_reference(pointer.element(), pointer.path());
-        let items = self.read_resource_items_with_options(pointer.path(), kind, options)?;
-        validate_resource_items(pointer, &items)?;
-        Ok(items)
+        self.read_resource_items_with_options(pointer.path(), kind, options)
     }
 
     /// Resolves a story ID through a parsed design map and parses that story.
@@ -853,23 +851,6 @@ fn deterministic_file_options(compression: CompressionMethod) -> SimpleFileOptio
     SimpleFileOptions::default()
         .compression_method(compression)
         .last_modified_time(zip::DateTime::DEFAULT)
-}
-
-fn validate_resource_items(
-    pointer: PackageResourcePointer<'_>,
-    items: &[ResourceItem],
-) -> Result<()> {
-    ResourceItemGroup {
-        resource: crate::model::resources::ResourceReference {
-            kind: ResourceKind::from_reference(pointer.element(), pointer.path()),
-            element: pointer.element().to_owned(),
-            id: None,
-            path: pointer.path().clone(),
-            archive: None,
-        },
-        items: items.to_vec(),
-    }
-    .validate()
 }
 
 fn validate_mimetype_entry<R>(

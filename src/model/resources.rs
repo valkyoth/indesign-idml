@@ -471,6 +471,7 @@ pub fn extract_resource_items_with_options(
         }
     }
 
+    validate_unique_resource_item_ids(&items)?;
     Ok(items)
 }
 
@@ -1136,6 +1137,23 @@ mod tests {
                 limit: 2,
                 actual: 3,
             }
+        ));
+    }
+
+    #[test]
+    fn resource_item_parser_rejects_duplicate_ids() {
+        let err = extract_resource_items(
+            r#"<Styles><ParagraphStyle Self="p1" /><CharacterStyle Self="p1" /></Styles>"#,
+            ResourceKind::Styles,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "resource item",
+                id,
+            } if id == "p1"
         ));
     }
 
