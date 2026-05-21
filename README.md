@@ -28,6 +28,16 @@ For loss-aware workflows, `IdmlDocument::try_for_each_preserved_entry` exposes
 master spreads and untyped resource entries in manifest order without requiring
 callers to depend on internal map ordering.
 
+## Examples
+
+The release gate compiles and runs the public examples:
+
+```sh
+cargo run --example read_text
+cargo run --example build_basic
+cargo run --example edit_story
+```
+
 ## CLI
 
 The crate includes an optional companion binary, `idml-text`, behind the `cli`
