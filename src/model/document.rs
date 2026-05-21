@@ -458,7 +458,7 @@ impl IdmlDocument {
         spread_id: &str,
     ) -> Result<Vec<ResolvedTextFrameData>> {
         let spread = self.spread(spread_id)?;
-        let story_texts = self.story_texts()?;
+        let story_texts = self.story_texts_for_spread(spread)?;
         Ok(to_owned_records(resolve_text_frames(spread, &story_texts)?))
     }
 
@@ -469,7 +469,7 @@ impl IdmlDocument {
         query: Rect,
     ) -> Result<Vec<ResolvedTextFrameData>> {
         let spread = self.spread(spread_id)?;
-        let story_texts = self.story_texts()?;
+        let story_texts = self.story_texts_for_spread(spread)?;
         let resolved = resolve_text_frames(spread, &story_texts)?;
         Ok(to_owned_records(text_frames_intersecting(resolved, query)))
     }
@@ -481,7 +481,7 @@ impl IdmlDocument {
         page_id: &str,
     ) -> Result<Vec<ResolvedTextFrameData>> {
         let spread = self.spread(spread_id)?;
-        let story_texts = self.story_texts()?;
+        let story_texts = self.story_texts_for_spread(spread)?;
         let resolved = resolve_text_frames(spread, &story_texts)?;
         let page = page_by_id(spread, page_id)?;
         Ok(to_owned_records(text_frames_on_page(resolved, page)?))
@@ -545,6 +545,35 @@ impl IdmlDocument {
                 kind: "spread model",
                 id: spread_id.to_owned(),
             })
+    }
+
+    fn story_texts_for_spread(&self, spread: &Spread) -> Result<IndexMap<String, String>> {
+        let mut texts = IndexMap::new();
+
+        for frame in &spread.text_frames {
+            let Some(story_id) = frame.parent_story.as_deref() else {
+                continue;
+            };
+            if texts.contains_key(story_id) {
+                continue;
+            }
+            if !self.design_map.story_srcs.contains_key(story_id) {
+                return Err(IdmlError::MissingReference {
+                    kind: "text frame parent story",
+                    id: story_id.to_owned(),
+                });
+            }
+            let story = self
+                .stories
+                .get(story_id)
+                .ok_or_else(|| IdmlError::MissingReference {
+                    kind: "story model",
+                    id: story_id.to_owned(),
+                })?;
+            texts.insert(story_id.to_owned(), story.text.clone());
+        }
+
+        Ok(texts)
     }
 
     fn validate_story_ids(&self) -> Result<()> {
@@ -1707,6 +1736,37 @@ mod tests {
         assert_eq!(resolved[0].frame_id.as_deref(), Some("tf1"));
         assert_eq!(resolved[0].story_id, "u1");
         assert_eq!(resolved[0].text, "Generated");
+    }
+
+    #[test]
+    fn resolving_spread_text_only_requires_stories_used_by_that_spread() {
+        let mut document = make_document();
+        document.design_map.story_srcs.insert(
+            "unused".to_owned(),
+            IdmlPath::new("Stories/Story_unused.xml").unwrap(),
+        );
+
+        let resolved = document.resolve_spread_text_frames("u10").unwrap();
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].story_id, "u1");
+        assert_eq!(resolved[0].text, "Generated");
+    }
+
+    #[test]
+    fn resolving_spread_text_reports_missing_required_story_model() {
+        let mut document = make_document();
+        document.stories.shift_remove("u1");
+
+        let err = document.resolve_spread_text_frames("u10").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingReference {
+                kind: "story model",
+                id,
+            } if id == "u1"
+        ));
     }
 
     #[test]
