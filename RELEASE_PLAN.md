@@ -18,7 +18,7 @@ Every release candidate must pass:
 - dependency review against current crates.io versions
 
 Published releases must not depend on unpublished path crates. `base64-ng` is
-used from crates.io, currently `0.2.0`.
+used from crates.io, currently `1.0.0`.
 
 Release channels:
 

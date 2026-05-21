@@ -34,9 +34,9 @@ path = "src/bin/idml-text.rs"
 required-features = ["cli"]
 
 [dependencies]
-base64-ng = { version = "0.2.0", default-features = false, features = ["alloc"] }
+base64-ng = { version = "1.0.0", default-features = false, features = ["alloc"] }
 indexmap = "2.14.0"
-quick-xml = "0.40.0"
+quick-xml = "0.40.1"
 thiserror = "2.0.18"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 serde = { version = "1.0.228", optional = true, features = ["derive"] }
