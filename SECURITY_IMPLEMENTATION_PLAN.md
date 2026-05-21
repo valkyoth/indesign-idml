@@ -78,6 +78,8 @@ Hard rules:
   state instead of producing a partial model.
 - XML root and depth trackers use checked close-state transitions instead of
   saturating counters, so unexpected closing events cannot be normalized away.
+- Story `Content` close-state tracking uses checked transitions instead of
+  saturating counters.
 - Resource XML extractors finalize depth tracking and reject EOF inside open
   elements, including partial embedded `Contents` payloads.
 - XML readers are centrally configured to keep end-tag name validation enabled

@@ -82,7 +82,7 @@ impl Story {
                     }
                 }
                 Event::End(e) if e.name().as_ref() == b"Content" => {
-                    content_depth = content_depth.saturating_sub(1);
+                    exit_content_depth(&mut content_depth)?;
                     xml_depth.exit()?;
                     root.exit(e.name().as_ref())?;
                 }
@@ -228,6 +228,17 @@ fn push_limited(output: &mut String, text: &str, max_text_bytes: usize) -> Resul
 fn push_char_limited(output: &mut String, ch: char, max_text_bytes: usize) -> Result<()> {
     let mut buffer = [0u8; 4];
     push_limited(output, ch.encode_utf8(&mut buffer), max_text_bytes)
+}
+
+fn exit_content_depth(content_depth: &mut usize) -> Result<()> {
+    if *content_depth == 0 {
+        return Err(IdmlError::InvalidElement {
+            element: "Content".to_owned(),
+            reason: "unexpected closing Content element",
+        });
+    }
+    *content_depth -= 1;
+    Ok(())
 }
 
 fn serialize_story(story: &Story) -> Result<String> {
@@ -448,6 +459,20 @@ mod tests {
             IdmlError::InvalidElement {
                 element,
                 reason: "element inside story Content",
+            } if element == "Content"
+        ));
+    }
+
+    #[test]
+    fn content_depth_rejects_unexpected_close() {
+        let mut content_depth = 0;
+        let err = super::exit_content_depth(&mut content_depth).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "unexpected closing Content element",
             } if element == "Content"
         ));
     }
