@@ -41,6 +41,7 @@ mod tests {
         let _: Option<crate::prelude::DesignMap> = None;
         let _: Option<crate::prelude::Story> = None;
         let _: Option<crate::prelude::Spread> = None;
+        let _: Option<crate::prelude::Page> = None;
         let _: Option<crate::prelude::PageItem> = None;
         let _: Option<crate::prelude::Rectangle> = None;
         let _: Option<crate::prelude::IdmlError> = None;

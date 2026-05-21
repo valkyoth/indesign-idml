@@ -14,6 +14,8 @@ use quick_xml::events::{BytesStart, Event};
 pub struct Spread {
     /// Spread `Self` identifier, when present.
     pub id: Option<String>,
+    /// Pages in XML order.
+    pub pages: Vec<Page>,
     /// Text frames in XML order.
     pub text_frames: Vec<TextFrame>,
     /// Page items in XML order for z-order preservation.
@@ -26,6 +28,7 @@ pub struct Spread {
 impl PartialEq for Spread {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
+            && compatible_pages(self, other)
             && self.text_frames == other.text_frames
             && compatible_page_items(self, other)
     }
@@ -37,9 +40,14 @@ pub const DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD: usize = 100_000;
 /// Default maximum page items accepted in one spread.
 pub const DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD: usize = 200_000;
 
+/// Default maximum pages accepted in one spread.
+pub const DEFAULT_MAX_PAGES_PER_SPREAD: usize = 10_000;
+
 /// Spread parser limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SpreadParseOptions {
+    /// Maximum `Page` elements collected from one spread.
+    pub max_pages: usize,
     /// Maximum `TextFrame` elements collected from one spread.
     pub max_text_frames: usize,
     /// Maximum supported page items collected from one spread.
@@ -51,6 +59,7 @@ pub struct SpreadParseOptions {
 impl Default for SpreadParseOptions {
     fn default() -> Self {
         Self {
+            max_pages: DEFAULT_MAX_PAGES_PER_SPREAD,
             max_text_frames: DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD,
             max_page_items: DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
@@ -78,6 +87,12 @@ impl Spread {
                     xml_depth.enter()?;
                     if e.name().as_ref() == b"Spread" && spread.id.is_none() {
                         spread.id = optional_attr(&e, "Self", &reader)?;
+                    } else if e.name().as_ref() == b"Page" {
+                        push_page_limited(
+                            &mut spread.pages,
+                            Page::from_xml_event(&e, &reader)?,
+                            options.max_pages,
+                        )?;
                     } else if e.name().as_ref() == b"TextFrame" {
                         spread.push_text_frame_limited(
                             TextFrame::from_xml_event(&e, &reader)?,
@@ -92,7 +107,13 @@ impl Spread {
                 }
                 Event::Empty(e) => {
                     xml_depth.visit_empty()?;
-                    if e.name().as_ref() == b"TextFrame" {
+                    if e.name().as_ref() == b"Page" {
+                        push_page_limited(
+                            &mut spread.pages,
+                            Page::from_xml_event(&e, &reader)?,
+                            options.max_pages,
+                        )?;
+                    } else if e.name().as_ref() == b"TextFrame" {
                         spread.push_text_frame_limited(
                             TextFrame::from_xml_event(&e, &reader)?,
                             options,
@@ -176,6 +197,29 @@ impl XmlLoadable for Spread {
 impl XmlSaveable for Spread {
     fn to_xml(&self) -> Result<String> {
         serialize_spread(self)
+    }
+}
+
+/// Page geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Page {
+    /// Page `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Geometric bounds in points, when represented directly.
+    pub geometric_bounds: Option<Rect>,
+}
+
+impl Page {
+    fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader)?;
+        let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
+            .map(|value| parse_geometric_bounds("Page", &value))
+            .transpose()?;
+
+        Ok(Self {
+            id,
+            geometric_bounds,
+        })
     }
 }
 
@@ -358,6 +402,25 @@ fn parse_geometric_bounds(element: &'static str, value: &str) -> Result<Rect> {
     Ok(rect)
 }
 
+fn push_page_limited(pages: &mut Vec<Page>, page: Page, max_pages: usize) -> Result<()> {
+    let next_len = pages.len().checked_add(1).ok_or(IdmlError::LimitExceeded {
+        what: "spread page count",
+        limit: max_pages as u64,
+        actual: u64::MAX,
+    })?;
+
+    if next_len > max_pages {
+        return Err(IdmlError::LimitExceeded {
+            what: "spread page count",
+            limit: max_pages as u64,
+            actual: next_len as u64,
+        });
+    }
+
+    pages.push(page);
+    Ok(())
+}
+
 fn push_text_frame_index_limited(
     text_frames: &mut Vec<TextFrame>,
     text_frame: TextFrame,
@@ -393,6 +456,10 @@ fn serialize_spread(spread: &Spread) -> Result<String> {
         push_attr(&mut xml, "Spread", "Self", id)?;
     }
     xml.push_str(">\n");
+
+    for page in &spread.pages {
+        serialize_page(&mut xml, page)?;
+    }
 
     if spread.page_items.is_empty() {
         for frame in &spread.text_frames {
@@ -448,6 +515,23 @@ fn stale_page_items_error() -> IdmlError {
 
 fn compatible_page_items(left: &Spread, right: &Spread) -> bool {
     left.page_items.is_empty() || right.page_items.is_empty() || left.page_items == right.page_items
+}
+
+fn compatible_pages(left: &Spread, right: &Spread) -> bool {
+    left.pages.is_empty() || right.pages.is_empty() || left.pages == right.pages
+}
+
+fn serialize_page(xml: &mut String, page: &Page) -> Result<()> {
+    xml.push_str("  <Page");
+    if let Some(id) = &page.id {
+        push_attr(xml, "Page", "Self", id)?;
+    }
+    if let Some(bounds) = page.geometric_bounds {
+        let bounds = format_geometric_bounds("Page", bounds)?;
+        push_attr(xml, "Page", "GeometricBounds", &bounds)?;
+    }
+    xml.push_str(" />\n");
+    Ok(())
 }
 
 fn serialize_text_frame(xml: &mut String, frame: &TextFrame) -> Result<()> {
@@ -532,7 +616,7 @@ fn push_attr(
 
 #[cfg(test)]
 mod tests {
-    use super::{PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame};
+    use super::{Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame};
     use crate::IdmlError;
     use crate::core::units::Points;
 
@@ -556,6 +640,24 @@ mod tests {
         assert_eq!(bounds.height().as_f64(), 144.0);
         assert_eq!(bounds.to_millimeters().left.as_f64(), 25.4);
         assert!(spread.text_frames[1].geometric_bounds.is_none());
+    }
+
+    #[test]
+    fn parses_pages_with_bounds_in_order() {
+        let xml = r#"<Spread Self="u10">
+  <Page Self="p1" GeometricBounds="0 0 792 612" />
+  <Page Self="p2" GeometricBounds="0 612 792 1224" />
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.pages.len(), 2);
+        assert_eq!(spread.pages[0].id.as_deref(), Some("p1"));
+        assert_eq!(spread.pages[1].id.as_deref(), Some("p2"));
+        assert_eq!(
+            spread.pages[1].geometric_bounds.unwrap().left.as_f64(),
+            612.0
+        );
     }
 
     #[test]
@@ -659,6 +761,27 @@ mod tests {
     }
 
     #[test]
+    fn enforces_page_count_limit() {
+        let err = Spread::from_xml_with_options(
+            r#"<Spread><Page Self="p1" /><Page Self="p2" /></Spread>"#,
+            SpreadParseOptions {
+                max_pages: 1,
+                ..SpreadParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread page count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
+    }
+
+    #[test]
     fn enforces_page_item_count_limit() {
         let err = Spread::from_xml_with_options(
             r#"<Spread><Rectangle Self="r1" /><TextFrame Self="tf1" /></Spread>"#,
@@ -729,6 +852,7 @@ mod tests {
     fn serializes_spread_text_frames_and_round_trips() {
         let spread = Spread {
             id: Some("u&\"10".to_owned()),
+            pages: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf&1".to_owned()),
                 parent_story: Some("u2".to_owned()),
@@ -752,6 +876,38 @@ mod tests {
     }
 
     #[test]
+    fn serializer_writes_pages_before_page_items() {
+        let text_frame = TextFrame {
+            id: Some("tf1".to_owned()),
+            parent_story: Some("u2".to_owned()),
+            geometric_bounds: None,
+        };
+        let spread = Spread {
+            id: Some("u10".to_owned()),
+            pages: vec![Page {
+                id: Some("p1".to_owned()),
+                geometric_bounds: Some(Rect::new(
+                    Points::new(0.0),
+                    Points::new(0.0),
+                    Points::new(792.0),
+                    Points::new(612.0),
+                )),
+            }],
+            text_frames: vec![text_frame.clone()],
+            page_items: vec![PageItem::TextFrame(text_frame)],
+        };
+
+        let xml = spread.to_xml().unwrap();
+        let page = xml.find("<Page").unwrap();
+        let frame = xml.find("<TextFrame").unwrap();
+        let parsed = Spread::from_xml(&xml).unwrap();
+
+        assert!(page < frame);
+        assert_eq!(parsed, spread);
+        assert_eq!(parsed.pages, spread.pages);
+    }
+
+    #[test]
     fn serializer_preserves_page_item_order() {
         let text_frame = TextFrame {
             id: Some("tf1".to_owned()),
@@ -765,6 +921,7 @@ mod tests {
         };
         let spread = Spread {
             id: Some("u10".to_owned()),
+            pages: Vec::new(),
             text_frames: vec![text_frame.clone()],
             page_items: vec![
                 PageItem::Rectangle(Rectangle {
@@ -794,6 +951,7 @@ mod tests {
     fn serializer_rejects_stale_page_item_index() {
         let spread = Spread {
             id: Some("u10".to_owned()),
+            pages: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
                 parent_story: Some("u2".to_owned()),
@@ -822,6 +980,7 @@ mod tests {
     fn serializer_rejects_non_finite_coordinates() {
         let spread = Spread {
             id: Some("u1".to_owned()),
+            pages: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
                 parent_story: Some("u1".to_owned()),
@@ -851,6 +1010,7 @@ mod tests {
     fn serializer_rejects_xml_forbidden_frame_attributes() {
         let spread = Spread {
             id: Some("u1".to_owned()),
+            pages: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf\u{0}".to_owned()),
                 parent_story: Some("u1".to_owned()),

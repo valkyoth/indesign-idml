@@ -590,6 +590,11 @@ impl IdmlDocument {
             remember_object_id(&mut seen, id)?;
         }
         for spread in self.spreads.values() {
+            for page in &spread.pages {
+                if let Some(id) = &page.id {
+                    remember_object_id(&mut seen, id)?;
+                }
+            }
             for frame in &spread.text_frames {
                 if let Some(id) = &frame.id {
                     remember_object_id(&mut seen, id)?;
@@ -757,7 +762,9 @@ mod tests {
     use crate::core::units::Points;
     use crate::model::designmap::{DesignMap, DesignMapParseOptions};
     use crate::model::resources::ResourceIntegrityOptions;
-    use crate::model::spread::{PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame};
+    use crate::model::spread::{
+        Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame,
+    };
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::Cursor;
     use zip::CompressionMethod;
@@ -817,6 +824,7 @@ mod tests {
                 IdmlPath::new("Spreads/Spread_u10.xml").unwrap(),
                 Spread {
                     id: Some("u10".to_owned()),
+                    pages: Vec::new(),
                     text_frames: vec![TextFrame {
                         id: Some("tf1".to_owned()),
                         parent_story: Some("u1".to_owned()),
@@ -889,6 +897,7 @@ mod tests {
                 IdmlPath::new("Stories/Story_u1.xml").unwrap(),
                 Spread {
                     id: Some("u11".to_owned()),
+                    pages: Vec::new(),
                     text_frames: Vec::new(),
                     page_items: Vec::new(),
                 },
@@ -1638,6 +1647,25 @@ mod tests {
     }
 
     #[test]
+    fn rejects_page_id_colliding_with_text_frame() {
+        let mut document = make_document();
+        document.spreads.get_mut("u10").unwrap().pages.push(Page {
+            id: Some("tf1".to_owned()),
+            geometric_bounds: None,
+        });
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "tf1"
+        ));
+    }
+
+    #[test]
     fn rejects_cross_type_id_collisions() {
         let mut document = make_document();
         document.design_map.spread_srcs.insert(
@@ -1648,6 +1676,7 @@ mod tests {
             "u1",
             Spread {
                 id: Some("u1".to_owned()),
+                pages: Vec::new(),
                 text_frames: Vec::new(),
                 page_items: Vec::new(),
             },
@@ -1752,6 +1781,7 @@ mod tests {
             "u10",
             Spread {
                 id: Some("u10".to_owned()),
+                pages: Vec::new(),
                 text_frames: vec![TextFrame {
                     id: Some("tf1".to_owned()),
                     parent_story: Some("u1".to_owned()),

@@ -1562,6 +1562,7 @@ mod tests {
 </Document>"#;
         let spread = Spread {
             id: Some("u10".to_owned()),
+            pages: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
                 parent_story: Some("u1".to_owned()),
