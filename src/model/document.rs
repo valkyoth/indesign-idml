@@ -240,7 +240,7 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_optional_self_id("story", &id, story.id.as_deref())?;
 
-        self.design_map.ensure_package_refs_initialized();
+        self.design_map.ensure_package_refs_initialized()?;
         self.design_map.story_srcs.insert(id.clone(), path.clone());
         self.design_map
             .package_refs
@@ -264,7 +264,7 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_optional_self_id("spread", &id, spread.id.as_deref())?;
 
-        self.design_map.ensure_package_refs_initialized();
+        self.design_map.ensure_package_refs_initialized()?;
         self.design_map.spread_srcs.insert(id.clone(), path.clone());
         self.design_map
             .package_refs
@@ -307,7 +307,7 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_supported_preserved_compression(entry.compression)?;
 
-        self.design_map.ensure_package_refs_initialized();
+        self.design_map.ensure_package_refs_initialized()?;
         self.design_map
             .master_spread_srcs
             .insert(id.clone(), path.clone());
@@ -333,7 +333,7 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_supported_preserved_compression(entry.compression)?;
 
-        self.design_map.ensure_package_refs_initialized();
+        self.design_map.ensure_package_refs_initialized()?;
         self.design_map
             .other_package_srcs
             .entry(element.clone())

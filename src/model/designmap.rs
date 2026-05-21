@@ -462,11 +462,12 @@ impl DesignMap {
         serialize_designmap(self)
     }
 
-    pub(crate) fn ensure_package_refs_initialized(&mut self) {
+    pub(crate) fn ensure_package_refs_initialized(&mut self) -> Result<()> {
         if !self.package_refs.is_empty() {
-            return;
+            return Ok(());
         }
-        self.package_refs = package_refs_from_maps(self);
+        self.package_refs = package_refs_from_maps(self)?;
+        Ok(())
     }
 }
 
@@ -907,17 +908,17 @@ fn compatible_package_ref_order(left: &DesignMap, right: &DesignMap) -> bool {
         || left.package_refs == right.package_refs
 }
 
-fn package_refs_from_maps(design_map: &DesignMap) -> Vec<DesignMapPackageRef> {
-    let mut refs = Vec::with_capacity(
-        design_map.spread_srcs.len()
-            + design_map.master_spread_srcs.len()
-            + design_map.story_srcs.len()
-            + design_map
-                .other_package_srcs
-                .values()
-                .map(Vec::len)
-                .sum::<usize>(),
-    );
+fn package_refs_from_maps(design_map: &DesignMap) -> Result<Vec<DesignMapPackageRef>> {
+    let capacity = serialized_package_ref_count(design_map)?;
+    if capacity > DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS {
+        return Err(IdmlError::LimitExceeded {
+            what: "DesignMap package reference count",
+            limit: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS as u64,
+            actual: capacity as u64,
+        });
+    }
+
+    let mut refs = Vec::with_capacity(capacity);
 
     refs.extend(
         design_map
@@ -945,7 +946,7 @@ fn package_refs_from_maps(design_map: &DesignMap) -> Vec<DesignMapPackageRef> {
         }));
     }
 
-    refs
+    Ok(refs)
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1725,6 +1726,29 @@ mod tests {
                 actual: 20_001,
             }
         ));
+    }
+
+    #[test]
+    fn package_ref_initialization_enforces_reference_count_limit() {
+        let mut design_map = DesignMap::default();
+        design_map.other_package_srcs.insert(
+            "idPkg:Graphic".to_owned(),
+            (0..=super::DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS)
+                .map(|index| IdmlPath::new(format!("Resources/Graphic_{index}.xml")).unwrap())
+                .collect(),
+        );
+
+        let err = design_map.ensure_package_refs_initialized().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap package reference count",
+                limit: 20_000,
+                actual: 20_001,
+            }
+        ));
+        assert!(design_map.package_refs.is_empty());
     }
 
     #[test]

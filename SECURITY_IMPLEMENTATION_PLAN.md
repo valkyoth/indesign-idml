@@ -70,6 +70,8 @@ Hard rules:
   XML emission.
 - Resource inventory construction uses checked reference counts and enforces the
   default package-reference ceiling before preallocation or collection growth.
+- Lazy DesignMap package-reference initialization uses checked sizing and
+  enforces the default package-reference ceiling before allocation.
 - Duplicate XML attributes are rejected instead of being silently overwritten or
   interpreted by first-match behavior.
 - Decoded XML attribute values captured into the model are validated against the
