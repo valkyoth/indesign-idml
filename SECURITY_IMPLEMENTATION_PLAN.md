@@ -54,6 +54,8 @@ Hard rules:
   conversions instead of sentinel fallbacks.
 - Direct XML parser entry points enforce configured XML byte limits before event
   parsing.
+- Archive-backed XML readers enforce configured parser byte limits against ZIP
+  metadata before allocating or decompressing entry bodies.
 - Duplicate XML attributes are rejected instead of being silently overwritten or
   interpreted by first-match behavior.
 - Decoded XML attribute values captured into the model are validated against the

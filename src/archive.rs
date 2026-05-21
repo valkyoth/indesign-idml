@@ -275,6 +275,19 @@ where
 
     /// Reads a complete entry into memory after enforcing configured limits.
     pub fn read_entry(&mut self, path: &IdmlPath) -> Result<Vec<u8>> {
+        self.read_entry_with_uncompressed_limit(
+            path,
+            "entry uncompressed size",
+            self.limits.max_entry_uncompressed_size,
+        )
+    }
+
+    fn read_entry_with_uncompressed_limit(
+        &mut self,
+        path: &IdmlPath,
+        limit_name: &'static str,
+        max_uncompressed_size: u64,
+    ) -> Result<Vec<u8>> {
         let entry = self
             .entries
             .get(path)
@@ -283,6 +296,7 @@ where
             entry.uncompressed_size,
             self.limits.max_entry_uncompressed_size,
         )?;
+        enforce_named_entry_size(entry.uncompressed_size, max_uncompressed_size, limit_name)?;
 
         let file = self.archive.by_name(path.as_str())?;
         read_declared_size(file, entry.uncompressed_size)
@@ -299,7 +313,11 @@ where
         options: DesignMapParseOptions,
     ) -> Result<DesignMap> {
         let path = IdmlPath::new("designmap.xml")?;
-        let bytes = self.read_entry(&path)?;
+        let bytes = self.read_entry_with_uncompressed_limit(
+            &path,
+            "DesignMap XML bytes",
+            usize_to_u64("DesignMap XML bytes", options.max_xml_bytes)?,
+        )?;
         let xml = std::str::from_utf8(&bytes)?;
         let design_map = DesignMap::from_xml_with_options(xml, options)?;
         self.validate_designmap_entries(&design_map)?;
@@ -377,7 +395,11 @@ where
         path: &IdmlPath,
         options: StoryParseOptions,
     ) -> Result<Story> {
-        let bytes = self.read_entry(path)?;
+        let bytes = self.read_entry_with_uncompressed_limit(
+            path,
+            "Story XML bytes",
+            usize_to_u64("Story XML bytes", options.max_xml_bytes)?,
+        )?;
         let xml = std::str::from_utf8(&bytes)?;
         Story::from_xml_with_options(xml, options)
     }
@@ -393,7 +415,11 @@ where
         path: &IdmlPath,
         options: SpreadParseOptions,
     ) -> Result<Spread> {
-        let bytes = self.read_entry(path)?;
+        let bytes = self.read_entry_with_uncompressed_limit(
+            path,
+            "Spread XML bytes",
+            usize_to_u64("Spread XML bytes", options.max_xml_bytes)?,
+        )?;
         let xml = std::str::from_utf8(&bytes)?;
         Spread::from_xml_with_options(xml, options)
     }
@@ -409,7 +435,11 @@ where
         path: &IdmlPath,
         options: EmbeddedAssetParseOptions,
     ) -> Result<Vec<EmbeddedAsset>> {
-        let bytes = self.read_entry(path)?;
+        let bytes = self.read_entry_with_uncompressed_limit(
+            path,
+            "embedded asset XML bytes",
+            usize_to_u64("embedded asset XML bytes", options.max_xml_bytes)?,
+        )?;
         let xml = std::str::from_utf8(&bytes)?;
         extract_embedded_assets_with_options(xml, options)
     }
@@ -430,7 +460,11 @@ where
         kind: ResourceKind,
         options: ResourceItemParseOptions,
     ) -> Result<Vec<ResourceItem>> {
-        let bytes = self.read_entry(path)?;
+        let bytes = self.read_entry_with_uncompressed_limit(
+            path,
+            "resource item XML bytes",
+            usize_to_u64("resource item XML bytes", options.max_xml_bytes)?,
+        )?;
         let xml = std::str::from_utf8(&bytes)?;
         extract_resource_items_with_options(xml, kind, options)
     }
@@ -1021,9 +1055,13 @@ fn read_declared_size(reader: impl Read, expected_size: u64) -> Result<Vec<u8>> 
 }
 
 fn enforce_entry_size(actual: u64, limit: u64) -> Result<()> {
+    enforce_named_entry_size(actual, limit, "entry uncompressed size")
+}
+
+fn enforce_named_entry_size(actual: u64, limit: u64, what: &'static str) -> Result<()> {
     if actual > limit {
         return Err(IdmlError::LimitExceeded {
-            what: "entry uncompressed size",
+            what,
             limit,
             actual,
         });
@@ -1187,6 +1225,34 @@ mod tests {
         assert!(
             matches!(err, IdmlError::LimitExceeded { what, .. } if what == "DesignMap package reference count")
         );
+    }
+
+    #[test]
+    fn read_designmap_with_options_enforces_xml_byte_limit_before_parse() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Stories/Story_u1.xml", b"<Story />"),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = package
+            .read_designmap_with_options(DesignMapParseOptions {
+                max_xml_bytes: designmap.len() - 1,
+                ..DesignMapParseOptions::default()
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap XML bytes",
+                limit,
+                actual,
+            } if limit == (designmap.len() - 1) as u64 && actual == designmap.len() as u64
+        ));
     }
 
     #[test]
@@ -1588,6 +1654,33 @@ mod tests {
     }
 
     #[test]
+    fn read_story_with_options_enforces_xml_byte_limit_before_parse() {
+        let story = b"<Story Self=\"u2\"><Content>Hello</Content></Story>";
+        let zip = make_zip(&[("Stories/Story_u2.xml", story)]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let path = IdmlPath::new("Stories/Story_u2.xml").unwrap();
+
+        let err = package
+            .read_story_with_options(
+                &path,
+                StoryParseOptions {
+                    max_xml_bytes: story.len() - 1,
+                    ..StoryParseOptions::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "Story XML bytes",
+                limit,
+                actual,
+            } if limit == (story.len() - 1) as u64 && actual == story.len() as u64
+        ));
+    }
+
+    #[test]
     fn read_spread_with_options_enforces_text_frame_limit() {
         let zip = make_zip(&[(
             "Spreads/Spread_u10.xml",
@@ -1609,6 +1702,33 @@ mod tests {
         assert!(
             matches!(err, IdmlError::LimitExceeded { what, .. } if what == "spread text frame count")
         );
+    }
+
+    #[test]
+    fn read_spread_with_options_enforces_xml_byte_limit_before_parse() {
+        let spread = br#"<Spread><TextFrame Self="tf1" /></Spread>"#;
+        let zip = make_zip(&[("Spreads/Spread_u10.xml", spread)]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let path = IdmlPath::new("Spreads/Spread_u10.xml").unwrap();
+
+        let err = package
+            .read_spread_with_options(
+                &path,
+                SpreadParseOptions {
+                    max_xml_bytes: spread.len() - 1,
+                    ..SpreadParseOptions::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "Spread XML bytes",
+                limit,
+                actual,
+            } if limit == (spread.len() - 1) as u64 && actual == spread.len() as u64
+        ));
     }
 
     #[test]
@@ -1763,6 +1883,33 @@ mod tests {
     }
 
     #[test]
+    fn read_embedded_assets_with_options_enforces_xml_byte_limit_before_parse() {
+        let graphic = b"<Image><Contents>aGVsbG8=</Contents></Image>";
+        let zip = make_zip(&[("Resources/Graphic.xml", graphic)]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let path = IdmlPath::new("Resources/Graphic.xml").unwrap();
+
+        let err = package
+            .read_embedded_assets_with_options(
+                &path,
+                EmbeddedAssetParseOptions {
+                    max_xml_bytes: graphic.len() - 1,
+                    ..EmbeddedAssetParseOptions::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "embedded asset XML bytes",
+                limit,
+                actual,
+            } if limit == (graphic.len() - 1) as u64 && actual == graphic.len() as u64
+        ));
+    }
+
+    #[test]
     fn reads_resource_items_from_xml_entry() {
         let styles =
             br#"<Styles><ParagraphStyle Self="p1" Name="Body" /><Color Self="ignored" /></Styles>"#;
@@ -1805,6 +1952,34 @@ mod tests {
                 limit: 1,
                 actual: 2,
             }
+        ));
+    }
+
+    #[test]
+    fn read_resource_items_with_options_enforces_xml_byte_limit_before_parse() {
+        let styles = br#"<Styles><ParagraphStyle Self="p1" /></Styles>"#;
+        let zip = make_zip(&[("Resources/Styles.xml", styles)]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let path = IdmlPath::new("Resources/Styles.xml").unwrap();
+
+        let err = package
+            .read_resource_items_with_options(
+                &path,
+                ResourceKind::Styles,
+                ResourceItemParseOptions {
+                    max_xml_bytes: styles.len() - 1,
+                    ..ResourceItemParseOptions::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item XML bytes",
+                limit,
+                actual,
+            } if limit == (styles.len() - 1) as u64 && actual == styles.len() as u64
         ));
     }
 
