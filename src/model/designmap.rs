@@ -152,6 +152,8 @@ pub struct DesignMapParseOptions {
     pub max_layers: usize,
     /// Maximum `idPkg:*` package references collected from one manifest.
     pub max_package_refs: usize,
+    /// Maximum raw bytes accepted for one `idPkg:*` package element name.
+    pub max_package_element_name_bytes: usize,
     /// Maximum UTF-8 bytes accepted for one package `src` attribute.
     pub max_package_src_bytes: usize,
     /// Maximum raw bytes accepted for one XML attribute value.
@@ -166,6 +168,7 @@ impl Default for DesignMapParseOptions {
             max_xml_bytes: DEFAULT_MAX_XML_INPUT_BYTES,
             max_layers: DEFAULT_MAX_DESIGNMAP_LAYERS,
             max_package_refs: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS,
+            max_package_element_name_bytes: DEFAULT_MAX_PACKAGE_ELEMENT_NAME_BYTES,
             max_package_src_bytes: DEFAULT_MAX_ARCHIVE_PATH_BYTES,
             max_attribute_bytes: DEFAULT_MAX_DESIGNMAP_ATTRIBUTE_BYTES,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
@@ -345,7 +348,11 @@ impl DesignMap {
                         design_map.package_refs.push(package_ref);
                     } else if e.name().as_ref().starts_with(b"idPkg:") {
                         increment_package_refs(&mut package_refs, options.max_package_refs)?;
-                        let name = package_element_name_from_xml(e.name().as_ref())?.to_owned();
+                        let name = package_element_name_from_xml(
+                            e.name().as_ref(),
+                            options.max_package_element_name_bytes,
+                        )?
+                        .to_owned();
                         let src =
                             required_attr(&e, &name, "src", &reader, options.max_attribute_bytes)?;
                         enforce_package_src_len(&src, options.max_package_src_bytes)?;
@@ -1076,7 +1083,11 @@ fn push_attr(
 }
 
 pub(crate) fn validate_package_element_name(element: &str) -> Result<()> {
-    enforce_package_element_name_len(element.len())?;
+    enforce_package_element_name_len(element.len(), DEFAULT_MAX_PACKAGE_ELEMENT_NAME_BYTES)?;
+    validate_package_element_name_syntax(element)
+}
+
+fn validate_package_element_name_syntax(element: &str) -> Result<()> {
     let Some(local) = element.strip_prefix("idPkg:") else {
         return Err(invalid_package_element_name());
     };
@@ -1092,18 +1103,24 @@ pub(crate) fn validate_package_element_name(element: &str) -> Result<()> {
     Ok(())
 }
 
-fn package_element_name_from_xml(name: &[u8]) -> Result<&str> {
-    enforce_package_element_name_len(name.len())?;
+fn package_element_name_from_xml(
+    name: &[u8],
+    max_package_element_name_bytes: usize,
+) -> Result<&str> {
+    enforce_package_element_name_len(name.len(), max_package_element_name_bytes)?;
     let name = std::str::from_utf8(name)?;
-    validate_package_element_name(name)?;
+    validate_package_element_name_syntax(name)?;
     Ok(name)
 }
 
-fn enforce_package_element_name_len(actual: usize) -> Result<()> {
-    if actual > DEFAULT_MAX_PACKAGE_ELEMENT_NAME_BYTES {
+fn enforce_package_element_name_len(
+    actual: usize,
+    max_package_element_name_bytes: usize,
+) -> Result<()> {
+    if actual > max_package_element_name_bytes {
         return Err(IdmlError::LimitExceeded {
             what: "DesignMap package element name bytes",
-            limit: DEFAULT_MAX_PACKAGE_ELEMENT_NAME_BYTES as u64,
+            limit: max_package_element_name_bytes as u64,
             actual: actual as u64,
         });
     }
@@ -1560,6 +1577,27 @@ mod tests {
                 what: "DesignMap package element name bytes",
                 limit: 256,
                 actual: 257,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_configured_package_element_name_byte_limit() {
+        let err = DesignMap::from_xml_with_options(
+            r#"<Document><idPkg:Graphic src="Resources/Graphic.xml" /></Document>"#,
+            DesignMapParseOptions {
+                max_package_element_name_bytes: 10,
+                ..DesignMapParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap package element name bytes",
+                limit: 10,
+                actual: 13,
             }
         ));
     }

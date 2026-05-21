@@ -315,6 +315,38 @@ fn idml_text_enforces_designmap_ref_limit() {
 }
 
 #[test]
+fn idml_text_enforces_designmap_layer_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layers.idml");
+    fs::write(&input, layer_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command.arg("--max-designmap-layers").arg("1").arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for DesignMap layer count: limit 1, actual 2\n");
+}
+
+#[test]
+fn idml_text_enforces_designmap_package_element_name_byte_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("resources.idml");
+    fs::write(&input, resource_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--max-designmap-package-element-name-bytes")
+        .arg("10")
+        .arg(&input);
+
+    command.assert().failure().stderr(
+        "idml-text: limit exceeded for DesignMap package element name bytes: limit 10, actual 13\n",
+    );
+}
+
+#[test]
 fn idml_text_enforces_designmap_package_src_byte_limit() {
     let temp = tempdir().unwrap();
     let input = temp.path().join("sample.idml");
@@ -530,6 +562,70 @@ fn compressed_entry_idml() -> Vec<u8> {
         .unwrap();
     writer.write_all(&vec![0u8; 4096]).unwrap();
     writer.finish().unwrap();
+    buffer.into_inner()
+}
+
+fn layer_idml() -> Vec<u8> {
+    let mut buffer = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(&mut buffer);
+    let stored = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .last_modified_time(zip::DateTime::DEFAULT);
+    let deflated = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .last_modified_time(zip::DateTime::DEFAULT);
+
+    writer.start_file("mimetype", stored).unwrap();
+    writer
+        .write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    writer.start_file("designmap.xml", deflated).unwrap();
+    writer
+        .write_all(
+            br#"<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Layer Self="layer1" />
+  <Layer Self="layer2" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#,
+        )
+        .unwrap();
+    writer.start_file("Stories/Story_u1.xml", deflated).unwrap();
+    writer
+        .write_all(br#"<Story Self="u1"><Content>Layered</Content></Story>"#)
+        .unwrap();
+    writer.finish().unwrap();
+
+    buffer.into_inner()
+}
+
+fn resource_idml() -> Vec<u8> {
+    let mut buffer = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(&mut buffer);
+    let stored = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .last_modified_time(zip::DateTime::DEFAULT);
+    let deflated = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .last_modified_time(zip::DateTime::DEFAULT);
+
+    writer.start_file("mimetype", stored).unwrap();
+    writer
+        .write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    writer.start_file("designmap.xml", deflated).unwrap();
+    writer
+        .write_all(
+            br#"<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#,
+        )
+        .unwrap();
+    writer
+        .start_file("Resources/Graphic.xml", deflated)
+        .unwrap();
+    writer.write_all(br#"<Graphic />"#).unwrap();
+    writer.finish().unwrap();
+
     buffer.into_inner()
 }
 
