@@ -127,6 +127,16 @@ impl Spread {
                             options,
                             &mut page_item_count,
                         )?;
+                    } else if e.name().as_ref() == b"TextPath" {
+                        push_text_frame_index_limited(
+                            &mut spread.text_frames,
+                            TextFrame::from_text_path_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?,
+                            options.max_text_frames,
+                        )?;
                     } else if e.name().as_ref() == b"Rectangle" {
                         push_page_item_limited(
                             &mut spread.page_items,
@@ -181,6 +191,16 @@ impl Spread {
                             TextFrame::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
                             options,
                             &mut page_item_count,
+                        )?;
+                    } else if e.name().as_ref() == b"TextPath" {
+                        push_text_frame_index_limited(
+                            &mut spread.text_frames,
+                            TextFrame::from_text_path_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?,
+                            options.max_text_frames,
                         )?;
                     } else if e.name().as_ref() == b"Rectangle" {
                         push_page_item_limited(
@@ -400,12 +420,29 @@ impl TextFrame {
         reader: &Reader<&[u8]>,
         max_attribute_bytes: usize,
     ) -> Result<Self> {
+        Self::from_text_bearing_xml_event(event, reader, max_attribute_bytes, "TextFrame")
+    }
+
+    fn from_text_path_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Self::from_text_bearing_xml_event(event, reader, max_attribute_bytes, "TextPath")
+    }
+
+    fn from_text_bearing_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+        element: &'static str,
+    ) -> Result<Self> {
         let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
         let layer_id = optional_attr(event, "ItemLayer", reader, max_attribute_bytes)?;
         let parent_story = optional_attr(event, "ParentStory", reader, max_attribute_bytes)?;
         let geometric_bounds =
             optional_attr(event, "GeometricBounds", reader, max_attribute_bytes)?
-                .map(|value| parse_geometric_bounds("TextFrame", &value))
+                .map(|value| parse_geometric_bounds(element, &value))
                 .transpose()?;
 
         Ok(Self {
@@ -720,6 +757,16 @@ fn parse_group_contents(
                         options,
                         page_item_count,
                     )?;
+                } else if e.name().as_ref() == b"TextPath" {
+                    push_text_frame_index_limited(
+                        text_frames,
+                        TextFrame::from_text_path_xml_event(
+                            &e,
+                            reader,
+                            options.max_attribute_bytes,
+                        )?,
+                        options.max_text_frames,
+                    )?;
                 } else if e.name().as_ref() == b"Rectangle" {
                     push_page_item_limited(
                         &mut group.page_items,
@@ -760,6 +807,16 @@ fn parse_group_contents(
                         TextFrame::from_xml_event(&e, reader, options.max_attribute_bytes)?,
                         options,
                         page_item_count,
+                    )?;
+                } else if e.name().as_ref() == b"TextPath" {
+                    push_text_frame_index_limited(
+                        text_frames,
+                        TextFrame::from_text_path_xml_event(
+                            &e,
+                            reader,
+                            options.max_attribute_bytes,
+                        )?,
+                        options.max_text_frames,
                     )?;
                 } else if e.name().as_ref() == b"Rectangle" {
                     push_page_item_limited(
@@ -1240,6 +1297,23 @@ mod tests {
         assert_eq!(spread.pages.len(), 1);
         assert_eq!(spread.text_frames.len(), 1);
         assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn indexes_text_paths_as_text_bearing_items() {
+        let xml = r#"<Spread Self="u10">
+  <Polygon Self="poly1">
+    <TextPath Self="tp1" ParentStory="u2" />
+  </Polygon>
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.text_frames.len(), 1);
+        assert_eq!(spread.text_frames[0].id.as_deref(), Some("tp1"));
+        assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
+        assert!(spread.text_frames[0].geometric_bounds.is_none());
+        assert!(spread.page_items.is_empty());
     }
 
     #[test]
