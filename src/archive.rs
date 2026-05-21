@@ -30,6 +30,9 @@ pub const DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE: u64 = 256 * 1024 * 1024;
 /// Default maximum aggregate uncompressed bytes accepted for an archive.
 pub const DEFAULT_MAX_TOTAL_UNCOMPRESSED_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
+/// Default maximum per-entry uncompressed-to-compressed size ratio.
+pub const DEFAULT_MAX_ENTRY_COMPRESSION_RATIO: u64 = 100;
+
 /// Maximum initial allocation used when reading one entry.
 const MAX_INITIAL_READ_CAPACITY: usize = 8 * 1024 * 1024;
 
@@ -70,6 +73,8 @@ pub struct ArchiveLimits {
     pub max_entry_uncompressed_size: u64,
     /// Maximum aggregate uncompressed size across all entries.
     pub max_total_uncompressed_size: u64,
+    /// Maximum allowed uncompressed-to-compressed size ratio for one deflated entry.
+    pub max_entry_compression_ratio: u64,
 }
 
 impl Default for ArchiveLimits {
@@ -78,6 +83,7 @@ impl Default for ArchiveLimits {
             max_entries: DEFAULT_MAX_ENTRIES,
             max_entry_uncompressed_size: DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE,
             max_total_uncompressed_size: DEFAULT_MAX_TOTAL_UNCOMPRESSED_SIZE,
+            max_entry_compression_ratio: DEFAULT_MAX_ENTRY_COMPRESSION_RATIO,
         }
     }
 }
@@ -703,6 +709,12 @@ where
             let uncompressed_size = file.size();
             enforce_entry_size(uncompressed_size, limits.max_entry_uncompressed_size)?;
             enforce_supported_compression(file.compression())?;
+            enforce_entry_compression_ratio(
+                file.compression(),
+                file.compressed_size(),
+                uncompressed_size,
+                limits.max_entry_compression_ratio,
+            )?;
             if index == 0
                 && path.as_str() == "mimetype"
                 && file.compression() != CompressionMethod::Stored
@@ -845,6 +857,42 @@ fn enforce_supported_compression(compression: CompressionMethod) -> Result<()> {
             "unsupported ZIP compression method; only stored and deflated entries are accepted",
         )),
     }
+}
+
+fn enforce_entry_compression_ratio(
+    compression: CompressionMethod,
+    compressed_size: u64,
+    uncompressed_size: u64,
+    max_ratio: u64,
+) -> Result<()> {
+    if compression != CompressionMethod::Deflated || uncompressed_size == 0 {
+        return Ok(());
+    }
+    if compressed_size == 0 {
+        return Err(IdmlError::InvalidPackage(
+            "deflated archive entry has zero compressed size",
+        ));
+    }
+    let allowed_uncompressed =
+        compressed_size
+            .checked_mul(max_ratio)
+            .ok_or(IdmlError::LimitExceeded {
+                what: "archive entry compression ratio limit product",
+                limit: u64::MAX,
+                actual: u64::MAX,
+            })?;
+    if uncompressed_size > allowed_uncompressed {
+        return Err(IdmlError::LimitExceeded {
+            what: "archive entry compression ratio",
+            limit: max_ratio,
+            actual: compression_ratio_ceil(uncompressed_size, compressed_size),
+        });
+    }
+    Ok(())
+}
+
+fn compression_ratio_ceil(uncompressed_size: u64, compressed_size: u64) -> u64 {
+    uncompressed_size.saturating_add(compressed_size.saturating_sub(1)) / compressed_size
 }
 
 fn deterministic_file_options(compression: CompressionMethod) -> SimpleFileOptions {
@@ -1095,6 +1143,37 @@ mod tests {
         assert!(
             matches!(err, IdmlError::MissingArchiveEntry(path) if path == "Stories/Story_u2.xml")
         );
+    }
+
+    #[test]
+    fn archive_inventory_rejects_extreme_entry_compression_ratio() {
+        let oversized = vec![0u8; 4096];
+        let zip = make_zip_raw(&[
+            ("mimetype", IDML_MIMETYPE, CompressionMethod::Stored),
+            (
+                "Resources/Compressed.bin",
+                &oversized,
+                CompressionMethod::Deflated,
+            ),
+        ]);
+
+        let err = IdmlPackage::with_limits(
+            Cursor::new(zip),
+            ArchiveLimits {
+                max_entry_compression_ratio: 1,
+                ..ArchiveLimits::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "archive entry compression ratio",
+                limit: 1,
+                actual,
+            } if actual > 1
+        ));
     }
 
     #[test]
