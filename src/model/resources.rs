@@ -18,6 +18,9 @@ pub const DEFAULT_MAX_EMBEDDED_ASSET_DECODED_BYTES: usize =
 pub const DEFAULT_MAX_EMBEDDED_ASSET_ENCODED_BYTES: usize =
     DEFAULT_MAX_EMBEDDED_ASSET_DECODED_BYTES * 2;
 
+/// Default maximum embedded asset payloads accepted in one XML entry.
+pub const DEFAULT_MAX_EMBEDDED_ASSETS: usize = 10_000;
+
 /// Broad resource category inferred from a `designmap.xml` package reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResourceKind {
@@ -85,6 +88,8 @@ pub struct ResourceIntegrityOptions {
 pub struct EmbeddedAssetParseOptions {
     /// Base64 compatibility profile.
     pub base64_mode: Base64Mode,
+    /// Maximum `Contents` payloads accepted in one XML entry.
+    pub max_assets: usize,
     /// Maximum encoded Base64 bytes collected from one `Contents` element.
     pub max_encoded_bytes: usize,
     /// Maximum decoded bytes accepted from one `Contents` element.
@@ -95,6 +100,7 @@ impl Default for EmbeddedAssetParseOptions {
     fn default() -> Self {
         Self {
             base64_mode: Base64Mode::Strict,
+            max_assets: DEFAULT_MAX_EMBEDDED_ASSETS,
             max_encoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_ENCODED_BYTES,
             max_decoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_DECODED_BYTES,
         }
@@ -261,10 +267,14 @@ pub fn extract_embedded_assets_with_options(
             }
             Event::Empty(e) if is_contents_element(&e) => {
                 let bytes = decode_standard(&[], options.base64_mode, options.max_decoded_bytes)?;
-                assets.push(EmbeddedAsset {
-                    source_element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
-                    bytes,
-                });
+                push_asset_limited(
+                    &mut assets,
+                    options.max_assets,
+                    EmbeddedAsset {
+                        source_element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                        bytes,
+                    },
+                )?;
             }
             Event::End(e) if local_name(e.name().as_ref()) == b"Contents" && contents_depth > 0 => {
                 contents_depth -= 1;
@@ -274,10 +284,14 @@ pub fn extract_embedded_assets_with_options(
                         options.base64_mode,
                         options.max_decoded_bytes,
                     )?;
-                    assets.push(EmbeddedAsset {
-                        source_element: source_element.clone(),
-                        bytes,
-                    });
+                    push_asset_limited(
+                        &mut assets,
+                        options.max_assets,
+                        EmbeddedAsset {
+                            source_element: source_element.clone(),
+                            bytes,
+                        },
+                    )?;
                     encoded.clear();
                 }
             }
@@ -420,6 +434,22 @@ fn push_encoded_limited(output: &mut String, text: &str, max_encoded_bytes: usiz
     }
 
     output.push_str(text);
+    Ok(())
+}
+
+fn push_asset_limited(
+    assets: &mut Vec<EmbeddedAsset>,
+    max_assets: usize,
+    asset: EmbeddedAsset,
+) -> Result<()> {
+    if assets.len() >= max_assets {
+        return Err(IdmlError::LimitExceeded {
+            what: "embedded asset count",
+            limit: max_assets as u64,
+            actual: assets.len().saturating_add(1) as u64,
+        });
+    }
+    assets.push(asset);
     Ok(())
 }
 
@@ -829,6 +859,27 @@ mod tests {
         assert!(
             matches!(err, IdmlError::LimitExceeded { what, .. } if what == "base64 decoded length")
         );
+    }
+
+    #[test]
+    fn embedded_asset_parser_enforces_asset_count_limit() {
+        let err = extract_embedded_assets_with_options(
+            "<Image><Contents></Contents><Contents></Contents></Image>",
+            EmbeddedAssetParseOptions {
+                max_assets: 1,
+                ..EmbeddedAssetParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "embedded asset count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
     }
 
     #[test]

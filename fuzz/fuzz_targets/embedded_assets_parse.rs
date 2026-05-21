@@ -15,6 +15,7 @@ fuzz_target!(|data: &[u8]| {
         xml,
         EmbeddedAssetParseOptions {
             base64_mode: Base64Mode::Strict,
+            max_assets: 1024,
             max_encoded_bytes: 16 * 1024,
             max_decoded_bytes: 16 * 1024,
         },
