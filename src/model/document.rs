@@ -560,38 +560,103 @@ impl IdmlDocument {
 
         let mut package = IdmlPackageWriter::with_limits(writer, limits)?;
         package.add_designmap(&self.design_map)?;
-        for (spread_id, path) in &self.design_map.spread_srcs {
-            let spread =
-                self.spreads
-                    .get(spread_id)
-                    .ok_or_else(|| IdmlError::MissingReference {
-                        kind: "spread model",
-                        id: spread_id.clone(),
+        self.write_package_entries(&mut package)?;
+        package.finish()
+    }
+
+    fn write_package_entries<W>(&self, package: &mut IdmlPackageWriter<W>) -> Result<()>
+    where
+        W: Write + Seek,
+    {
+        if self.design_map.package_refs.is_empty() {
+            for (spread_id, path) in &self.design_map.spread_srcs {
+                self.write_spread_entry(package, spread_id, path)?;
+            }
+            for (story_id, path) in &self.design_map.story_srcs {
+                self.write_story_entry(package, story_id, path)?;
+            }
+            for path in referenced_preserved_paths(&self.design_map) {
+                self.write_preserved_entry(package, path)?;
+            }
+            return Ok(());
+        }
+
+        for reference in &self.design_map.package_refs {
+            match reference.element.as_str() {
+                "idPkg:Spread" => {
+                    let spread_id = reference.id.as_deref().ok_or_else(|| {
+                        missing_ordered_package_ref_id(&reference.element, &reference.path)
                     })?;
-            package.add_spread(path.as_str(), spread)?;
-        }
-        for (story_id, path) in &self.design_map.story_srcs {
-            let story = self
-                .stories
-                .get(story_id)
-                .ok_or_else(|| IdmlError::MissingReference {
-                    kind: "story model",
-                    id: story_id.clone(),
-                })?;
-            package.add_story(path.as_str(), story)?;
-        }
-        for path in referenced_preserved_paths(&self.design_map) {
-            let entry = self
-                .preserved_entries
-                .get(path)
-                .ok_or_else(|| IdmlError::MissingArchiveEntry(path.to_string()))?;
-            match entry.compression {
-                CompressionMethod::Stored => package.add_stored_file(path.as_str(), &entry.data)?,
-                CompressionMethod::Deflated => package.add_file(path.as_str(), &entry.data)?,
-                _ => return Err(unsupported_preserved_compression_error()),
+                    self.write_spread_entry(package, spread_id, &reference.path)?;
+                }
+                "idPkg:Story" => {
+                    let story_id = reference.id.as_deref().ok_or_else(|| {
+                        missing_ordered_package_ref_id(&reference.element, &reference.path)
+                    })?;
+                    self.write_story_entry(package, story_id, &reference.path)?;
+                }
+                _ => self.write_preserved_entry(package, &reference.path)?,
             }
         }
-        package.finish()
+
+        Ok(())
+    }
+
+    fn write_spread_entry<W>(
+        &self,
+        package: &mut IdmlPackageWriter<W>,
+        spread_id: &str,
+        path: &IdmlPath,
+    ) -> Result<()>
+    where
+        W: Write + Seek,
+    {
+        let spread = self
+            .spreads
+            .get(spread_id)
+            .ok_or_else(|| IdmlError::MissingReference {
+                kind: "spread model",
+                id: spread_id.to_owned(),
+            })?;
+        package.add_spread(path.as_str(), spread)
+    }
+
+    fn write_story_entry<W>(
+        &self,
+        package: &mut IdmlPackageWriter<W>,
+        story_id: &str,
+        path: &IdmlPath,
+    ) -> Result<()>
+    where
+        W: Write + Seek,
+    {
+        let story = self
+            .stories
+            .get(story_id)
+            .ok_or_else(|| IdmlError::MissingReference {
+                kind: "story model",
+                id: story_id.to_owned(),
+            })?;
+        package.add_story(path.as_str(), story)
+    }
+
+    fn write_preserved_entry<W>(
+        &self,
+        package: &mut IdmlPackageWriter<W>,
+        path: &IdmlPath,
+    ) -> Result<()>
+    where
+        W: Write + Seek,
+    {
+        let entry = self
+            .preserved_entries
+            .get(path)
+            .ok_or_else(|| IdmlError::MissingArchiveEntry(path.to_string()))?;
+        match entry.compression {
+            CompressionMethod::Stored => package.add_stored_file(path.as_str(), &entry.data),
+            CompressionMethod::Deflated => package.add_file(path.as_str(), &entry.data),
+            _ => Err(unsupported_preserved_compression_error()),
+        }
     }
 
     fn spread(&self, spread_id: &str) -> Result<&Spread> {
@@ -894,6 +959,18 @@ fn validate_raw_package_element_name(element: &str) -> Result<()> {
         });
     }
     Ok(())
+}
+
+fn missing_ordered_package_ref_id(element: &str, path: &IdmlPath) -> IdmlError {
+    IdmlError::InvalidReference {
+        kind: "DesignMap ordered package reference",
+        id: path.to_string(),
+        reason: match element {
+            "idPkg:Spread" => "spread reference is missing derived ID",
+            "idPkg:Story" => "story reference is missing derived ID",
+            _ => "typed package reference is missing derived ID",
+        },
+    }
 }
 
 fn remember_structural_page_item_ids(
@@ -1775,21 +1852,19 @@ mod tests {
             .keys()
             .map(IdmlPath::as_str)
             .collect::<Vec<_>>();
-        let graphic = entry_paths
-            .iter()
-            .position(|path| *path == "Resources/Graphic.xml")
-            .unwrap();
-        let master = entry_paths
-            .iter()
-            .position(|path| *path == "MasterSpreads/MasterSpread_u20.xml")
-            .unwrap();
-        let fonts = entry_paths
-            .iter()
-            .position(|path| *path == "Resources/Fonts.xml")
-            .unwrap();
 
-        assert!(graphic < master);
-        assert!(master < fonts);
+        assert_eq!(
+            entry_paths,
+            [
+                "mimetype",
+                "designmap.xml",
+                "Spreads/Spread_u10.xml",
+                "Resources/Graphic.xml",
+                "MasterSpreads/MasterSpread_u20.xml",
+                "Stories/Story_u1.xml",
+                "Resources/Fonts.xml",
+            ]
+        );
     }
 
     #[test]
