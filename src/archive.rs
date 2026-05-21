@@ -643,6 +643,45 @@ where
         Ok(texts)
     }
 
+    /// Visits all story text in `designmap.xml` order without collecting all text first.
+    ///
+    /// The visitor receives the manifest-derived story ID and the extracted story text.
+    /// Returning an error from the visitor stops iteration immediately.
+    pub fn try_for_each_story_text<E, F>(
+        &mut self,
+        design_map: &DesignMap,
+        visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: FnMut(&str, &str) -> std::result::Result<(), E>,
+    {
+        self.try_for_each_story_text_with_options(design_map, StoryParseOptions::default(), visit)
+    }
+
+    /// Visits all story text in `designmap.xml` order with explicit parser limits.
+    ///
+    /// This is the streaming alternative to [`IdmlPackage::extract_story_texts_with_options`]
+    /// for callers that want to write or process each story as it is resolved.
+    pub fn try_for_each_story_text_with_options<E, F>(
+        &mut self,
+        design_map: &DesignMap,
+        options: StoryParseOptions,
+        mut visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: FnMut(&str, &str) -> std::result::Result<(), E>,
+    {
+        for (story_id, path) in &design_map.story_srcs {
+            let story = self
+                .read_story_with_options(path, options)
+                .map_err(E::from)?;
+            visit(story_id, &story.text)?;
+        }
+        Ok(())
+    }
+
     /// Resolves all text frames on a spread into owned story text records.
     pub fn resolve_spread_text_frames(
         &mut self,
@@ -1755,6 +1794,111 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("u2", "Second"), ("u1", "First")]
         );
+    }
+
+    #[test]
+    fn visits_story_texts_in_designmap_order_without_collecting() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u2.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            (
+                "Stories/Story_u2.xml",
+                b"<Story><Content>Second</Content></Story>",
+            ),
+            (
+                "Stories/Story_u1.xml",
+                b"<Story><Content>First</Content></Story>",
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let mut visited = Vec::new();
+        package
+            .try_for_each_story_text(&design_map, |story_id, text| {
+                visited.push((story_id.to_owned(), text.to_owned()));
+                Ok::<(), IdmlError>(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            visited
+                .iter()
+                .map(|(story_id, text)| (story_id.as_str(), text.as_str()))
+                .collect::<Vec<_>>(),
+            [("u2", "Second"), ("u1", "First")]
+        );
+    }
+
+    #[test]
+    fn story_text_visitor_can_stop_iteration() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u2.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            (
+                "Stories/Story_u2.xml",
+                b"<Story><Content>Second</Content></Story>",
+            ),
+            (
+                "Stories/Story_u1.xml",
+                b"<Story><Content>First</Content></Story>",
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let mut visited = Vec::new();
+        let err = package
+            .try_for_each_story_text(&design_map, |story_id, _| {
+                visited.push(story_id.to_owned());
+                Err(IdmlError::InvalidPackage("visitor stopped"))
+            })
+            .unwrap_err();
+
+        assert_eq!(visited, ["u2"]);
+        assert!(matches!(err, IdmlError::InvalidPackage("visitor stopped")));
+    }
+
+    #[test]
+    fn story_text_visitor_enforces_parse_options() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            (
+                "Stories/Story_u2.xml",
+                b"<Story><Content>Second</Content></Story>",
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let err = package
+            .try_for_each_story_text_with_options(
+                &design_map,
+                StoryParseOptions {
+                    max_text_bytes: 4,
+                    ..StoryParseOptions::default()
+                },
+                |_, _| Ok::<(), IdmlError>(()),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "story text bytes",
+                limit: 4,
+                actual: 6,
+            }
+        ));
     }
 
     #[test]

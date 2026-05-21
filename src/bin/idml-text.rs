@@ -368,10 +368,11 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
                     }
                 }
                 (None, None, None) => {
-                    for path in design_map.story_srcs.values() {
-                        let story = package.read_story_with_options(path, story_options)?;
-                        writer.write_text(&story.text)?;
-                    }
+                    package.try_for_each_story_text_with_options(
+                        &design_map,
+                        story_options,
+                        |_, text| writer.write_text(text),
+                    )?;
                 }
                 (None, Some(_), _) => {
                     return Err(CliError::Usage("--page-id requires --spread-id"));
