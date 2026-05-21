@@ -2,8 +2,9 @@
 #![deny(rust_2018_idioms)]
 
 use indesign_idml::archive::{ArchiveLimits, IdmlPackage};
+use indesign_idml::core::units::Points;
 use indesign_idml::model::designmap::DesignMapParseOptions;
-use indesign_idml::model::spread::SpreadParseOptions;
+use indesign_idml::model::spread::{Rect, SpreadParseOptions};
 use indesign_idml::model::story::StoryParseOptions;
 use std::env;
 use std::fs::File;
@@ -30,6 +31,7 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     let mut story_options = StoryParseOptions::default();
     let mut spread_id = None;
     let mut page_id = None;
+    let mut rect_points = None;
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -72,6 +74,22 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
                 return Err(CliError::Usage("missing value after --page-id"));
             };
             page_id = Some(parse_string(&value, "--page-id")?);
+            continue;
+        }
+        if arg == "--rect-points" {
+            let Some(top) = args.next() else {
+                return Err(CliError::Usage("missing top after --rect-points"));
+            };
+            let Some(left) = args.next() else {
+                return Err(CliError::Usage("missing left after --rect-points"));
+            };
+            let Some(bottom) = args.next() else {
+                return Err(CliError::Usage("missing bottom after --rect-points"));
+            };
+            let Some(right) = args.next() else {
+                return Err(CliError::Usage("missing right after --rect-points"));
+            };
+            rect_points = Some(parse_rect_points([top, left, bottom, right])?);
             continue;
         }
         if arg == "--max-spread-pages" {
@@ -165,12 +183,20 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     if page_id.is_some() && spread_id.is_none() {
         return Err(CliError::Usage("--page-id requires --spread-id"));
     }
+    if rect_points.is_some() && spread_id.is_none() {
+        return Err(CliError::Usage("--rect-points requires --spread-id"));
+    }
+    if page_id.is_some() && rect_points.is_some() {
+        return Err(CliError::Usage(
+            "--page-id and --rect-points cannot be combined",
+        ));
+    }
 
     let file = File::open(input)?;
     let mut package = IdmlPackage::with_limits(file, archive_limits)?;
     let design_map = package.read_designmap_with_options(designmap_options)?;
-    let texts: Vec<String> = match (spread_id.as_deref(), page_id.as_deref()) {
-        (Some(spread_id), Some(page_id)) => package
+    let texts: Vec<String> = match (spread_id.as_deref(), page_id.as_deref(), rect_points) {
+        (Some(spread_id), Some(page_id), None) => package
             .resolve_spread_text_on_page_with_options(
                 &design_map,
                 spread_id,
@@ -181,7 +207,18 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
             .into_iter()
             .map(|frame| frame.text)
             .collect(),
-        (Some(spread_id), None) => package
+        (Some(spread_id), None, Some(query)) => package
+            .resolve_spread_text_in_rect_with_options(
+                &design_map,
+                spread_id,
+                query,
+                spread_options,
+                story_options,
+            )?
+            .into_iter()
+            .map(|frame| frame.text)
+            .collect(),
+        (Some(spread_id), None, None) => package
             .resolve_spread_text_frames_with_options(
                 &design_map,
                 spread_id,
@@ -191,11 +228,16 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
             .into_iter()
             .map(|frame| frame.text)
             .collect(),
-        (None, None) => package
+        (None, None, None) => package
             .extract_story_texts_with_options(&design_map, story_options)?
             .into_values()
             .collect(),
-        (None, Some(_)) => unreachable!("page scope is rejected before opening the package"),
+        (None, Some(_), _) | (None, None, Some(_)) => {
+            unreachable!("layout scope is rejected before opening the package")
+        }
+        (Some(_), Some(_), Some(_)) => {
+            unreachable!("conflicting layout scopes are rejected before opening the package")
+        }
     };
 
     match output {
@@ -235,7 +277,7 @@ fn print_help() -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
     writer.write_all(
-        b"Usage: idml-text [--output PATH] [--spread-id ID [--page-id ID]] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order, or layout-resolved text for one spread/page.\n\nLayout:\n  --spread-id ID\n  --page-id ID\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-designmap-package-refs COUNT\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-xml-depth DEPTH\n  --max-spread-pages COUNT\n  --max-spread-text-frames COUNT\n  --max-spread-page-items COUNT\n  --max-spread-xml-depth DEPTH\n",
+        b"Usage: idml-text [--output PATH] [--spread-id ID [--page-id ID | --rect-points T L B R]] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order, or layout-resolved text for one spread/page/rectangle.\n\nLayout:\n  --spread-id ID\n  --page-id ID\n  --rect-points TOP LEFT BOTTOM RIGHT\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-designmap-package-refs COUNT\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-xml-depth DEPTH\n  --max-spread-pages COUNT\n  --max-spread-text-frames COUNT\n  --max-spread-page-items COUNT\n  --max-spread-xml-depth DEPTH\n",
     )?;
     writer.flush()?;
     Ok(())
@@ -253,6 +295,22 @@ fn parse_string(value: &std::ffi::OsStr, flag: &'static str) -> Result<String, C
         }));
     }
     Ok(value.to_owned())
+}
+
+fn parse_rect_points(values: [std::ffi::OsString; 4]) -> Result<Rect, CliError> {
+    let [top, left, bottom, right] = values.map(|value| parse_f64(&value, "--rect-points"));
+    let (top, left, bottom, right) = (top?, left?, bottom?, right?);
+    if top > bottom || left > right {
+        return Err(CliError::Usage(
+            "--rect-points must satisfy top <= bottom and left <= right",
+        ));
+    }
+    Ok(Rect::new(
+        Points::new(top),
+        Points::new(left),
+        Points::new(bottom),
+        Points::new(right),
+    ))
 }
 
 fn parse_usize(value: &std::ffi::OsStr, flag: &'static str) -> Result<usize, CliError> {
@@ -273,6 +331,23 @@ fn parse_u64(value: &std::ffi::OsStr, flag: &'static str) -> Result<u64, CliErro
         flag,
         value: value.to_owned(),
     })
+}
+
+fn parse_f64(value: &std::ffi::OsStr, flag: &'static str) -> Result<f64, CliError> {
+    let Some(value) = value.to_str() else {
+        return Err(CliError::Usage("numeric option must be valid UTF-8"));
+    };
+    let parsed = value.parse::<f64>().map_err(|_| CliError::InvalidNumber {
+        flag,
+        value: value.to_owned(),
+    })?;
+    if !parsed.is_finite() {
+        return Err(CliError::InvalidNumber {
+            flag,
+            value: value.to_owned(),
+        });
+    }
+    Ok(parsed)
 }
 
 enum OutputTarget {

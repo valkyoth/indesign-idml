@@ -48,6 +48,23 @@ fn idml_text_extracts_page_text_to_stdout() {
 }
 
 #[test]
+fn idml_text_extracts_rect_text_to_stdout() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--spread-id")
+        .arg("u10")
+        .arg("--rect-points")
+        .args(["0", "0", "100", "100"])
+        .arg(&input);
+
+    command.assert().success().stdout("Page hit\n");
+}
+
+#[test]
 fn idml_text_extracts_stories_to_file() {
     let temp = tempdir().unwrap();
     let input = temp.path().join("sample.idml");
@@ -84,6 +101,66 @@ fn idml_text_rejects_page_without_spread() {
         .assert()
         .failure()
         .stderr("idml-text: --page-id requires --spread-id\n");
+}
+
+#[test]
+fn idml_text_rejects_rect_without_spread() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--rect-points")
+        .args(["0", "0", "100", "100"])
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: --rect-points requires --spread-id\n");
+}
+
+#[test]
+fn idml_text_rejects_conflicting_layout_scopes() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--spread-id")
+        .arg("u10")
+        .arg("--page-id")
+        .arg("p1")
+        .arg("--rect-points")
+        .args(["0", "0", "100", "100"])
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: --page-id and --rect-points cannot be combined\n");
+}
+
+#[test]
+fn idml_text_rejects_invalid_rect_points() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--spread-id")
+        .arg("u10")
+        .arg("--rect-points")
+        .args(["0", "0", "nan", "100"])
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: invalid value `nan` for --rect-points\n");
 }
 
 #[test]
