@@ -414,19 +414,27 @@ pub struct RectMm {
 
 fn optional_attr(
     event: &BytesStart<'_>,
-    attribute: &str,
+    attribute: &'static str,
     reader: &Reader<&[u8]>,
 ) -> Result<Option<String>> {
+    let mut value = None;
     for attr in event.attributes() {
         let attr = attr?;
         if attr.key.as_ref() == attribute.as_bytes() {
-            return Ok(Some(
+            if value.is_some() {
+                return Err(IdmlError::InvalidAttribute {
+                    element: String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+                    attribute,
+                    reason: "duplicate attribute",
+                });
+            }
+            value = Some(
                 attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
                     .into_owned(),
-            ));
+            );
         }
     }
-    Ok(None)
+    Ok(value)
 }
 
 fn parse_geometric_bounds(element: &'static str, value: &str) -> Result<Rect> {
@@ -1146,6 +1154,24 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn rejects_duplicate_text_frame_parent_story_attributes() {
+        let err =
+            Spread::from_xml(r#"<Spread><TextFrame ParentStory="u1" ParentStory="u2" /></Spread>"#)
+                .unwrap_err();
+
+        assert!(
+            matches!(
+                &err,
+                IdmlError::InvalidAttribute {
+                    element,
+                    attribute: "ParentStory",
+                    reason: "duplicate attribute",
+                } if element == "TextFrame"
+            ) || matches!(&err, IdmlError::XmlAttribute(_))
+        );
     }
 
     #[test]

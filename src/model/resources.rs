@@ -694,6 +694,13 @@ fn collect_resource_attrs_limited(
     for attr in event.attributes() {
         let attr = attr?;
         let name = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        if attributes.contains_key(&name) {
+            return Err(IdmlError::InvalidAttribute {
+                element: String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+                attribute: "resource item attribute",
+                reason: "duplicate attribute",
+            });
+        }
         let value = attr
             .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
             .into_owned();
@@ -1114,6 +1121,26 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn resource_item_parser_rejects_duplicate_attributes() {
+        let err = extract_resource_items(
+            r#"<Styles><ParagraphStyle Self="p1" Self="p2" /></Styles>"#,
+            ResourceKind::Styles,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                &err,
+                IdmlError::InvalidAttribute {
+                    element,
+                    attribute: "resource item attribute",
+                    reason: "duplicate attribute",
+                } if element == "ParagraphStyle"
+            ) || matches!(&err, IdmlError::XmlAttribute(_))
+        );
     }
 
     #[test]

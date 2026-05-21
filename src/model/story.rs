@@ -141,19 +141,27 @@ impl XmlSaveable for Story {
 
 fn optional_attr(
     event: &BytesStart<'_>,
-    attribute: &str,
+    attribute: &'static str,
     reader: &Reader<&[u8]>,
 ) -> Result<Option<String>> {
+    let mut value = None;
     for attr in event.attributes() {
         let attr = attr?;
         if attr.key.as_ref() == attribute.as_bytes() {
-            return Ok(Some(
+            if value.is_some() {
+                return Err(IdmlError::InvalidAttribute {
+                    element: String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+                    attribute,
+                    reason: "duplicate attribute",
+                });
+            }
+            value = Some(
                 attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
                     .into_owned(),
-            ));
+            );
         }
     }
-    Ok(None)
+    Ok(value)
 }
 
 fn push_limited(output: &mut String, text: &str, max_text_bytes: usize) -> Result<()> {
@@ -301,6 +309,23 @@ mod tests {
                 actual: 8,
             }
         ));
+    }
+
+    #[test]
+    fn rejects_duplicate_story_id_attributes() {
+        let err = Story::from_xml(r#"<Story Self="u1" Self="u2"><Content>x</Content></Story>"#)
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                &err,
+                IdmlError::InvalidAttribute {
+                    element,
+                    attribute: "Self",
+                    reason: "duplicate attribute",
+                } if element == "Story"
+            ) || matches!(&err, IdmlError::XmlAttribute(_))
+        );
     }
 
     #[test]

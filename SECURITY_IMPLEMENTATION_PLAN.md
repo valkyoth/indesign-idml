@@ -48,6 +48,8 @@ Hard rules:
   path validation or writer emission.
 - Direct XML parser entry points enforce configured XML byte limits before event
   parsing.
+- Duplicate XML attributes are rejected instead of being silently overwritten or
+  interpreted by first-match behavior.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.

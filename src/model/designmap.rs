@@ -514,19 +514,27 @@ fn required_attr(
 
 fn optional_attr(
     event: &BytesStart<'_>,
-    attribute: &str,
+    attribute: &'static str,
     reader: &Reader<&[u8]>,
 ) -> Result<Option<String>> {
+    let mut value = None;
     for attr in event.attributes() {
         let attr = attr?;
         if attr.key.as_ref() == attribute.as_bytes() {
-            return Ok(Some(
+            if value.is_some() {
+                return Err(IdmlError::InvalidAttribute {
+                    element: String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+                    attribute,
+                    reason: "duplicate attribute",
+                });
+            }
+            value = Some(
                 attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
                     .into_owned(),
-            ));
+            );
         }
     }
-    Ok(None)
+    Ok(value)
 }
 
 fn optional_bool_attr(
@@ -1063,6 +1071,25 @@ mod tests {
                 actual: 2,
             }
         ));
+    }
+
+    #[test]
+    fn rejects_duplicate_package_src_attributes() {
+        let err = DesignMap::from_xml(
+            r#"<Document><idPkg:Story src="Stories/Story_u1.xml" src="Stories/Story_u2.xml" /></Document>"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                &err,
+                IdmlError::InvalidAttribute {
+                    element,
+                    attribute: "src",
+                    reason: "duplicate attribute",
+                } if element == "idPkg:Story"
+            ) || matches!(&err, IdmlError::XmlAttribute(_))
+        );
     }
 
     #[test]
