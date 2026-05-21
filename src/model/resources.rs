@@ -408,34 +408,28 @@ pub fn extract_embedded_assets_with_options(
                     });
                 }
                 if is_contents_element(&e) {
+                    next_limited_count(assets.len(), options.max_assets, "embedded asset count")?;
                     let bytes =
                         decode_embedded_asset_limited(&[], options, &mut total_decoded_bytes)?;
-                    push_asset_limited(
-                        &mut assets,
-                        options.max_assets,
-                        EmbeddedAsset {
-                            source_element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
-                            bytes,
-                        },
-                    )?;
+                    assets.push(EmbeddedAsset {
+                        source_element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                        bytes,
+                    });
                 }
             }
             Event::End(e) if local_name(e.name().as_ref()) == b"Contents" && contents_depth > 0 => {
                 contents_depth -= 1;
                 if contents_depth == 0 {
+                    next_limited_count(assets.len(), options.max_assets, "embedded asset count")?;
                     let bytes = decode_embedded_asset_limited(
                         encoded.as_bytes(),
                         options,
                         &mut total_decoded_bytes,
                     )?;
-                    push_asset_limited(
-                        &mut assets,
-                        options.max_assets,
-                        EmbeddedAsset {
-                            source_element: source_element.clone(),
-                            bytes,
-                        },
-                    )?;
+                    assets.push(EmbeddedAsset {
+                        source_element: source_element.clone(),
+                        bytes,
+                    });
                     encoded.clear();
                 }
                 xml_depth.exit()?;
@@ -920,16 +914,6 @@ fn decode_embedded_asset_limited(
     let bytes = decode_standard(input, options.base64_mode, options.max_decoded_bytes)?;
     *total_decoded_bytes = next_total;
     Ok(bytes)
-}
-
-fn push_asset_limited(
-    assets: &mut Vec<EmbeddedAsset>,
-    max_assets: usize,
-    asset: EmbeddedAsset,
-) -> Result<()> {
-    next_limited_count(assets.len(), max_assets, "embedded asset count")?;
-    assets.push(asset);
-    Ok(())
 }
 
 fn next_limited_count(current: usize, max: usize, what: &'static str) -> Result<usize> {
@@ -1956,6 +1940,28 @@ mod tests {
             "<Image><Contents></Contents><Contents></Contents></Image>",
             EmbeddedAssetParseOptions {
                 max_assets: 1,
+                ..EmbeddedAssetParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "embedded asset count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_enforces_asset_count_before_decoding_payload() {
+        let err = extract_embedded_assets_with_options(
+            "<Image><Contents>AA==</Contents><Contents>AAAA</Contents></Image>",
+            EmbeddedAssetParseOptions {
+                max_assets: 1,
+                max_decoded_bytes: 1,
                 ..EmbeddedAssetParseOptions::default()
             },
         )

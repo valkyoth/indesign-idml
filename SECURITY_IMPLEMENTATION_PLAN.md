@@ -88,6 +88,8 @@ Hard rules:
   references; child markup is rejected instead of being folded into text.
 - Embedded asset `Contents` payloads accept only text and CDATA chunks; child
   markup and entity references are rejected before Base64 decoding.
+- Embedded asset count limits are enforced before decoding each accepted
+  `Contents` payload.
 - Non-whitespace character data, CDATA, and entity references outside the root
   element are rejected instead of being ignored.
 - XML entity references are accepted only in explicit story text `Content` or
