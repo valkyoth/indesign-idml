@@ -105,6 +105,8 @@ where
 {
     writer: ZipWriter<W>,
     entries: IndexMap<IdmlPath, ()>,
+    limits: ArchiveLimits,
+    total_uncompressed: u64,
 }
 
 impl<W> IdmlPackageWriter<W>
@@ -113,9 +115,16 @@ where
 {
     /// Creates a new IDML package writer and writes the required `mimetype`.
     pub fn new(writer: W) -> Result<Self> {
+        Self::with_limits(writer, ArchiveLimits::default())
+    }
+
+    /// Creates a new IDML package writer with explicit output limits.
+    pub fn with_limits(writer: W, limits: ArchiveLimits) -> Result<Self> {
         let mut package_writer = Self {
             writer: ZipWriter::new(writer),
             entries: IndexMap::new(),
+            limits,
+            total_uncompressed: 0,
         };
         package_writer.write_entry(
             IdmlPath::new("mimetype")?,
@@ -184,13 +193,28 @@ where
         data: &[u8],
         compression: CompressionMethod,
     ) -> Result<()> {
-        if self.entries.insert(path.clone(), ()).is_some() {
+        if self.entries.contains_key(&path) {
             return Err(IdmlError::DuplicateArchiveEntry(path.to_string()));
         }
+        enforce_writer_entry_limits(
+            self.entries.len(),
+            self.total_uncompressed,
+            u64::try_from(data.len()).unwrap_or(u64::MAX),
+            self.limits,
+        )?;
 
         self.writer
             .start_file(path.as_str(), deterministic_file_options(compression))?;
         self.writer.write_all(data)?;
+        self.entries.insert(path, ());
+        self.total_uncompressed = self
+            .total_uncompressed
+            .checked_add(u64::try_from(data.len()).unwrap_or(u64::MAX))
+            .ok_or(IdmlError::LimitExceeded {
+                what: "archive total uncompressed size",
+                limit: self.limits.max_total_uncompressed_size,
+                actual: u64::MAX,
+            })?;
         Ok(())
     }
 }
@@ -629,6 +653,41 @@ fn enforce_entry_count(actual: usize, limit: usize) -> Result<()> {
             actual: actual as u64,
         });
     }
+    Ok(())
+}
+
+fn enforce_writer_entry_limits(
+    current_entries: usize,
+    current_total_uncompressed: u64,
+    entry_size: u64,
+    limits: ArchiveLimits,
+) -> Result<()> {
+    let next_entries = current_entries
+        .checked_add(1)
+        .ok_or(IdmlError::LimitExceeded {
+            what: "archive entry count",
+            limit: limits.max_entries as u64,
+            actual: u64::MAX,
+        })?;
+    enforce_entry_count(next_entries, limits.max_entries)?;
+    enforce_entry_size(entry_size, limits.max_entry_uncompressed_size)?;
+
+    let next_total =
+        current_total_uncompressed
+            .checked_add(entry_size)
+            .ok_or(IdmlError::LimitExceeded {
+                what: "archive total uncompressed size",
+                limit: limits.max_total_uncompressed_size,
+                actual: u64::MAX,
+            })?;
+    if next_total > limits.max_total_uncompressed_size {
+        return Err(IdmlError::LimitExceeded {
+            what: "archive total uncompressed size",
+            limit: limits.max_total_uncompressed_size,
+            actual: next_total,
+        });
+    }
+
     Ok(())
 }
 
@@ -1551,6 +1610,79 @@ mod tests {
         assert!(matches!(
             err,
             IdmlError::InvalidPackage(message) if message.contains("automatically")
+        ));
+    }
+
+    #[test]
+    fn writer_rejects_entry_count_over_limit() {
+        let err = IdmlPackageWriter::with_limits(
+            Cursor::new(Vec::new()),
+            ArchiveLimits {
+                max_entries: 0,
+                ..ArchiveLimits::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "archive entry count",
+                limit: 0,
+                actual: 1,
+            }
+        ));
+    }
+
+    #[test]
+    fn writer_rejects_entry_size_over_limit() {
+        let mut writer = IdmlPackageWriter::with_limits(
+            Cursor::new(Vec::new()),
+            ArchiveLimits {
+                max_entry_uncompressed_size: IDML_MIMETYPE.len() as u64,
+                ..ArchiveLimits::default()
+            },
+        )
+        .unwrap();
+
+        let oversized = vec![0u8; IDML_MIMETYPE.len() + 1];
+        let err = writer
+            .add_file("Resources/Large.bin", &oversized)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "entry uncompressed size",
+                limit,
+                actual,
+            } if limit == IDML_MIMETYPE.len() as u64 && actual == oversized.len() as u64
+        ));
+    }
+
+    #[test]
+    fn writer_rejects_total_size_over_limit() {
+        let mut writer = IdmlPackageWriter::with_limits(
+            Cursor::new(Vec::new()),
+            ArchiveLimits {
+                max_total_uncompressed_size: IDML_MIMETYPE.len() as u64,
+                ..ArchiveLimits::default()
+            },
+        )
+        .unwrap();
+
+        let err = writer
+            .add_file("designmap.xml", b"<Document />")
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "archive total uncompressed size",
+                limit,
+                actual,
+            } if limit == IDML_MIMETYPE.len() as u64
+                && actual == (IDML_MIMETYPE.len() + b"<Document />".len()) as u64
         ));
     }
 
