@@ -172,6 +172,11 @@ impl IdmlIdAllocator {
         {
             self.reserve_existing(id);
         }
+        for layer in &document.design_map.layers {
+            if let Some(id) = &layer.id {
+                self.reserve_existing(id);
+            }
+        }
         for story in document.stories.values() {
             if let Some(id) = &story.id {
                 self.reserve_existing(id);
@@ -181,10 +186,18 @@ impl IdmlIdAllocator {
             if let Some(id) = &spread.id {
                 self.reserve_existing(id);
             }
+            for page in &spread.pages {
+                if let Some(id) = &page.id {
+                    self.reserve_existing(id);
+                }
+            }
             for frame in &spread.text_frames {
                 if let Some(id) = &frame.id {
                     self.reserve_existing(id);
                 }
+            }
+            for page_item in &spread.page_items {
+                reserve_page_item_object_ids(page_item, self);
             }
         }
         Ok(())
@@ -621,11 +634,7 @@ impl IdmlDocument {
                 }
             }
             for page_item in &spread.page_items {
-                if let crate::model::spread::PageItem::Rectangle(rectangle) = page_item
-                    && let Some(id) = &rectangle.id
-                {
-                    remember_object_id(&mut seen, id)?;
-                }
+                remember_structural_page_item_ids(&mut seen, page_item)?;
             }
         }
 
@@ -691,19 +700,41 @@ fn validate_no_unreferenced_models<T>(
 }
 
 fn ensure_new_document_id(document: &IdmlDocument, id: &str) -> Result<()> {
-    let id_exists = document.design_map.story_srcs.contains_key(id)
-        || document.design_map.spread_srcs.contains_key(id)
-        || document.design_map.master_spread_srcs.contains_key(id)
-        || document.stories.contains_key(id)
-        || document.spreads.contains_key(id);
-
-    if id_exists {
+    if document_contains_object_id(document, id) {
         return Err(IdmlError::DuplicateId {
             kind: "document object",
             id: id.to_owned(),
         });
     }
     Ok(())
+}
+
+fn document_contains_object_id(document: &IdmlDocument, id: &str) -> bool {
+    document.design_map.story_srcs.contains_key(id)
+        || document.design_map.spread_srcs.contains_key(id)
+        || document.design_map.master_spread_srcs.contains_key(id)
+        || document.stories.contains_key(id)
+        || document.spreads.contains_key(id)
+        || document
+            .design_map
+            .layers
+            .iter()
+            .any(|layer| layer.id.as_deref() == Some(id))
+        || document.spreads.values().any(|spread| {
+            spread.id.as_deref() == Some(id)
+                || spread
+                    .pages
+                    .iter()
+                    .any(|page| page.id.as_deref() == Some(id))
+                || spread
+                    .text_frames
+                    .iter()
+                    .any(|frame| frame.id.as_deref() == Some(id))
+                || spread
+                    .page_items
+                    .iter()
+                    .any(|page_item| page_item_contains_object_id(page_item, id))
+        })
 }
 
 fn ensure_new_package_path(design_map: &DesignMap, path: &IdmlPath) -> Result<()> {
@@ -738,6 +769,70 @@ fn validate_raw_package_element_name(element: &str) -> Result<()> {
         });
     }
     Ok(())
+}
+
+fn remember_structural_page_item_ids(
+    seen: &mut IndexSet<String>,
+    page_item: &crate::model::spread::PageItem,
+) -> Result<()> {
+    match page_item {
+        crate::model::spread::PageItem::TextFrame(_) => Ok(()),
+        crate::model::spread::PageItem::Rectangle(rectangle) => {
+            if let Some(id) = &rectangle.id {
+                remember_object_id(seen, id)?;
+            }
+            Ok(())
+        }
+        crate::model::spread::PageItem::Group(group) => {
+            if let Some(id) = &group.id {
+                remember_object_id(seen, id)?;
+            }
+            for child in &group.page_items {
+                remember_structural_page_item_ids(seen, child)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn reserve_page_item_object_ids(
+    page_item: &crate::model::spread::PageItem,
+    allocator: &mut IdmlIdAllocator,
+) {
+    match page_item {
+        crate::model::spread::PageItem::TextFrame(frame) => {
+            if let Some(id) = &frame.id {
+                allocator.reserve_existing(id);
+            }
+        }
+        crate::model::spread::PageItem::Rectangle(rectangle) => {
+            if let Some(id) = &rectangle.id {
+                allocator.reserve_existing(id);
+            }
+        }
+        crate::model::spread::PageItem::Group(group) => {
+            if let Some(id) = &group.id {
+                allocator.reserve_existing(id);
+            }
+            for child in &group.page_items {
+                reserve_page_item_object_ids(child, allocator);
+            }
+        }
+    }
+}
+
+fn page_item_contains_object_id(page_item: &crate::model::spread::PageItem, id: &str) -> bool {
+    match page_item {
+        crate::model::spread::PageItem::TextFrame(frame) => frame.id.as_deref() == Some(id),
+        crate::model::spread::PageItem::Rectangle(rectangle) => rectangle.id.as_deref() == Some(id),
+        crate::model::spread::PageItem::Group(group) => {
+            group.id.as_deref() == Some(id)
+                || group
+                    .page_items
+                    .iter()
+                    .any(|child| page_item_contains_object_id(child, id))
+        }
+    }
 }
 
 fn referenced_preserved_paths(design_map: &DesignMap) -> impl Iterator<Item = &IdmlPath> {
@@ -841,7 +936,7 @@ mod tests {
     use crate::model::designmap::{DesignMap, DesignMapParseOptions, Layer};
     use crate::model::resources::ResourceIntegrityOptions;
     use crate::model::spread::{
-        Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame,
+        Group, Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame,
     };
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::Cursor;
@@ -964,6 +1059,75 @@ mod tests {
                 id,
             } if id == "u10"
         ));
+    }
+
+    #[test]
+    fn add_story_rejects_layer_id_collision_without_mutating_document() {
+        let mut document = make_document();
+        document.design_map.layers.push(Layer {
+            id: Some("layer1".to_owned()),
+            name: Some("Text".to_owned()),
+            visible: Some(true),
+            locked: Some(false),
+        });
+
+        let err = document
+            .add_story(
+                "layer1",
+                IdmlPath::new("Stories/Story_layer1.xml").unwrap(),
+                Story {
+                    id: Some("layer1".to_owned()),
+                    text: "duplicate".to_owned(),
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "layer1"
+        ));
+        assert!(!document.design_map.story_srcs.contains_key("layer1"));
+        assert!(!document.stories.contains_key("layer1"));
+    }
+
+    #[test]
+    fn add_story_rejects_group_id_collision_without_mutating_document() {
+        let mut document = make_document();
+        document
+            .spreads
+            .get_mut("u10")
+            .unwrap()
+            .page_items
+            .push(PageItem::Group(Group {
+                id: Some("group1".to_owned()),
+                layer_id: None,
+                geometric_bounds: None,
+                page_items: Vec::new(),
+            }));
+
+        let err = document
+            .add_story(
+                "group1",
+                IdmlPath::new("Stories/Story_group1.xml").unwrap(),
+                Story {
+                    id: Some("group1".to_owned()),
+                    text: "duplicate".to_owned(),
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "group1"
+        ));
+        assert!(!document.design_map.story_srcs.contains_key("group1"));
+        assert!(!document.stories.contains_key("group1"));
     }
 
     #[test]
@@ -1407,6 +1571,36 @@ mod tests {
     }
 
     #[test]
+    fn id_allocator_skips_layer_page_and_page_item_ids() {
+        let mut document = make_document();
+        document.design_map.layers.push(Layer {
+            id: Some("u2".to_owned()),
+            name: Some("Text".to_owned()),
+            visible: Some(true),
+            locked: Some(false),
+        });
+        let spread = document.spreads.get_mut("u10").unwrap();
+        spread.pages.push(Page {
+            id: Some("u3".to_owned()),
+            geometric_bounds: None,
+        });
+        spread.page_items.push(PageItem::Group(Group {
+            id: Some("u4".to_owned()),
+            layer_id: None,
+            geometric_bounds: None,
+            page_items: vec![PageItem::Rectangle(Rectangle {
+                id: Some("u5".to_owned()),
+                layer_id: None,
+                geometric_bounds: None,
+            })],
+        }));
+
+        let mut allocator = document.id_allocator().unwrap();
+
+        assert_eq!(allocator.allocate().unwrap(), "u6");
+    }
+
+    #[test]
     fn id_allocator_rejects_duplicate_reservations() {
         let mut allocator = IdmlIdAllocator::new();
         allocator.reserve("u1").unwrap();
@@ -1816,6 +2010,62 @@ mod tests {
                 kind: "document object",
                 id,
             } if id == "tf1"
+        ));
+    }
+
+    #[test]
+    fn rejects_group_id_colliding_with_text_frame() {
+        let mut document = make_document();
+        document
+            .spreads
+            .get_mut("u10")
+            .unwrap()
+            .page_items
+            .push(PageItem::Group(Group {
+                id: Some("tf1".to_owned()),
+                layer_id: None,
+                geometric_bounds: None,
+                page_items: Vec::new(),
+            }));
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "tf1"
+        ));
+    }
+
+    #[test]
+    fn rejects_nested_rectangle_id_colliding_with_page() {
+        let mut document = make_document();
+        let spread = document.spreads.get_mut("u10").unwrap();
+        spread.pages.push(Page {
+            id: Some("page1".to_owned()),
+            geometric_bounds: None,
+        });
+        spread.page_items.push(PageItem::Group(Group {
+            id: Some("group1".to_owned()),
+            layer_id: None,
+            geometric_bounds: None,
+            page_items: vec![PageItem::Rectangle(Rectangle {
+                id: Some("page1".to_owned()),
+                layer_id: None,
+                geometric_bounds: None,
+            })],
+        }));
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "page1"
         ));
     }
 
