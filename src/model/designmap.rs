@@ -278,7 +278,11 @@ impl DesignMap {
                 }
                 Event::Empty(e) => {
                     xml_depth.visit_empty()?;
-                    if e.name().as_ref() == b"Layer" {
+                    if e.name().as_ref() == b"Document"
+                        && let Some(id) = optional_attr(&e, "Self", &reader)?
+                    {
+                        design_map.id = id;
+                    } else if e.name().as_ref() == b"Layer" {
                         push_layer_limited(
                             &mut design_map.layers,
                             Layer::from_xml_event(&e, &reader)?,
@@ -971,6 +975,13 @@ mod tests {
     }
 
     #[test]
+    fn parses_empty_document_root_id() {
+        let design_map = DesignMap::from_xml(r#"<Document Self="doc1" />"#).unwrap();
+
+        assert_eq!(design_map.id, "doc1");
+    }
+
+    #[test]
     fn reports_missing_src_on_package_ref() {
         let err = DesignMap::from_xml("<Document><idPkg:Story /></Document>").unwrap_err();
         assert!(matches!(
@@ -1100,6 +1111,20 @@ mod tests {
     #[test]
     fn rejects_xml_forbidden_document_id_attribute_on_parse() {
         let err = DesignMap::from_xml("<Document Self=\"bad\0id\"></Document>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Self",
+                reason: "contains an XML-forbidden character",
+            } if element == "Document"
+        ));
+    }
+
+    #[test]
+    fn rejects_xml_forbidden_empty_document_id_attribute_on_parse() {
+        let err = DesignMap::from_xml("<Document Self=\"bad\0id\" />").unwrap_err();
 
         assert!(matches!(
             err,

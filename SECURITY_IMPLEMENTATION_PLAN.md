@@ -55,6 +55,9 @@ Hard rules:
 - Decoded XML attribute values captured into the model are validated against the
   crate XML character policy before they can become IDs, references, or resource
   metadata.
+- Semantically equivalent XML start and empty events are handled consistently
+  where IDML allows self-closing elements, avoiding first/empty event parser
+  confusion.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.
