@@ -48,6 +48,8 @@ Hard rules:
   path validation or writer emission.
 - DesignMap package `src` attributes are capped by configured UTF-8 byte length
   before they are accepted as logical archive paths.
+- DesignMap package `idPkg:*` element names are capped by raw byte length before
+  they are preserved or emitted.
 - Archive inventory rejects encrypted entries and non-regular file metadata
   such as symlinks.
 - Compression-ratio diagnostics use division/remainder ceiling arithmetic
