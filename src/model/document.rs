@@ -852,10 +852,81 @@ fn page_item_contains_object_id(page_item: &crate::model::spread::PageItem, id: 
 }
 
 fn referenced_preserved_paths(design_map: &DesignMap) -> impl Iterator<Item = &IdmlPath> {
-    design_map
-        .master_spread_srcs
-        .values()
-        .chain(design_map.other_package_srcs.values().flatten())
+    if design_map.package_refs.is_empty() {
+        PreservedPathIter::from_maps(
+            design_map.master_spread_srcs.values(),
+            design_map.other_package_srcs.iter(),
+        )
+    } else {
+        PreservedPathIter::from_refs(design_map.package_refs.iter())
+    }
+}
+
+enum PreservedPathIter<'a> {
+    FromMaps {
+        master_spreads: indexmap::map::Values<'a, String, IdmlPath>,
+        resources: indexmap::map::Iter<'a, String, Vec<IdmlPath>>,
+        current_resource_paths: Option<std::slice::Iter<'a, IdmlPath>>,
+    },
+    FromRefs(std::slice::Iter<'a, DesignMapPackageRef>),
+}
+
+impl<'a> PreservedPathIter<'a> {
+    fn from_maps(
+        master_spreads: indexmap::map::Values<'a, String, IdmlPath>,
+        resources: indexmap::map::Iter<'a, String, Vec<IdmlPath>>,
+    ) -> Self {
+        Self::FromMaps {
+            master_spreads,
+            resources,
+            current_resource_paths: None,
+        }
+    }
+
+    fn from_refs(references: std::slice::Iter<'a, DesignMapPackageRef>) -> Self {
+        Self::FromRefs(references)
+    }
+}
+
+impl<'a> Iterator for PreservedPathIter<'a> {
+    type Item = &'a IdmlPath;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::FromMaps {
+                master_spreads,
+                resources,
+                current_resource_paths,
+            } => {
+                if let Some(path) = master_spreads.next() {
+                    return Some(path);
+                }
+
+                loop {
+                    if let Some(paths) = current_resource_paths.as_mut()
+                        && let Some(path) = paths.next()
+                    {
+                        return Some(path);
+                    }
+
+                    let (_, paths) = resources.next()?;
+                    *current_resource_paths = Some(paths.iter());
+                }
+            }
+            Self::FromRefs(references) => {
+                for reference in references {
+                    if is_preserved_package_element(&reference.element) {
+                        return Some(&reference.path);
+                    }
+                }
+                None
+            }
+        }
+    }
+}
+
+fn is_preserved_package_element(element: &str) -> bool {
+    !matches!(element, "idPkg:Story" | "idPkg:Spread")
 }
 
 fn validate_supported_preserved_compression(compression: CompressionMethod) -> Result<()> {
@@ -1529,6 +1600,86 @@ mod tests {
             package.read_entry(&resource_path).unwrap(),
             b"<Graphic><Data>raw</Data></Graphic>"
         );
+    }
+
+    #[test]
+    fn preserved_entries_follow_ordered_designmap_refs() {
+        let graphic_path = IdmlPath::new("Resources/Graphic.xml").unwrap();
+        let master_path = IdmlPath::new("MasterSpreads/MasterSpread_u20.xml").unwrap();
+        let fonts_path = IdmlPath::new("Resources/Fonts.xml").unwrap();
+        let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer
+            .add_file(
+                "designmap.xml",
+                br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+  <idPkg:MasterSpread src="MasterSpreads/MasterSpread_u20.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+  <idPkg:Fonts src="Resources/Fonts.xml" />
+</Document>"#,
+            )
+            .unwrap();
+        writer
+            .add_file("Spreads/Spread_u10.xml", br#"<Spread Self="u10" />"#)
+            .unwrap();
+        writer
+            .add_file(
+                "Stories/Story_u1.xml",
+                br#"<Story Self="u1"><Content>Generated</Content></Story>"#,
+            )
+            .unwrap();
+        writer
+            .add_file(graphic_path.as_str(), b"<Graphic />")
+            .unwrap();
+        writer
+            .add_file(master_path.as_str(), b"<MasterSpread Self=\"u20\" />")
+            .unwrap();
+        writer.add_file(fonts_path.as_str(), b"<Fonts />").unwrap();
+        let zip = writer.finish().unwrap().into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let document = IdmlDocument::read_from_package(&mut package).unwrap();
+        let preserved_paths = document
+            .preserved_entries
+            .keys()
+            .map(IdmlPath::as_str)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            preserved_paths,
+            [
+                "Resources/Graphic.xml",
+                "MasterSpreads/MasterSpread_u20.xml",
+                "Resources/Fonts.xml",
+            ]
+        );
+
+        let round_trip = document
+            .write_to(Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        let package = IdmlPackage::new(Cursor::new(round_trip)).unwrap();
+        let entry_paths = package
+            .entries()
+            .keys()
+            .map(IdmlPath::as_str)
+            .collect::<Vec<_>>();
+        let graphic = entry_paths
+            .iter()
+            .position(|path| *path == "Resources/Graphic.xml")
+            .unwrap();
+        let master = entry_paths
+            .iter()
+            .position(|path| *path == "MasterSpreads/MasterSpread_u20.xml")
+            .unwrap();
+        let fonts = entry_paths
+            .iter()
+            .position(|path| *path == "Resources/Fonts.xml")
+            .unwrap();
+
+        assert!(graphic < master);
+        assert!(master < fonts);
     }
 
     #[test]

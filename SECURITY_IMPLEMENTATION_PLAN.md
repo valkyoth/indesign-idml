@@ -76,6 +76,8 @@ Hard rules:
   DesignMap maps, ordered package references, or model storage.
 - DesignMap resource pointer iteration is lazy and does not allocate a temporary
   vector proportional to resource package-reference count.
+- Document preserved-entry iteration follows ordered package references when
+  present and stays lazy for both parsed and manually constructed manifests.
 - Duplicate XML attributes are rejected instead of being silently overwritten or
   interpreted by first-match behavior.
 - Decoded XML attribute values captured into the model are validated against the
