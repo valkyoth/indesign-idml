@@ -28,8 +28,8 @@ Threat assumptions:
 
 - IDML files are untrusted input.
 - ZIP entries may attempt path traversal, duplicate names, decompression bombs,
-  extreme compression ratios, unsupported compression methods, or malformed
-  metadata.
+  extreme compression ratios, oversized entry names, unsupported compression
+  methods, or malformed metadata.
 - XML may contain oversized attributes, malformed namespaces, invalid UTF-8,
   entity tricks, malicious ID references, and resource exhaustion payloads.
 - Embedded base64 assets may be non-canonical, oversized, padded incorrectly, or
@@ -42,6 +42,8 @@ Hard rules:
 - No filesystem writes during read-only parsing.
 - No extraction APIs that write archive paths directly to disk.
 - All archive paths are normalized as logical ZIP paths, never host paths.
+- Archive entry paths are capped by configured UTF-8 byte length before logical
+  path validation or writer emission.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.
@@ -62,8 +64,8 @@ Primary modules:
 Parsing flow:
 
 1. Open archive through `IdmlPackage`.
-2. Inventory entries with strict path normalization, configured byte limits, and
-   per-entry compression-ratio limits.
+2. Inventory entries with strict path normalization, configured entry/path byte
+   limits, and per-entry compression-ratio limits.
 3. Parse `designmap.xml` first.
 4. Build ordered indexes with `IndexMap`.
 5. Return lazy pointers for spreads, stories, and resources.
@@ -128,8 +130,8 @@ Test categories to add as implementation grows:
 
 - Unit tests for XML event handling, attributes, IDs, and unit conversions.
 - Golden fixtures exported from current InDesign and older IDML versions.
-- Malicious ZIP fixture tests for traversal, absolute paths, duplicates, bombs,
-  unsupported compression, and invalid mimetype placement.
+- Malicious ZIP fixture tests for traversal, absolute paths, oversized names,
+  duplicates, bombs, unsupported compression, and invalid mimetype placement.
 - Malicious XML tests for huge tokens, malformed namespaces, broken encodings,
   invalid references, and text extraction corner cases.
 - Property tests for unit conversion and base64 round trips.

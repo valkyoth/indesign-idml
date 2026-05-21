@@ -48,7 +48,7 @@ Goal: safely open untrusted IDML packages and parse the package manifest.
 
 Included:
 
-- archive path validation
+- archive path validation and configured archive entry path byte limits
 - bounded ZIP inventory and bounded entry reads
 - strict and legacy Base64 wrapper backed by `base64-ng`
 - `designmap.xml` parser for spread, story, master spread, and unknown package
