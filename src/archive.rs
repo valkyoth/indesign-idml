@@ -973,12 +973,7 @@ fn compression_ratio_ceil(uncompressed_size: u64, compressed_size: u64) -> u64 {
     if compressed_size == 0 {
         return u64::MAX;
     }
-    let quotient = uncompressed_size / compressed_size;
-    if uncompressed_size.is_multiple_of(compressed_size) {
-        quotient
-    } else {
-        quotient.saturating_add(1)
-    }
+    uncompressed_size.div_ceil(compressed_size)
 }
 
 fn deterministic_file_options(compression: CompressionMethod) -> SimpleFileOptions {

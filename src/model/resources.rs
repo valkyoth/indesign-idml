@@ -817,13 +817,7 @@ fn push_resource_item_limited(
     max_items: usize,
     item: ResourceItem,
 ) -> Result<()> {
-    if items.len() >= max_items {
-        return Err(IdmlError::LimitExceeded {
-            what: "resource item count",
-            limit: max_items as u64,
-            actual: items.len().saturating_add(1) as u64,
-        });
-    }
+    next_limited_count(items.len(), max_items, "resource item count")?;
     items.push(item);
     Ok(())
 }
@@ -848,12 +842,7 @@ fn compression_ratio_ceil(uncompressed_size: u64, compressed_size: u64) -> u64 {
     if compressed_size == 0 {
         return u64::MAX;
     }
-    let quotient = uncompressed_size / compressed_size;
-    if uncompressed_size.is_multiple_of(compressed_size) {
-        quotient
-    } else {
-        quotient.saturating_add(1)
-    }
+    uncompressed_size.div_ceil(compressed_size)
 }
 
 fn is_contents_element(event: &BytesStart<'_>) -> bool {
@@ -919,15 +908,27 @@ fn push_asset_limited(
     max_assets: usize,
     asset: EmbeddedAsset,
 ) -> Result<()> {
-    if assets.len() >= max_assets {
-        return Err(IdmlError::LimitExceeded {
-            what: "embedded asset count",
-            limit: max_assets as u64,
-            actual: assets.len().saturating_add(1) as u64,
-        });
-    }
+    next_limited_count(assets.len(), max_assets, "embedded asset count")?;
     assets.push(asset);
     Ok(())
+}
+
+fn next_limited_count(current: usize, max: usize, what: &'static str) -> Result<usize> {
+    let next = current.checked_add(1).ok_or(IdmlError::LimitExceeded {
+        what,
+        limit: max as u64,
+        actual: u64::MAX,
+    })?;
+
+    if next > max {
+        return Err(IdmlError::LimitExceeded {
+            what,
+            limit: max as u64,
+            actual: next as u64,
+        });
+    }
+
+    Ok(next)
 }
 
 #[cfg(test)]
@@ -1252,6 +1253,21 @@ mod tests {
                 limit: 1,
                 actual: 2,
             }
+        ));
+    }
+
+    #[test]
+    fn limited_count_rejects_overflow() {
+        let err =
+            super::next_limited_count(usize::MAX, usize::MAX, "resource item count").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item count",
+                limit,
+                actual: u64::MAX,
+            } if limit == usize::MAX as u64
         ));
     }
 

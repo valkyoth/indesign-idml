@@ -50,6 +50,8 @@ Hard rules:
   such as symlinks.
 - Compression-ratio diagnostics use division/remainder ceiling arithmetic
   instead of addition-based formulas that can overflow at ZIP metadata limits.
+- Count-limit diagnostics use checked increments instead of saturating
+  arithmetic, so overflow attempts report explicit limit failures.
 - Writer and bounded-read byte counts use explicit checked `usize` to `u64`
   conversions instead of sentinel fallbacks.
 - Direct XML parser entry points enforce configured XML byte limits before event
