@@ -20,6 +20,10 @@ For large IDML packages, prefer visitor-style APIs when writing extracted text
 or metadata to another sink. `try_for_each_story_text_with_options` resolves one
 story at a time in `designmap.xml` order and allows the caller to stop on I/O or
 application errors without collecting every story into one map first.
+For layout-aware extraction, `try_for_each_spread_text_frame_with_options`,
+`try_for_each_spread_text_on_page_with_options`, and
+`try_for_each_spread_text_in_rect_with_options` resolve only matching frame
+stories as they are visited.
 
 ## CLI
 
