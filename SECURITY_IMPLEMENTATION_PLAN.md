@@ -28,7 +28,8 @@ Threat assumptions:
 
 - IDML files are untrusted input.
 - ZIP entries may attempt path traversal, duplicate names, decompression bombs,
-  unsupported compression methods, or malformed metadata.
+  extreme compression ratios, unsupported compression methods, or malformed
+  metadata.
 - XML may contain oversized attributes, malformed namespaces, invalid UTF-8,
   entity tricks, malicious ID references, and resource exhaustion payloads.
 - Embedded base64 assets may be non-canonical, oversized, padded incorrectly, or
@@ -61,7 +62,8 @@ Primary modules:
 Parsing flow:
 
 1. Open archive through `IdmlPackage`.
-2. Inventory entries with strict path normalization and configured byte limits.
+2. Inventory entries with strict path normalization, configured byte limits, and
+   per-entry compression-ratio limits.
 3. Parse `designmap.xml` first.
 4. Build ordered indexes with `IndexMap`.
 5. Return lazy pointers for spreads, stories, and resources.

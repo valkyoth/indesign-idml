@@ -25,6 +25,7 @@ manifest, spread, and story parser limits used by the library.
 cargo run --features cli --bin idml-text -- INPUT.idml
 cargo run --features cli --bin idml-text -- --spread-id u10 --page-id p1 INPUT.idml
 cargo run --features cli --bin idml-text -- --spread-id u10 --rect-points 0 0 100 100 INPUT.idml
+cargo run --features cli --bin idml-text -- --max-entry-compression-ratio 100 INPUT.idml
 ```
 
 Release binaries for `idml-text` are intended to be attached to GitHub Releases
