@@ -26,6 +26,9 @@ pub const DEFAULT_MAX_EMBEDDED_ASSET_ENCODED_BYTES: usize =
 /// Default maximum embedded asset payloads accepted in one XML entry.
 pub const DEFAULT_MAX_EMBEDDED_ASSETS: usize = 10_000;
 
+/// Default maximum typed resource items accepted in one resource XML entry.
+pub const DEFAULT_MAX_RESOURCE_ITEMS: usize = 100_000;
+
 /// Broad resource category inferred from a `designmap.xml` package reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResourceKind {
@@ -105,6 +108,15 @@ pub struct EmbeddedAssetParseOptions {
     pub max_xml_depth: usize,
 }
 
+/// Parser limits for typed resource item inventories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResourceItemParseOptions {
+    /// Maximum resource items collected from one XML entry.
+    pub max_items: usize,
+    /// Maximum XML element nesting depth accepted while parsing.
+    pub max_xml_depth: usize,
+}
+
 impl Default for EmbeddedAssetParseOptions {
     fn default() -> Self {
         Self {
@@ -118,6 +130,15 @@ impl Default for EmbeddedAssetParseOptions {
     }
 }
 
+impl Default for ResourceItemParseOptions {
+    fn default() -> Self {
+        Self {
+            max_items: DEFAULT_MAX_RESOURCE_ITEMS,
+            max_xml_depth: DEFAULT_MAX_XML_DEPTH,
+        }
+    }
+}
+
 /// Decoded embedded asset payload found in a resource or spread XML file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EmbeddedAsset {
@@ -125,6 +146,19 @@ pub struct EmbeddedAsset {
     pub source_element: String,
     /// Decoded asset bytes.
     pub bytes: Vec<u8>,
+}
+
+/// A typed item found inside a resource XML entry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResourceItem {
+    /// Broad inferred resource kind.
+    pub kind: ResourceKind,
+    /// Qualified XML element name.
+    pub element: String,
+    /// Resource `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Human-readable name, when present.
+    pub name: Option<String>,
 }
 
 impl Default for ResourceIntegrityOptions {
@@ -372,6 +406,44 @@ pub fn extract_embedded_assets_with_options(
     Ok(assets)
 }
 
+/// Extracts typed resource items from a resource XML entry with secure defaults.
+pub fn extract_resource_items(xml_content: &str, kind: ResourceKind) -> Result<Vec<ResourceItem>> {
+    extract_resource_items_with_options(xml_content, kind, ResourceItemParseOptions::default())
+}
+
+/// Extracts typed resource items from a resource XML entry with explicit limits.
+pub fn extract_resource_items_with_options(
+    xml_content: &str,
+    kind: ResourceKind,
+    options: ResourceItemParseOptions,
+) -> Result<Vec<ResourceItem>> {
+    let mut reader = Reader::from_str(xml_content);
+    reader.config_mut().trim_text(true);
+
+    let mut items = Vec::new();
+    let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "resource item XML depth");
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                xml_depth.enter()?;
+                maybe_push_resource_item(&mut items, &e, &reader, &kind, options.max_items)?;
+            }
+            Event::Empty(e) => {
+                xml_depth.visit_empty()?;
+                maybe_push_resource_item(&mut items, &e, &reader, &kind, options.max_items)?;
+            }
+            Event::End(_) => {
+                xml_depth.exit();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(items)
+}
+
 impl ResourceKind {
     /// Classifies a package reference using the element first, then the archive path.
     #[must_use]
@@ -496,6 +568,104 @@ fn validate_resource_compression_ratio(
     Ok(())
 }
 
+fn maybe_push_resource_item(
+    items: &mut Vec<ResourceItem>,
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    kind: &ResourceKind,
+    max_items: usize,
+) -> Result<()> {
+    if !resource_kind_matches_element(kind, event.name().as_ref()) {
+        return Ok(());
+    }
+
+    let id = optional_resource_attr(event, reader, &[b"Self", b"Id", b"ID"])?;
+    let name = optional_resource_attr(
+        event,
+        reader,
+        &[b"Name", b"FullName", b"AppliedFont", b"Label"],
+    )?;
+    push_resource_item_limited(
+        items,
+        max_items,
+        ResourceItem {
+            kind: kind.clone(),
+            element: String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+            id,
+            name,
+        },
+    )
+}
+
+fn resource_kind_matches_element(kind: &ResourceKind, name: &[u8]) -> bool {
+    let local = local_name(name).to_ascii_lowercase();
+    match kind {
+        ResourceKind::MasterSpread => local == b"masterspread",
+        ResourceKind::Styles => {
+            matches!(
+                local.as_slice(),
+                b"style"
+                    | b"paragraphstyle"
+                    | b"characterstyle"
+                    | b"objectstyle"
+                    | b"tablestyle"
+                    | b"cellstyle"
+            )
+        }
+        ResourceKind::Swatches => matches!(
+            local.as_slice(),
+            b"swatch" | b"color" | b"gradient" | b"tint" | b"mixedink"
+        ),
+        ResourceKind::Fonts => matches!(local.as_slice(), b"font" | b"fontfamily" | b"fontstyle"),
+        ResourceKind::Links => matches!(
+            local.as_slice(),
+            b"link" | b"hyperlink" | b"hyperlinkurlsource" | b"hyperlinktextdestination"
+        ),
+        ResourceKind::Graphics => matches!(
+            local.as_slice(),
+            b"graphic" | b"image" | b"pdf" | b"eps" | b"wmf" | b"pict" | b"importedpage"
+        ),
+        ResourceKind::Preferences => {
+            local.ends_with(b"preference") || local.ends_with(b"preferences")
+        }
+        ResourceKind::Tags => matches!(local.as_slice(), b"tag" | b"xmltag"),
+        ResourceKind::Other(_) => false,
+    }
+}
+
+fn optional_resource_attr(
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    names: &[&[u8]],
+) -> Result<Option<String>> {
+    for attr in event.attributes() {
+        let attr = attr?;
+        if names.contains(&attr.key.as_ref()) {
+            return Ok(Some(
+                attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
+                    .into_owned(),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+fn push_resource_item_limited(
+    items: &mut Vec<ResourceItem>,
+    max_items: usize,
+    item: ResourceItem,
+) -> Result<()> {
+    if items.len() >= max_items {
+        return Err(IdmlError::LimitExceeded {
+            what: "resource item count",
+            limit: max_items as u64,
+            actual: items.len().saturating_add(1) as u64,
+        });
+    }
+    items.push(item);
+    Ok(())
+}
+
 fn compression_ratio_ceil(uncompressed_size: u64, compressed_size: u64) -> u64 {
     uncompressed_size.saturating_add(compressed_size.saturating_sub(1)) / compressed_size
 }
@@ -578,8 +748,9 @@ fn push_asset_limited(
 mod tests {
     use super::{
         EmbeddedAssetParseOptions, ResourceArchiveMetadata, ResourceIntegrityOptions,
-        ResourceInventory, ResourceKind, extract_embedded_assets,
-        extract_embedded_assets_with_options,
+        ResourceInventory, ResourceItemParseOptions, ResourceKind, extract_embedded_assets,
+        extract_embedded_assets_with_options, extract_resource_items,
+        extract_resource_items_with_options,
     };
     use crate::IdmlError;
     use crate::archive::{ArchiveEntry, IdmlPath};
@@ -733,6 +904,109 @@ mod tests {
             ResourceKind::from_reference("idPkg:Graphic", &path),
             ResourceKind::Graphics
         );
+    }
+
+    #[test]
+    fn extracts_style_resource_items() {
+        let xml = r#"<Styles>
+  <ParagraphStyle Self="p1" Name="Body" />
+  <CharacterStyle Self="c1" Name="Emphasis" />
+  <Color Self="ignored" Name="Red" />
+</Styles>"#;
+
+        let items = extract_resource_items(xml, ResourceKind::Styles).unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].element, "ParagraphStyle");
+        assert_eq!(items[0].id.as_deref(), Some("p1"));
+        assert_eq!(items[0].name.as_deref(), Some("Body"));
+        assert_eq!(items[1].element, "CharacterStyle");
+    }
+
+    #[test]
+    fn extracts_swatch_font_link_graphic_and_tag_items() {
+        let xml = r#"<Resources>
+  <Color Self="c1" Name="Brand Red" />
+  <Font Self="f1" Name="Minion Pro" />
+  <Link Self="l1" LinkResourceURI="file:///image.tif" />
+  <Image Self="i1" Name="Hero" />
+  <XMLTag Self="t1" Name="Headline" />
+</Resources>"#;
+
+        assert_eq!(
+            extract_resource_items(xml, ResourceKind::Swatches)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            extract_resource_items(xml, ResourceKind::Fonts)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            extract_resource_items(xml, ResourceKind::Links)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            extract_resource_items(xml, ResourceKind::Graphics)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            extract_resource_items(xml, ResourceKind::Tags).unwrap()[0]
+                .name
+                .as_deref(),
+            Some("Headline")
+        );
+    }
+
+    #[test]
+    fn resource_item_parser_enforces_item_limit() {
+        let err = extract_resource_items_with_options(
+            r#"<Styles><ParagraphStyle Self="p1" /><ParagraphStyle Self="p2" /></Styles>"#,
+            ResourceKind::Styles,
+            ResourceItemParseOptions {
+                max_items: 1,
+                ..ResourceItemParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn resource_item_parser_enforces_xml_depth_limit() {
+        let err = extract_resource_items_with_options(
+            r#"<Resources><Wrapper><Color Self="c1" /></Wrapper></Resources>"#,
+            ResourceKind::Swatches,
+            ResourceItemParseOptions {
+                max_xml_depth: 2,
+                ..ResourceItemParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item XML depth",
+                limit: 2,
+                actual: 3,
+            }
+        ));
     }
 
     #[test]

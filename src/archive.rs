@@ -11,7 +11,8 @@ use crate::model::designmap::{
 };
 use crate::model::resources::{
     EmbeddedAsset, EmbeddedAssetParseOptions, ResourceIntegrityOptions, ResourceInventory,
-    extract_embedded_assets_with_options,
+    ResourceItem, ResourceItemParseOptions, ResourceKind, extract_embedded_assets_with_options,
+    extract_resource_items_with_options,
 };
 use crate::model::spread::{Rect, Spread, SpreadParseOptions};
 use crate::model::story::{Story, StoryParseOptions};
@@ -366,6 +367,27 @@ where
         extract_embedded_assets_with_options(xml, options)
     }
 
+    /// Reads an XML entry and extracts typed resource items with secure defaults.
+    pub fn read_resource_items(
+        &mut self,
+        path: &IdmlPath,
+        kind: ResourceKind,
+    ) -> Result<Vec<ResourceItem>> {
+        self.read_resource_items_with_options(path, kind, ResourceItemParseOptions::default())
+    }
+
+    /// Reads an XML entry and extracts typed resource items with explicit limits.
+    pub fn read_resource_items_with_options(
+        &mut self,
+        path: &IdmlPath,
+        kind: ResourceKind,
+        options: ResourceItemParseOptions,
+    ) -> Result<Vec<ResourceItem>> {
+        let bytes = self.read_entry(path)?;
+        let xml = std::str::from_utf8(&bytes)?;
+        extract_resource_items_with_options(xml, kind, options)
+    }
+
     /// Resolves a lazy story pointer and parses that story.
     pub fn resolve_story_pointer(&mut self, pointer: StoryPointer<'_>) -> Result<Story> {
         self.read_story(pointer.path())
@@ -432,6 +454,27 @@ where
         options: EmbeddedAssetParseOptions,
     ) -> Result<Vec<EmbeddedAsset>> {
         self.read_embedded_assets_with_options(pointer.path(), options)
+    }
+
+    /// Resolves a lazy untyped package resource and extracts typed resource items.
+    pub fn resolve_package_resource_items(
+        &mut self,
+        pointer: PackageResourcePointer<'_>,
+    ) -> Result<Vec<ResourceItem>> {
+        self.resolve_package_resource_items_with_options(
+            pointer,
+            ResourceItemParseOptions::default(),
+        )
+    }
+
+    /// Resolves a lazy untyped package resource and extracts typed resource items with limits.
+    pub fn resolve_package_resource_items_with_options(
+        &mut self,
+        pointer: PackageResourcePointer<'_>,
+        options: ResourceItemParseOptions,
+    ) -> Result<Vec<ResourceItem>> {
+        let kind = ResourceKind::from_reference(pointer.element(), pointer.path());
+        self.read_resource_items_with_options(pointer.path(), kind, options)
     }
 
     /// Resolves a story ID through a parsed design map and parses that story.
@@ -899,7 +942,9 @@ mod tests {
     use crate::core::units::Points;
     use crate::encoding::Base64Mode;
     use crate::model::designmap::{DesignMap, DesignMapParseOptions};
-    use crate::model::resources::{EmbeddedAssetParseOptions, ResourceIntegrityOptions};
+    use crate::model::resources::{
+        EmbeddedAssetParseOptions, ResourceIntegrityOptions, ResourceItemParseOptions, ResourceKind,
+    };
     use crate::model::spread::{Rect, Spread, SpreadParseOptions, TextFrame};
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::{Cursor, Write};
@@ -1393,6 +1438,52 @@ mod tests {
     }
 
     #[test]
+    fn reads_resource_items_from_xml_entry() {
+        let styles =
+            br#"<Styles><ParagraphStyle Self="p1" Name="Body" /><Color Self="ignored" /></Styles>"#;
+        let zip = make_zip(&[("Resources/Styles.xml", styles)]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let path = IdmlPath::new("Resources/Styles.xml").unwrap();
+
+        let items = package
+            .read_resource_items(&path, ResourceKind::Styles)
+            .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id.as_deref(), Some("p1"));
+        assert_eq!(items[0].name.as_deref(), Some("Body"));
+    }
+
+    #[test]
+    fn read_resource_items_with_options_enforces_limits() {
+        let styles =
+            br#"<Styles><ParagraphStyle Self="p1" /><ParagraphStyle Self="p2" /></Styles>"#;
+        let zip = make_zip(&[("Resources/Styles.xml", styles)]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let path = IdmlPath::new("Resources/Styles.xml").unwrap();
+
+        let err = package
+            .read_resource_items_with_options(
+                &path,
+                ResourceKind::Styles,
+                ResourceItemParseOptions {
+                    max_items: 1,
+                    ..ResourceItemParseOptions::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
+    }
+
+    #[test]
     fn resolves_package_resource_pointer_as_embedded_assets() {
         let designmap = br#"<Document Self="d1">
   <idPkg:Graphic src="Resources/Graphic.xml" />
@@ -1418,6 +1509,24 @@ mod tests {
 
         assert_eq!(pointer.element(), "idPkg:Graphic");
         assert_eq!(assets[0].bytes, b"hello");
+    }
+
+    #[test]
+    fn resolves_package_resource_pointer_as_resource_items() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Resource src="Resources/Fonts.xml" />
+</Document>"#;
+        let fonts = br#"<Fonts><Font Self="f1" Name="Minion Pro" /></Fonts>"#;
+        let zip = make_zip(&[("designmap.xml", designmap), ("Resources/Fonts.xml", fonts)]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let pointer = design_map.package_resource_pointers().next().unwrap();
+        let items = package.resolve_package_resource_items(pointer).unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, ResourceKind::Fonts);
+        assert_eq!(items[0].id.as_deref(), Some("f1"));
     }
 
     #[test]
