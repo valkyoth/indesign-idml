@@ -51,6 +51,19 @@ pub struct PreservedEntry {
     pub compression: CompressionMethod,
 }
 
+/// Borrowed preserved package entry in `designmap.xml` order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreservedEntryRef<'a> {
+    /// Qualified `idPkg:*` element that referenced the entry.
+    pub element: &'a str,
+    /// Manifest ID for typed preserved entries such as master spreads.
+    pub id: Option<&'a str>,
+    /// Logical archive path from the package reference.
+    pub path: &'a IdmlPath,
+    /// Preserved raw entry bytes and write-time compression metadata.
+    pub entry: &'a PreservedEntry,
+}
+
 impl PreservedEntry {
     /// Creates a preserved entry with an explicitly supported compression method.
     pub fn with_compression(
@@ -299,6 +312,49 @@ impl IdmlDocument {
         self.preserved_entries.insert(path, entry)
     }
 
+    /// Visits raw preserved package entries in `designmap.xml` package order.
+    ///
+    /// This includes master spreads and untyped `idPkg:*` resources. Stories
+    /// and spreads are skipped because they have typed model maps. If the
+    /// document was manually constructed without ordered package references,
+    /// the fallback order is master spreads followed by other resource maps in
+    /// insertion order.
+    pub fn try_for_each_preserved_entry<E, F>(&self, mut visit: F) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(PreservedEntryRef<'a>) -> std::result::Result<(), E>,
+    {
+        if self.design_map.package_refs.is_empty() {
+            for (id, path) in &self.design_map.master_spread_srcs {
+                self.visit_preserved_entry("idPkg:MasterSpread", Some(id), path, &mut visit)?;
+            }
+            for (element, paths) in &self.design_map.other_package_srcs {
+                validate_raw_package_element_name(element).map_err(E::from)?;
+                for path in paths {
+                    self.visit_preserved_entry(element, None, path, &mut visit)?;
+                }
+            }
+            return Ok(());
+        }
+
+        for reference in &self.design_map.package_refs {
+            if !is_preserved_package_element(&reference.element) {
+                continue;
+            }
+            if reference.element != "idPkg:MasterSpread" {
+                validate_raw_package_element_name(&reference.element).map_err(E::from)?;
+            }
+            self.visit_preserved_entry(
+                &reference.element,
+                reference.id.as_ref(),
+                &reference.path,
+                &mut visit,
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Adds a raw master spread entry and its `DesignMap` reference atomically.
     pub fn add_master_spread_entry(
         &mut self,
@@ -545,6 +601,30 @@ impl IdmlDocument {
                 kind: "spread model",
                 id: spread_id.to_owned(),
             })
+    }
+
+    fn visit_preserved_entry<E, F>(
+        &self,
+        element: &str,
+        id: Option<&String>,
+        path: &IdmlPath,
+        visit: &mut F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(PreservedEntryRef<'a>) -> std::result::Result<(), E>,
+    {
+        let entry = self
+            .preserved_entries
+            .get(path)
+            .ok_or_else(|| IdmlError::MissingArchiveEntry(path.to_string()))
+            .map_err(E::from)?;
+        visit(PreservedEntryRef {
+            element,
+            id: id.map(String::as_str),
+            path,
+            entry,
+        })
     }
 
     fn story_texts_for_spread(&self, spread: &Spread) -> Result<IndexMap<String, String>> {
@@ -1050,7 +1130,8 @@ mod tests {
     use crate::archive::{ArchiveLimits, IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::core::units::Points;
     use crate::model::designmap::{
-        DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS, DesignMap, DesignMapParseOptions, Layer,
+        DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS, DesignMap, DesignMapPackageRef, DesignMapParseOptions,
+        Layer,
     };
     use crate::model::resources::ResourceIntegrityOptions;
     use crate::model::spread::{
@@ -1709,6 +1790,95 @@ mod tests {
 
         assert!(graphic < master);
         assert!(master < fonts);
+    }
+
+    #[test]
+    fn visits_preserved_entries_in_designmap_order() {
+        let graphic_path = IdmlPath::new("Resources/Graphic.xml").unwrap();
+        let master_path = IdmlPath::new("MasterSpreads/MasterSpread_u20.xml").unwrap();
+        let fonts_path = IdmlPath::new("Resources/Fonts.xml").unwrap();
+        let mut document = make_document();
+        document
+            .add_package_entry(
+                "idPkg:Graphic",
+                graphic_path.clone(),
+                PreservedEntry::deflated(b"<Graphic />".as_slice()),
+            )
+            .unwrap();
+        document
+            .add_master_spread_entry(
+                "u20",
+                master_path.clone(),
+                PreservedEntry::stored(b"<MasterSpread Self=\"u20\" />".as_slice()),
+            )
+            .unwrap();
+        document
+            .add_package_entry(
+                "idPkg:Fonts",
+                fonts_path.clone(),
+                PreservedEntry::deflated(b"<Fonts />".as_slice()),
+            )
+            .unwrap();
+
+        let mut visited = Vec::new();
+        document
+            .try_for_each_preserved_entry(|entry| {
+                visited.push((
+                    entry.element.to_owned(),
+                    entry.id.map(str::to_owned),
+                    entry.path.to_string(),
+                    entry.entry.compression,
+                ));
+                Ok::<(), IdmlError>(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            visited,
+            vec![
+                (
+                    "idPkg:Graphic".to_owned(),
+                    None,
+                    graphic_path.to_string(),
+                    CompressionMethod::Deflated,
+                ),
+                (
+                    "idPkg:MasterSpread".to_owned(),
+                    Some("u20".to_owned()),
+                    master_path.to_string(),
+                    CompressionMethod::Stored,
+                ),
+                (
+                    "idPkg:Fonts".to_owned(),
+                    None,
+                    fonts_path.to_string(),
+                    CompressionMethod::Deflated,
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn preserved_entry_visitor_reports_missing_entry() {
+        let mut document = make_document();
+        let path = IdmlPath::new("Resources/Graphic.xml").unwrap();
+        document
+            .design_map
+            .other_package_srcs
+            .insert("idPkg:Graphic".to_owned(), vec![path.clone()]);
+        document
+            .design_map
+            .package_refs
+            .push(DesignMapPackageRef::resource("idPkg:Graphic", path.clone()).unwrap());
+
+        let err = document
+            .try_for_each_preserved_entry(|_| Ok::<(), IdmlError>(()))
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingArchiveEntry(missing) if missing == path.to_string()
+        ));
     }
 
     #[test]

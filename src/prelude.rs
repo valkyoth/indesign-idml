@@ -10,7 +10,7 @@ pub use crate::model::designmap::{
     PackageResourcePointer, SpreadPointer, StoryPointer,
 };
 pub use crate::model::document::{
-    IdmlDocument, IdmlDocumentReadOptions, IdmlIdAllocator, PreservedEntry,
+    IdmlDocument, IdmlDocumentReadOptions, IdmlIdAllocator, PreservedEntry, PreservedEntryRef,
 };
 pub use crate::model::resources::{
     EmbeddedAsset, EmbeddedAssetParseOptions, ResourceArchiveMetadata, ResourceIntegrityOptions,
