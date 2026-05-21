@@ -6,6 +6,88 @@ pub(crate) const DEFAULT_MAX_XML_DEPTH: usize = 1024;
 pub(crate) const DEFAULT_MAX_XML_INPUT_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RootElementTracker {
+    expected_name: &'static [u8],
+    expected_root_reason: &'static str,
+    seen: bool,
+    depth: usize,
+    closed: bool,
+}
+
+impl RootElementTracker {
+    pub(crate) const fn new(
+        expected_name: &'static [u8],
+        expected_root_reason: &'static str,
+    ) -> Self {
+        Self {
+            expected_name,
+            expected_root_reason,
+            seen: false,
+            depth: 0,
+            closed: false,
+        }
+    }
+
+    pub(crate) fn enter(&mut self, name: &[u8]) -> Result<()> {
+        if self.closed {
+            return Err(self.invalid_element(name, "multiple root elements"));
+        }
+        if !self.seen {
+            self.validate_root(name)?;
+            self.seen = true;
+        }
+        self.depth = self
+            .depth
+            .checked_add(1)
+            .ok_or_else(|| self.invalid_element(name, "root depth overflow"))?;
+        Ok(())
+    }
+
+    pub(crate) fn visit_empty(&mut self, name: &[u8]) -> Result<()> {
+        if self.closed {
+            return Err(self.invalid_element(name, "multiple root elements"));
+        }
+        if !self.seen {
+            self.validate_root(name)?;
+            self.seen = true;
+            self.closed = true;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn exit(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+        if self.seen && self.depth == 0 {
+            self.closed = true;
+        }
+    }
+
+    pub(crate) fn finish(self) -> Result<()> {
+        if self.seen {
+            return Ok(());
+        }
+        Err(IdmlError::InvalidElement {
+            element: String::new(),
+            reason: "missing root element",
+        })
+    }
+
+    fn validate_root(&self, name: &[u8]) -> Result<()> {
+        if name == self.expected_name {
+            return Ok(());
+        }
+        Err(self.invalid_element(name, self.expected_root_reason))
+    }
+
+    fn invalid_element(&self, name: &[u8], reason: &'static str) -> IdmlError {
+        IdmlError::InvalidElement {
+            element: String::from_utf8_lossy(name).into_owned(),
+            reason,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct XmlDepthTracker {
     current: usize,
     max: usize,

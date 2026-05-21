@@ -4,8 +4,8 @@ use crate::archive::IdmlPath;
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
-    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, enforce_xml_input_bytes,
-    validate_xml_attribute,
+    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
+    enforce_xml_input_bytes, validate_xml_attribute,
 };
 use indexmap::{IndexMap, IndexSet};
 use quick_xml::Reader;
@@ -259,10 +259,12 @@ impl DesignMap {
         let mut design_map = Self::default();
         let mut package_refs = 0usize;
         let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "DesignMap XML depth");
+        let mut root = RootElementTracker::new(b"Document", "expected Document root element");
 
         loop {
             match reader.read_event()? {
                 Event::Start(e) => {
+                    root.enter(e.name().as_ref())?;
                     xml_depth.enter()?;
                     if e.name().as_ref() == b"Document"
                         && let Some(id) = optional_attr(&e, "Self", &reader)?
@@ -277,6 +279,7 @@ impl DesignMap {
                     }
                 }
                 Event::Empty(e) => {
+                    root.visit_empty(e.name().as_ref())?;
                     xml_depth.visit_empty()?;
                     if e.name().as_ref() == b"Document"
                         && let Some(id) = optional_attr(&e, "Self", &reader)?
@@ -332,12 +335,14 @@ impl DesignMap {
                 }
                 Event::End(_) => {
                     xml_depth.exit();
+                    root.exit();
                 }
                 Event::Eof => break,
                 _ => {}
             }
         }
 
+        root.finish()?;
         design_map.validate()?;
         Ok(design_map)
     }
@@ -979,6 +984,21 @@ mod tests {
         let design_map = DesignMap::from_xml(r#"<Document Self="doc1" />"#).unwrap();
 
         assert_eq!(design_map.id, "doc1");
+    }
+
+    #[test]
+    fn rejects_wrong_designmap_root_element() {
+        let err =
+            DesignMap::from_xml(r#"<Wrapper><idPkg:Story src="Stories/Story_u1.xml" /></Wrapper>"#)
+                .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "expected Document root element",
+            } if element == "Wrapper"
+        ));
     }
 
     #[test]

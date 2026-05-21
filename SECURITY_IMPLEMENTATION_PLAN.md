@@ -58,6 +58,8 @@ Hard rules:
 - Semantically equivalent XML start and empty events are handled consistently
   where IDML allows self-closing elements, avoiding first/empty event parser
   confusion.
+- Top-level XML parsers reject missing, wrong, or repeated root elements before
+  interpreting recognized child tags as a valid model.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.

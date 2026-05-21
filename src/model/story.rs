@@ -3,8 +3,8 @@
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
-    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, enforce_xml_input_bytes,
-    validate_xml_attribute, validate_xml_text,
+    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
+    enforce_xml_input_bytes, validate_xml_attribute, validate_xml_text,
 };
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -61,10 +61,12 @@ impl Story {
         let mut text = String::new();
         let mut content_depth = 0usize;
         let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "Story XML depth");
+        let mut root = RootElementTracker::new(b"Story", "expected Story root element");
 
         loop {
             match reader.read_event()? {
                 Event::Start(e) => {
+                    root.enter(e.name().as_ref())?;
                     xml_depth.enter()?;
                     if e.name().as_ref() == b"Story" && id.is_none() {
                         id = optional_attr(&e, "Self", &reader)?;
@@ -75,9 +77,11 @@ impl Story {
                 Event::End(e) if e.name().as_ref() == b"Content" => {
                     content_depth = content_depth.saturating_sub(1);
                     xml_depth.exit();
+                    root.exit();
                 }
                 Event::End(_) => {
                     xml_depth.exit();
+                    root.exit();
                 }
                 Event::Text(e) if content_depth > 0 => {
                     let decoded = e.decode()?;
@@ -106,6 +110,7 @@ impl Story {
                     }
                 }
                 Event::Empty(e) => {
+                    root.visit_empty(e.name().as_ref())?;
                     xml_depth.visit_empty()?;
                     if e.name().as_ref() == b"Story" && id.is_none() {
                         id = optional_attr(&e, "Self", &reader)?;
@@ -120,6 +125,7 @@ impl Story {
             }
         }
 
+        root.finish()?;
         Ok(Self { id, text })
     }
 
@@ -289,6 +295,32 @@ mod tests {
 
         assert_eq!(story.id.as_deref(), Some("u2"));
         assert_eq!(story.text, "");
+    }
+
+    #[test]
+    fn rejects_wrong_story_root_element() {
+        let err = Story::from_xml("<Wrapper><Content>hidden</Content></Wrapper>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "expected Story root element",
+            } if element == "Wrapper"
+        ));
+    }
+
+    #[test]
+    fn rejects_multiple_story_roots() {
+        let err = Story::from_xml("<Story /><Story />").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "multiple root elements",
+            } if element == "Story"
+        ));
     }
 
     #[test]

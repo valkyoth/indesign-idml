@@ -4,8 +4,8 @@ use crate::core::units::{Millimeters, Points};
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
-    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, enforce_xml_input_bytes,
-    validate_xml_attribute,
+    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
+    enforce_xml_input_bytes, validate_xml_attribute,
 };
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -89,10 +89,12 @@ impl Spread {
         let mut spread = Self::default();
         let mut page_item_count = 0usize;
         let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "Spread XML depth");
+        let mut root = RootElementTracker::new(b"Spread", "expected Spread root element");
 
         loop {
             match reader.read_event()? {
                 Event::Start(e) => {
+                    root.enter(e.name().as_ref())?;
                     xml_depth.enter()?;
                     if e.name().as_ref() == b"Spread" && spread.id.is_none() {
                         spread.id = optional_attr(&e, "Self", &reader)?;
@@ -136,6 +138,7 @@ impl Spread {
                     }
                 }
                 Event::Empty(e) => {
+                    root.visit_empty(e.name().as_ref())?;
                     xml_depth.visit_empty()?;
                     if e.name().as_ref() == b"Spread" && spread.id.is_none() {
                         spread.id = optional_attr(&e, "Self", &reader)?;
@@ -171,12 +174,14 @@ impl Spread {
                 }
                 Event::End(_) => {
                     xml_depth.exit();
+                    root.exit();
                 }
                 Event::Eof => break,
                 _ => {}
             }
         }
 
+        root.finish()?;
         Ok(spread)
     }
 
@@ -999,6 +1004,19 @@ mod tests {
         assert_eq!(spread.id.as_deref(), Some("u10"));
         assert!(spread.pages.is_empty());
         assert!(spread.text_frames.is_empty());
+    }
+
+    #[test]
+    fn rejects_wrong_spread_root_element() {
+        let err = Spread::from_xml("<Wrapper><TextFrame Self=\"tf1\" /></Wrapper>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "expected Spread root element",
+            } if element == "Wrapper"
+        ));
     }
 
     #[test]

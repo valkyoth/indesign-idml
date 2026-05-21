@@ -68,6 +68,15 @@ pub enum IdmlError {
         reason: &'static str,
     },
 
+    /// An XML element appeared in an invalid location or form.
+    #[error("invalid XML element `{element}`: {reason}")]
+    InvalidElement {
+        /// Element name.
+        element: String,
+        /// Rejection reason.
+        reason: &'static str,
+    },
+
     /// The IDML container violates packaging requirements.
     #[error("invalid IDML package: {0}")]
     InvalidPackage(&'static str),
