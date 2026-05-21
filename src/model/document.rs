@@ -5,7 +5,7 @@ use crate::core::resolver::{
     ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
 };
 use crate::error::{IdmlError, Result};
-use crate::model::designmap::{DesignMap, validate_package_element_name};
+use crate::model::designmap::{DesignMap, DesignMapParseOptions, validate_package_element_name};
 use crate::model::resources::{ResourceIntegrityOptions, ResourceInventory};
 use crate::model::spread::{Rect, Spread, SpreadParseOptions};
 use crate::model::story::{Story, StoryParseOptions};
@@ -29,6 +29,8 @@ pub struct IdmlDocument {
 /// Parser limits used when eagerly loading an [`IdmlDocument`] from a package.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct IdmlDocumentReadOptions {
+    /// DesignMap parser limits.
+    pub design_map: DesignMapParseOptions,
     /// Story parser limits.
     pub story: StoryParseOptions,
     /// Spread parser limits.
@@ -349,7 +351,7 @@ impl IdmlDocument {
     where
         R: Read + Seek,
     {
-        let design_map = package.read_designmap()?;
+        let design_map = package.read_designmap_with_options(options.design_map)?;
         let story_refs = design_map
             .story_srcs
             .iter()
@@ -718,7 +720,7 @@ mod tests {
     use crate::IdmlError;
     use crate::archive::{IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::core::units::Points;
-    use crate::model::designmap::DesignMap;
+    use crate::model::designmap::{DesignMap, DesignMapParseOptions};
     use crate::model::resources::ResourceIntegrityOptions;
     use crate::model::spread::{Rect, Spread, SpreadParseOptions, TextFrame};
     use crate::model::story::{Story, StoryParseOptions};
@@ -1324,6 +1326,31 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
+    }
+
+    #[test]
+    fn read_from_package_with_options_enforces_designmap_ref_limit() {
+        let document = make_document();
+        let zip = document
+            .write_to(Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = IdmlDocument::read_from_package_with_options(
+            &mut package,
+            IdmlDocumentReadOptions {
+                design_map: DesignMapParseOptions {
+                    max_package_refs: 1,
+                },
+                ..IdmlDocumentReadOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, IdmlError::LimitExceeded { what, .. } if what == "DesignMap package reference count")
+        );
     }
 
     #[test]

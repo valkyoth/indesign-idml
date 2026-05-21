@@ -25,6 +25,24 @@ pub struct DesignMap {
     pub other_package_srcs: IndexMap<String, Vec<IdmlPath>>,
 }
 
+/// Default maximum package references accepted in one `designmap.xml`.
+pub const DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS: usize = 20_000;
+
+/// DesignMap parser limits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DesignMapParseOptions {
+    /// Maximum `idPkg:*` package references collected from one manifest.
+    pub max_package_refs: usize,
+}
+
+impl Default for DesignMapParseOptions {
+    fn default() -> Self {
+        Self {
+            max_package_refs: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS,
+        }
+    }
+}
+
 /// Borrowed pointer to a story package entry listed in [`DesignMap`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StoryPointer<'a> {
@@ -112,10 +130,19 @@ impl<'a> PackageResourcePointer<'a> {
 impl DesignMap {
     /// Parses a `designmap.xml` document.
     pub fn from_xml(xml_content: &str) -> Result<Self> {
+        Self::from_xml_with_options(xml_content, DesignMapParseOptions::default())
+    }
+
+    /// Parses a `designmap.xml` document with explicit limits.
+    pub fn from_xml_with_options(
+        xml_content: &str,
+        options: DesignMapParseOptions,
+    ) -> Result<Self> {
         let mut reader = Reader::from_str(xml_content);
         reader.config_mut().trim_text(true);
 
         let mut design_map = Self::default();
+        let mut package_refs = 0usize;
 
         loop {
             match reader.read_event()? {
@@ -125,12 +152,15 @@ impl DesignMap {
                     }
                 }
                 Event::Empty(e) if e.name().as_ref() == b"idPkg:Spread" => {
+                    increment_package_refs(&mut package_refs, options.max_package_refs)?;
                     parse_package_ref(&e, "idPkg:Spread", &reader, &mut design_map.spread_srcs)?;
                 }
                 Event::Empty(e) if e.name().as_ref() == b"idPkg:Story" => {
+                    increment_package_refs(&mut package_refs, options.max_package_refs)?;
                     parse_package_ref(&e, "idPkg:Story", &reader, &mut design_map.story_srcs)?;
                 }
                 Event::Empty(e) if e.name().as_ref() == b"idPkg:MasterSpread" => {
+                    increment_package_refs(&mut package_refs, options.max_package_refs)?;
                     parse_package_ref(
                         &e,
                         "idPkg:MasterSpread",
@@ -139,6 +169,7 @@ impl DesignMap {
                     )?;
                 }
                 Event::Empty(e) if e.name().as_ref().starts_with(b"idPkg:") => {
+                    increment_package_refs(&mut package_refs, options.max_package_refs)?;
                     let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
                     let src = required_attr(&e, &name, "src", &reader)?;
                     design_map
@@ -215,6 +246,27 @@ impl DesignMap {
     pub fn to_xml(&self) -> Result<String> {
         serialize_designmap(self)
     }
+}
+
+fn increment_package_refs(package_refs: &mut usize, max_package_refs: usize) -> Result<()> {
+    let next = package_refs
+        .checked_add(1)
+        .ok_or(IdmlError::LimitExceeded {
+            what: "DesignMap package reference count",
+            limit: max_package_refs as u64,
+            actual: u64::MAX,
+        })?;
+
+    if next > max_package_refs {
+        return Err(IdmlError::LimitExceeded {
+            what: "DesignMap package reference count",
+            limit: max_package_refs as u64,
+            actual: next as u64,
+        });
+    }
+
+    *package_refs = next;
+    Ok(())
 }
 
 impl XmlLoadable for DesignMap {
@@ -410,7 +462,7 @@ fn invalid_package_element_name() -> IdmlError {
 
 #[cfg(test)]
 mod tests {
-    use super::DesignMap;
+    use super::{DesignMap, DesignMapParseOptions};
     use crate::IdmlError;
     use crate::archive::IdmlPath;
 
@@ -525,6 +577,31 @@ mod tests {
                 ("idPkg:Fonts", "Resources/Fonts.xml"),
             ]
         );
+    }
+
+    #[test]
+    fn enforces_package_reference_count_limit() {
+        let xml = r#"<Document>
+  <idPkg:Spread src="Spreads/Spread_u1.xml" />
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+
+        let err = DesignMap::from_xml_with_options(
+            xml,
+            DesignMapParseOptions {
+                max_package_refs: 1,
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap package reference count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
     }
 
     #[test]

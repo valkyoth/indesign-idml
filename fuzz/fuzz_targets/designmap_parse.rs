@@ -1,6 +1,6 @@
 #![no_main]
 
-use indesign_idml::model::designmap::DesignMap;
+use indesign_idml::model::designmap::{DesignMap, DesignMapParseOptions};
 use indesign_idml::model::resources::ResourceInventory;
 use libfuzzer_sys::fuzz_target;
 
@@ -9,7 +9,12 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    if let Ok(design_map) = DesignMap::from_xml(xml) {
+    if let Ok(design_map) = DesignMap::from_xml_with_options(
+        xml,
+        DesignMapParseOptions {
+            max_package_refs: 1024,
+        },
+    ) {
         let _ = design_map.validate();
         let _ = ResourceInventory::from_designmap(&design_map);
     }

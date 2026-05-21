@@ -5,7 +5,8 @@ use crate::core::resolver::{
 };
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{
-    DesignMap, MasterSpreadPointer, PackageResourcePointer, SpreadPointer, StoryPointer,
+    DesignMap, DesignMapParseOptions, MasterSpreadPointer, PackageResourcePointer, SpreadPointer,
+    StoryPointer,
 };
 use crate::model::resources::{
     EmbeddedAsset, EmbeddedAssetParseOptions, ResourceIntegrityOptions, ResourceInventory,
@@ -263,10 +264,18 @@ where
 
     /// Reads and validates the package root `designmap.xml`.
     pub fn read_designmap(&mut self) -> Result<DesignMap> {
+        self.read_designmap_with_options(DesignMapParseOptions::default())
+    }
+
+    /// Reads and validates the package root `designmap.xml` with explicit parser limits.
+    pub fn read_designmap_with_options(
+        &mut self,
+        options: DesignMapParseOptions,
+    ) -> Result<DesignMap> {
         let path = IdmlPath::new("designmap.xml")?;
         let bytes = self.read_entry(&path)?;
         let xml = std::str::from_utf8(&bytes)?;
-        let design_map = DesignMap::from_xml(xml)?;
+        let design_map = DesignMap::from_xml_with_options(xml, options)?;
         self.validate_designmap_entries(&design_map)?;
         Ok(design_map)
     }
@@ -743,7 +752,7 @@ mod tests {
     use crate::IdmlError;
     use crate::core::units::Points;
     use crate::encoding::Base64Mode;
-    use crate::model::designmap::DesignMap;
+    use crate::model::designmap::{DesignMap, DesignMapParseOptions};
     use crate::model::resources::{EmbeddedAssetParseOptions, ResourceIntegrityOptions};
     use crate::model::spread::{Rect, Spread, SpreadParseOptions, TextFrame};
     use crate::model::story::{Story, StoryParseOptions};
@@ -796,6 +805,30 @@ mod tests {
         assert_eq!(design_map.id, "d1");
         assert!(design_map.spread_srcs.contains_key("u1"));
         assert!(design_map.story_srcs.contains_key("u2"));
+    }
+
+    #[test]
+    fn read_designmap_with_options_enforces_package_ref_limit() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u1.xml" />
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Spreads/Spread_u1.xml", b"<Spread />"),
+            ("Stories/Story_u2.xml", b"<Story />"),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = package
+            .read_designmap_with_options(DesignMapParseOptions {
+                max_package_refs: 1,
+            })
+            .unwrap_err();
+
+        assert!(
+            matches!(err, IdmlError::LimitExceeded { what, .. } if what == "DesignMap package reference count")
+        );
     }
 
     #[test]
