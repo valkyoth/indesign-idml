@@ -3,6 +3,7 @@ set -eu
 
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
+cargo check --examples --all-features
 cargo test --all-features
 cargo test --no-default-features
 cargo test --no-default-features --features std

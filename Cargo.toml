@@ -13,6 +13,7 @@ keywords = ["idml", "indesign", "xml", "publishing", "parser"]
 categories = ["parser-implementations", "encoding", "filesystem"]
 include = [
     "src/**",
+    "examples/**",
     "tests/**",
     "fuzz/**",
     "README.md",

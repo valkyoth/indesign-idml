@@ -51,6 +51,8 @@ for required_package_file in \
     "README.md" \
     "RELEASE_PLAN.md" \
     "SECURITY_IMPLEMENTATION_PLAN.md" \
+    "examples/build_basic.rs" \
+    "examples/read_text.rs" \
     "src/lib.rs"
 do
     if ! printf '%s\n' "$package_list" | grep -qx "$required_package_file"; then
