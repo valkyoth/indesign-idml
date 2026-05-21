@@ -64,6 +64,8 @@ Hard rules:
   element are rejected instead of being ignored.
 - EOF before closing the root or a nested Group is rejected as malformed XML
   state instead of producing a partial model.
+- Resource XML extractors finalize depth tracking and reject EOF inside open
+  elements, including partial embedded `Contents` payloads.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.

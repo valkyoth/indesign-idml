@@ -448,6 +448,13 @@ pub fn extract_embedded_assets_with_options(
         }
     }
 
+    if contents_depth != 0 {
+        return Err(IdmlError::InvalidElement {
+            element: source_element,
+            reason: "unclosed Contents element",
+        });
+    }
+    xml_depth.finish()?;
     Ok(assets)
 }
 
@@ -492,6 +499,7 @@ pub fn extract_resource_items_with_options(
         }
     }
 
+    xml_depth.finish()?;
     validate_unique_resource_item_ids(&items)?;
     Ok(items)
 }
@@ -1234,6 +1242,23 @@ mod tests {
     }
 
     #[test]
+    fn resource_item_parser_rejects_unclosed_xml() {
+        let err = extract_resource_items(
+            r#"<Styles><ParagraphStyle Self="p1">"#,
+            ResourceKind::Styles,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "unclosed XML element",
+            } if element == "#document"
+        ));
+    }
+
+    #[test]
     fn resource_item_parser_rejects_duplicate_ids() {
         let err = extract_resource_items(
             r#"<Styles><ParagraphStyle Self="p1" /><CharacterStyle Self="p1" /></Styles>"#,
@@ -1728,6 +1753,19 @@ mod tests {
                 limit: 2,
                 actual: 3,
             }
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_rejects_unclosed_contents() {
+        let err = extract_embedded_assets("<Image><Contents>aGVsbG8=").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "unclosed Contents element",
+            } if element == "Contents"
         ));
     }
 

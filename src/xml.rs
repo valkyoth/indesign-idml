@@ -174,6 +174,17 @@ impl XmlDepthTracker {
         self.exit();
         Ok(())
     }
+
+    pub(crate) fn finish(self) -> Result<()> {
+        if self.current == 0 {
+            return Ok(());
+        }
+
+        Err(IdmlError::InvalidElement {
+            element: "#document".to_owned(),
+            reason: "unclosed XML element",
+        })
+    }
 }
 
 pub(crate) fn validate_xml_text(what: &'static str, text: &str) -> Result<()> {

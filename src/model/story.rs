@@ -135,6 +135,7 @@ impl Story {
         }
 
         root.finish()?;
+        xml_depth.finish()?;
         Ok(Self { id, text })
     }
 

@@ -352,6 +352,7 @@ impl DesignMap {
         }
 
         root.finish()?;
+        xml_depth.finish()?;
         design_map.validate()?;
         Ok(design_map)
     }

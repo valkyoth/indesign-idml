@@ -192,6 +192,7 @@ impl Spread {
         }
 
         root.finish()?;
+        xml_depth.finish()?;
         Ok(spread)
     }
 
