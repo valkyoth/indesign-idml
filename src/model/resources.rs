@@ -752,6 +752,10 @@ fn collect_resource_attrs_limited(
 
     for attr in event.attributes() {
         let attr = attr?;
+        enforce_resource_item_attribute_bytes(
+            attr.key.as_ref().len(),
+            options.max_item_attribute_bytes,
+        )?;
         let name = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
         if attributes.contains_key(&name) {
             return Err(IdmlError::InvalidAttribute {
@@ -1238,6 +1242,28 @@ mod tests {
     fn resource_item_parser_enforces_raw_attribute_byte_limit_before_decoding() {
         let err = extract_resource_items_with_options(
             r#"<Styles><ParagraphStyle Self="style1" /></Styles>"#,
+            ResourceKind::Styles,
+            ResourceItemParseOptions {
+                max_item_attribute_bytes: 5,
+                ..ResourceItemParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item attribute bytes",
+                limit: 5,
+                actual: 6,
+            }
+        ));
+    }
+
+    #[test]
+    fn resource_item_parser_enforces_attribute_name_byte_limit_before_capture() {
+        let err = extract_resource_items_with_options(
+            r#"<Styles><ParagraphStyle abcdef="" /></Styles>"#,
             ResourceKind::Styles,
             ResourceItemParseOptions {
                 max_item_attribute_bytes: 5,

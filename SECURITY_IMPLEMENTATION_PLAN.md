@@ -73,6 +73,8 @@ Hard rules:
   normalization or decoding can allocate their values.
 - Resource item XML attributes are capped by configured raw byte length before
   normalization or decoding can allocate their values.
+- Resource item XML attribute names are capped by configured raw byte length
+  before allocating captured names.
 - Resource item XML attribute count limits are enforced before decoding
   attribute values.
 - Semantically equivalent XML start and empty events are handled consistently
