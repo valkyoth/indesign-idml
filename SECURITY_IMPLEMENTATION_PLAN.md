@@ -46,6 +46,8 @@ Hard rules:
   control characters.
 - Archive entry paths are capped by configured UTF-8 byte length before logical
   path validation or writer emission.
+- Archive inventory rejects encrypted entries and non-regular file metadata
+  such as symlinks.
 - Direct XML parser entry points enforce configured XML byte limits before event
   parsing.
 - Duplicate XML attributes are rejected instead of being silently overwritten or

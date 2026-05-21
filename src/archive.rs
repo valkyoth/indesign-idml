@@ -714,6 +714,7 @@ where
             let file = archive.by_index(index)?;
             let name = file.name();
             enforce_archive_path_len(name, limits.max_path_bytes)?;
+            enforce_regular_unencrypted_entry(file.encrypted(), file.is_file())?;
             let path = IdmlPath::new(name.to_owned())?;
             let uncompressed_size = file.size();
             enforce_entry_size(uncompressed_size, limits.max_entry_uncompressed_size)?;
@@ -831,6 +832,20 @@ fn enforce_archive_path_len(path: &str, max_path_bytes: usize) -> Result<()> {
             limit: max_path_bytes as u64,
             actual: path.len() as u64,
         });
+    }
+    Ok(())
+}
+
+fn enforce_regular_unencrypted_entry(encrypted: bool, is_file: bool) -> Result<()> {
+    if encrypted {
+        return Err(IdmlError::InvalidPackage(
+            "encrypted ZIP entries are not supported",
+        ));
+    }
+    if !is_file {
+        return Err(IdmlError::InvalidPackage(
+            "ZIP entries must be regular files",
+        ));
     }
     Ok(())
 }
@@ -1225,6 +1240,46 @@ mod tests {
                 limit: 16,
                 actual,
             } if actual == long_name.len() as u64
+        ));
+    }
+
+    #[test]
+    fn archive_inventory_rejects_encrypted_entries() {
+        let mut zip = make_zip_raw(&[
+            ("mimetype", IDML_MIMETYPE, CompressionMethod::Stored),
+            (
+                "Stories/Story_u1.xml",
+                b"<Story />",
+                CompressionMethod::Stored,
+            ),
+        ]);
+        mark_entry_encrypted(&mut zip, "Stories/Story_u1.xml");
+
+        let err = IdmlPackage::new(Cursor::new(zip)).unwrap_err();
+        let message = err.to_string().to_ascii_lowercase();
+
+        assert!(
+            matches!(
+                &err,
+                IdmlError::InvalidPackage(message) if message.contains("encrypted")
+            ) || message.contains("password")
+                || message.contains("encrypted")
+        );
+    }
+
+    #[test]
+    fn archive_inventory_rejects_symlink_entries() {
+        let mut zip = make_zip_raw(&[
+            ("mimetype", IDML_MIMETYPE, CompressionMethod::Stored),
+            ("Stories/Story_u1.xml", b"target", CompressionMethod::Stored),
+        ]);
+        mark_entry_as_unix_symlink(&mut zip, "Stories/Story_u1.xml");
+
+        let err = IdmlPackage::new(Cursor::new(zip)).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidPackage(message) if message.contains("regular files")
         ));
     }
 
@@ -2316,6 +2371,69 @@ mod tests {
             writer.write_all(data).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    fn mark_entry_encrypted(zip: &mut [u8], name: &str) {
+        patch_zip_entry_flags(zip, name, 0x0001);
+    }
+
+    fn mark_entry_as_unix_symlink(zip: &mut [u8], name: &str) {
+        const CENTRAL_HEADER_SIGNATURE: &[u8; 4] = b"PK\x01\x02";
+        let mode = (0o120777u32 << 16).to_le_bytes();
+        let mut index = 0usize;
+        while let Some(offset) = find_signature(&zip[index..], CENTRAL_HEADER_SIGNATURE) {
+            let header = index + offset;
+            let name_len = u16::from_le_bytes([zip[header + 28], zip[header + 29]]) as usize;
+            let name_start = header + 46;
+            let name_end = name_start + name_len;
+            if zip.get(name_start..name_end) == Some(name.as_bytes()) {
+                zip[header + 38..header + 42].copy_from_slice(&mode);
+                return;
+            }
+            index = name_end;
+        }
+        panic!("missing central directory entry {name}");
+    }
+
+    fn patch_zip_entry_flags(zip: &mut [u8], name: &str, flags: u16) {
+        const LOCAL_HEADER_SIGNATURE: &[u8; 4] = b"PK\x03\x04";
+        const CENTRAL_HEADER_SIGNATURE: &[u8; 4] = b"PK\x01\x02";
+        patch_zip_flags_for_signature(zip, name, flags, LOCAL_HEADER_SIGNATURE, 6, 26, 30);
+        patch_zip_flags_for_signature(zip, name, flags, CENTRAL_HEADER_SIGNATURE, 8, 28, 46);
+    }
+
+    fn patch_zip_flags_for_signature(
+        zip: &mut [u8],
+        name: &str,
+        flags: u16,
+        signature: &[u8; 4],
+        flags_offset: usize,
+        name_len_offset: usize,
+        name_start_offset: usize,
+    ) {
+        let mut index = 0usize;
+        while let Some(offset) = find_signature(&zip[index..], signature) {
+            let header = index + offset;
+            let name_len = u16::from_le_bytes([
+                zip[header + name_len_offset],
+                zip[header + name_len_offset + 1],
+            ]) as usize;
+            let name_start = header + name_start_offset;
+            let name_end = name_start + name_len;
+            if zip.get(name_start..name_end) == Some(name.as_bytes()) {
+                zip[header + flags_offset..header + flags_offset + 2]
+                    .copy_from_slice(&flags.to_le_bytes());
+                return;
+            }
+            index = name_end;
+        }
+        panic!("missing ZIP entry {name}");
+    }
+
+    fn find_signature(haystack: &[u8], signature: &[u8; 4]) -> Option<usize> {
+        haystack
+            .windows(signature.len())
+            .position(|window| window == signature)
     }
 
     fn make_writer_zip() -> Vec<u8> {
