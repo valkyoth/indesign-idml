@@ -184,6 +184,13 @@ pub struct ResourceItemGroup {
     pub items: Vec<ResourceItem>,
 }
 
+impl ResourceItemGroup {
+    /// Validates resource item IDs within this resource entry.
+    pub fn validate(&self) -> Result<()> {
+        validate_unique_resource_item_ids(&self.items)
+    }
+}
+
 impl Default for ResourceIntegrityOptions {
     fn default() -> Self {
         Self {
@@ -729,6 +736,22 @@ fn push_resource_item_limited(
     Ok(())
 }
 
+fn validate_unique_resource_item_ids(items: &[ResourceItem]) -> Result<()> {
+    let mut seen = indexmap::IndexSet::new();
+    for item in items {
+        let Some(id) = &item.id else {
+            continue;
+        };
+        if !seen.insert(id.as_str()) {
+            return Err(IdmlError::DuplicateId {
+                kind: "resource item",
+                id: id.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn compression_ratio_ceil(uncompressed_size: u64, compressed_size: u64) -> u64 {
     uncompressed_size.saturating_add(compressed_size.saturating_sub(1)) / compressed_size
 }
@@ -811,9 +834,9 @@ fn push_asset_limited(
 mod tests {
     use super::{
         EmbeddedAssetParseOptions, ResourceArchiveMetadata, ResourceIntegrityOptions,
-        ResourceInventory, ResourceItemParseOptions, ResourceKind, extract_embedded_assets,
-        extract_embedded_assets_with_options, extract_resource_items,
-        extract_resource_items_with_options,
+        ResourceInventory, ResourceItem, ResourceItemGroup, ResourceItemParseOptions, ResourceKind,
+        ResourceReference, extract_embedded_assets, extract_embedded_assets_with_options,
+        extract_resource_items, extract_resource_items_with_options,
     };
     use crate::IdmlError;
     use crate::archive::{ArchiveEntry, IdmlPath};
@@ -1114,6 +1137,76 @@ mod tests {
                 actual: 3,
             }
         ));
+    }
+
+    #[test]
+    fn resource_item_group_rejects_duplicate_ids() {
+        let group = ResourceItemGroup {
+            resource: ResourceReference {
+                kind: ResourceKind::Styles,
+                element: "idPkg:Styles".to_owned(),
+                id: None,
+                path: IdmlPath::new("Resources/Styles.xml").unwrap(),
+                archive: None,
+            },
+            items: vec![
+                ResourceItem {
+                    kind: ResourceKind::Styles,
+                    element: "ParagraphStyle".to_owned(),
+                    id: Some("p1".to_owned()),
+                    name: Some("Body".to_owned()),
+                    attributes: IndexMap::new(),
+                },
+                ResourceItem {
+                    kind: ResourceKind::Styles,
+                    element: "CharacterStyle".to_owned(),
+                    id: Some("p1".to_owned()),
+                    name: Some("Duplicate".to_owned()),
+                    attributes: IndexMap::new(),
+                },
+            ],
+        };
+
+        let err = group.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "resource item",
+                id,
+            } if id == "p1"
+        ));
+    }
+
+    #[test]
+    fn resource_item_group_allows_items_without_ids() {
+        let group = ResourceItemGroup {
+            resource: ResourceReference {
+                kind: ResourceKind::Styles,
+                element: "idPkg:Styles".to_owned(),
+                id: None,
+                path: IdmlPath::new("Resources/Styles.xml").unwrap(),
+                archive: None,
+            },
+            items: vec![
+                ResourceItem {
+                    kind: ResourceKind::Styles,
+                    element: "ParagraphStyle".to_owned(),
+                    id: None,
+                    name: Some("Body".to_owned()),
+                    attributes: IndexMap::new(),
+                },
+                ResourceItem {
+                    kind: ResourceKind::Styles,
+                    element: "CharacterStyle".to_owned(),
+                    id: None,
+                    name: Some("No ID".to_owned()),
+                    attributes: IndexMap::new(),
+                },
+            ],
+        };
+
+        group.validate().unwrap();
     }
 
     #[test]

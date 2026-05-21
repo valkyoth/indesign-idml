@@ -344,7 +344,9 @@ where
                 resource.kind.clone(),
                 item_options,
             )?;
-            groups.push(ResourceItemGroup { resource, items });
+            let group = ResourceItemGroup { resource, items };
+            group.validate()?;
+            groups.push(group);
         }
 
         Ok(groups)
@@ -1215,6 +1217,30 @@ mod tests {
         assert_eq!(groups[0].items[0].name.as_deref(), Some("Body"));
         assert_eq!(groups[1].resource.kind, ResourceKind::Fonts);
         assert_eq!(groups[1].items[0].id.as_deref(), Some("f1"));
+    }
+
+    #[test]
+    fn resource_item_inventory_rejects_duplicate_resource_item_ids() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Resource src="Resources/Styles.xml" />
+</Document>"#;
+        let styles =
+            br#"<Styles><ParagraphStyle Self="p1" /><CharacterStyle Self="p1" /></Styles>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Resources/Styles.xml", styles),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = package.read_resource_item_inventory().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "resource item",
+                id,
+            } if id == "p1"
+        ));
     }
 
     #[test]
