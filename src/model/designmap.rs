@@ -651,6 +651,7 @@ fn id_from_package_src(src: &str) -> String {
 }
 
 fn serialize_designmap(design_map: &DesignMap) -> Result<String> {
+    validate_serialized_designmap_counts(design_map)?;
     design_map.validate()?;
 
     let mut xml = String::new();
@@ -684,6 +685,57 @@ fn serialize_designmap(design_map: &DesignMap) -> Result<String> {
 
     xml.push_str("</Document>\n");
     Ok(xml)
+}
+
+fn validate_serialized_designmap_counts(design_map: &DesignMap) -> Result<()> {
+    if design_map.layers.len() > DEFAULT_MAX_DESIGNMAP_LAYERS {
+        return Err(IdmlError::LimitExceeded {
+            what: "DesignMap layer count",
+            limit: DEFAULT_MAX_DESIGNMAP_LAYERS as u64,
+            actual: design_map.layers.len() as u64,
+        });
+    }
+
+    let package_refs = serialized_package_ref_count(design_map)?;
+    if package_refs > DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS {
+        return Err(IdmlError::LimitExceeded {
+            what: "DesignMap package reference count",
+            limit: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS as u64,
+            actual: package_refs as u64,
+        });
+    }
+
+    Ok(())
+}
+
+fn serialized_package_ref_count(design_map: &DesignMap) -> Result<usize> {
+    if !design_map.package_refs.is_empty() {
+        return Ok(design_map.package_refs.len());
+    }
+
+    let typed_count = design_map
+        .spread_srcs
+        .len()
+        .checked_add(design_map.master_spread_srcs.len())
+        .and_then(|count| count.checked_add(design_map.story_srcs.len()))
+        .ok_or(IdmlError::LimitExceeded {
+            what: "DesignMap package reference count",
+            limit: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS as u64,
+            actual: u64::MAX,
+        })?;
+
+    design_map
+        .other_package_srcs
+        .values()
+        .try_fold(typed_count, |count, paths| {
+            count
+                .checked_add(paths.len())
+                .ok_or(IdmlError::LimitExceeded {
+                    what: "DesignMap package reference count",
+                    limit: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS as u64,
+                    actual: u64::MAX,
+                })
+        })
 }
 
 fn push_layer(xml: &mut String, layer: &Layer) -> Result<()> {
@@ -1623,6 +1675,54 @@ mod tests {
                 what: "DesignMap package element name bytes",
                 limit: 256,
                 actual: 257,
+            }
+        ));
+    }
+
+    #[test]
+    fn serializer_enforces_layer_count_limit() {
+        let design_map = DesignMap {
+            layers: (0..=super::DEFAULT_MAX_DESIGNMAP_LAYERS)
+                .map(|index| Layer {
+                    id: Some(format!("layer{index}")),
+                    name: None,
+                    visible: None,
+                    locked: None,
+                })
+                .collect(),
+            ..DesignMap::default()
+        };
+
+        let err = design_map.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap layer count",
+                limit: 10_000,
+                actual: 10_001,
+            }
+        ));
+    }
+
+    #[test]
+    fn serializer_enforces_package_reference_count_limit() {
+        let mut design_map = DesignMap::default();
+        design_map.other_package_srcs.insert(
+            "idPkg:Graphic".to_owned(),
+            (0..=super::DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS)
+                .map(|index| IdmlPath::new(format!("Resources/Graphic_{index}.xml")).unwrap())
+                .collect(),
+        );
+
+        let err = design_map.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap package reference count",
+                limit: 20_000,
+                actual: 20_001,
             }
         ));
     }
