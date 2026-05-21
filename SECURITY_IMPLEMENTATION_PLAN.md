@@ -46,6 +46,8 @@ Hard rules:
   control characters.
 - Archive entry paths are capped by configured UTF-8 byte length before logical
   path validation or writer emission.
+- DesignMap package `src` attributes are capped by configured UTF-8 byte length
+  before they are accepted as logical archive paths.
 - Archive inventory rejects encrypted entries and non-regular file metadata
   such as symlinks.
 - Compression-ratio diagnostics use division/remainder ceiling arithmetic

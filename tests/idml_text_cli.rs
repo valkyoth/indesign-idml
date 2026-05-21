@@ -263,6 +263,24 @@ fn idml_text_enforces_designmap_ref_limit() {
 }
 
 #[test]
+fn idml_text_enforces_designmap_package_src_byte_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("sample.idml");
+    fs::write(&input, sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--max-designmap-package-src-bytes")
+        .arg("8")
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for DesignMap package src bytes: limit 8, actual 20\n");
+}
+
+#[test]
 fn idml_text_enforces_designmap_xml_byte_limit() {
     let temp = tempdir().unwrap();
     let input = temp.path().join("sample.idml");

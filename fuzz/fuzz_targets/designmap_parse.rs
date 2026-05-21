@@ -15,6 +15,7 @@ fuzz_target!(|data: &[u8]| {
             max_xml_bytes: 1024 * 1024,
             max_layers: 1024,
             max_package_refs: 1024,
+            max_package_src_bytes: 4096,
             max_xml_depth: 256,
         },
     ) {

@@ -1,6 +1,6 @@
 //! Parser for the root `designmap.xml` package manifest.
 
-use crate::archive::IdmlPath;
+use crate::archive::{DEFAULT_MAX_ARCHIVE_PATH_BYTES, IdmlPath};
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
@@ -142,6 +142,8 @@ pub struct DesignMapParseOptions {
     pub max_layers: usize,
     /// Maximum `idPkg:*` package references collected from one manifest.
     pub max_package_refs: usize,
+    /// Maximum UTF-8 bytes accepted for one package `src` attribute.
+    pub max_package_src_bytes: usize,
     /// Maximum XML element nesting depth accepted while parsing.
     pub max_xml_depth: usize,
 }
@@ -152,6 +154,7 @@ impl Default for DesignMapParseOptions {
             max_xml_bytes: DEFAULT_MAX_XML_INPUT_BYTES,
             max_layers: DEFAULT_MAX_DESIGNMAP_LAYERS,
             max_package_refs: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS,
+            max_package_src_bytes: DEFAULT_MAX_ARCHIVE_PATH_BYTES,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
@@ -299,6 +302,7 @@ impl DesignMap {
                             "idPkg:Spread",
                             &reader,
                             &mut design_map.spread_srcs,
+                            options.max_package_src_bytes,
                         )?;
                         design_map.package_refs.push(package_ref);
                     } else if e.name().as_ref() == b"idPkg:Story" {
@@ -308,6 +312,7 @@ impl DesignMap {
                             "idPkg:Story",
                             &reader,
                             &mut design_map.story_srcs,
+                            options.max_package_src_bytes,
                         )?;
                         design_map.package_refs.push(package_ref);
                     } else if e.name().as_ref() == b"idPkg:MasterSpread" {
@@ -317,12 +322,14 @@ impl DesignMap {
                             "idPkg:MasterSpread",
                             &reader,
                             &mut design_map.master_spread_srcs,
+                            options.max_package_src_bytes,
                         )?;
                         design_map.package_refs.push(package_ref);
                     } else if e.name().as_ref().starts_with(b"idPkg:") {
                         increment_package_refs(&mut package_refs, options.max_package_refs)?;
                         let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
                         let src = required_attr(&e, &name, "src", &reader)?;
+                        enforce_package_src_len(&src, options.max_package_src_bytes)?;
                         let path = IdmlPath::new(src)?;
                         design_map
                             .other_package_srcs
@@ -504,8 +511,10 @@ fn parse_package_ref(
     element: &'static str,
     reader: &Reader<&[u8]>,
     map: &mut IndexMap<String, IdmlPath>,
+    max_package_src_bytes: usize,
 ) -> Result<DesignMapPackageRef> {
     let src = required_attr(event, element, "src", reader)?;
+    enforce_package_src_len(&src, max_package_src_bytes)?;
     let id = id_from_package_src(&src);
     if map.contains_key(&id) {
         return Err(IdmlError::DuplicateId {
@@ -520,6 +529,17 @@ fn parse_package_ref(
         id: Some(id),
         path,
     })
+}
+
+fn enforce_package_src_len(src: &str, max_package_src_bytes: usize) -> Result<()> {
+    if src.len() > max_package_src_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what: "DesignMap package src bytes",
+            limit: max_package_src_bytes as u64,
+            actual: src.len() as u64,
+        });
+    }
+    Ok(())
 }
 
 fn required_attr(
@@ -1254,6 +1274,50 @@ mod tests {
                 limit: 4,
                 actual: 11,
             }
+        ));
+    }
+
+    #[test]
+    fn enforces_package_src_byte_limit() {
+        let src = "Stories/Story_u1.xml";
+        let err = DesignMap::from_xml_with_options(
+            &format!(r#"<Document><idPkg:Story src="{src}" /></Document>"#),
+            DesignMapParseOptions {
+                max_package_src_bytes: src.len() - 1,
+                ..DesignMapParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap package src bytes",
+                limit,
+                actual,
+            } if limit == (src.len() - 1) as u64 && actual == src.len() as u64
+        ));
+    }
+
+    #[test]
+    fn enforces_untyped_package_src_byte_limit() {
+        let src = "Resources/Graphic.xml";
+        let err = DesignMap::from_xml_with_options(
+            &format!(r#"<Document><idPkg:Graphic src="{src}" /></Document>"#),
+            DesignMapParseOptions {
+                max_package_src_bytes: src.len() - 1,
+                ..DesignMapParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap package src bytes",
+                limit,
+                actual,
+            } if limit == (src.len() - 1) as u64 && actual == src.len() as u64
         ));
     }
 
