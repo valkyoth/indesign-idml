@@ -5,8 +5,8 @@ use crate::encoding::{Base64Mode, decode_standard, decoded_standard_len};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, PackageResourcePointer, validate_package_element_name};
 use crate::xml::{
-    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, enforce_xml_input_bytes,
-    validate_xml_attribute,
+    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, configure_idml_reader,
+    enforce_xml_input_bytes, validate_xml_attribute,
 };
 use indexmap::IndexMap;
 use quick_xml::Reader;
@@ -370,7 +370,7 @@ pub fn extract_embedded_assets_with_options(
     )?;
 
     let mut reader = Reader::from_str(xml_content);
-    reader.config_mut().trim_text(false);
+    configure_idml_reader(&mut reader, false);
 
     let mut assets = Vec::new();
     let mut contents_depth = 0usize;
@@ -476,7 +476,7 @@ pub fn extract_resource_items_with_options(
     )?;
 
     let mut reader = Reader::from_str(xml_content);
-    reader.config_mut().trim_text(true);
+    configure_idml_reader(&mut reader, true);
 
     let mut items = Vec::new();
     let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "resource item XML depth");
@@ -1256,6 +1256,17 @@ mod tests {
                 reason: "unclosed XML element",
             } if element == "#document"
         ));
+    }
+
+    #[test]
+    fn resource_item_parser_rejects_malformed_comments() {
+        let err = extract_resource_items(
+            r#"<Styles><!-- invalid -- comment --><ParagraphStyle Self="p1" /></Styles>"#,
+            ResourceKind::Styles,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, IdmlError::Xml(_)));
     }
 
     #[test]

@@ -1,9 +1,17 @@
 //! Internal XML value validation helpers.
 
 use crate::error::{IdmlError, Result};
+use quick_xml::reader::Reader;
 
 pub(crate) const DEFAULT_MAX_XML_DEPTH: usize = 1024;
 pub(crate) const DEFAULT_MAX_XML_INPUT_BYTES: usize = 512 * 1024 * 1024;
+
+pub(crate) fn configure_idml_reader(reader: &mut Reader<&[u8]>, trim_text: bool) {
+    let config = reader.config_mut();
+    config.trim_text(trim_text);
+    config.check_comments = true;
+    config.check_end_names = true;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RootElementTracker {

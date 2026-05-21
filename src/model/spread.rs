@@ -5,7 +5,7 @@ use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
     DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
-    enforce_xml_input_bytes, validate_xml_attribute,
+    configure_idml_reader, enforce_xml_input_bytes, validate_xml_attribute,
 };
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -84,7 +84,7 @@ impl Spread {
         enforce_xml_input_bytes("Spread XML bytes", xml_content, options.max_xml_bytes)?;
 
         let mut reader = Reader::from_str(xml_content);
-        reader.config_mut().trim_text(true);
+        configure_idml_reader(&mut reader, true);
 
         let mut spread = Self::default();
         let mut page_item_count = 0usize;

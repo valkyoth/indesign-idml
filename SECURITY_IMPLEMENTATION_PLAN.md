@@ -66,6 +66,8 @@ Hard rules:
   state instead of producing a partial model.
 - Resource XML extractors finalize depth tracking and reject EOF inside open
   elements, including partial embedded `Contents` payloads.
+- XML readers are centrally configured to keep end-tag name validation enabled
+  and reject malformed comments instead of silently skipping invalid XML.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.

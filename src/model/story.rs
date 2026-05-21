@@ -4,7 +4,7 @@ use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
     DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
-    enforce_xml_input_bytes, validate_xml_attribute, validate_xml_text,
+    configure_idml_reader, enforce_xml_input_bytes, validate_xml_attribute, validate_xml_text,
 };
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -55,7 +55,7 @@ impl Story {
         enforce_xml_input_bytes("Story XML bytes", xml_content, options.max_xml_bytes)?;
 
         let mut reader = Reader::from_str(xml_content);
-        reader.config_mut().trim_text(false);
+        configure_idml_reader(&mut reader, false);
 
         let mut id = None;
         let mut text = String::new();
@@ -351,6 +351,21 @@ mod tests {
         let story = Story::from_xml(" \n\t<Story Self=\"u2\" />\r\n ").unwrap();
 
         assert_eq!(story.id.as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn rejects_malformed_xml_comments() {
+        let err = Story::from_xml("<Story><!-- invalid -- comment --><Content>x</Content></Story>")
+            .unwrap_err();
+
+        assert!(matches!(err, IdmlError::Xml(_)));
+    }
+
+    #[test]
+    fn rejects_mismatched_xml_end_tags() {
+        let err = Story::from_xml("<Story><Content>x</Story></Content>").unwrap_err();
+
+        assert!(matches!(err, IdmlError::Xml(_)));
     }
 
     #[test]
