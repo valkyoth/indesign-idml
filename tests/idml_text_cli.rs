@@ -33,6 +33,18 @@ fn idml_text_extracts_spread_text_to_stdout() {
 }
 
 #[test]
+fn idml_text_extracts_all_spread_text_to_stdout() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command.arg("--all-spreads").arg(&input);
+
+    command.assert().success().stdout("Page hit\n\nPage miss\n");
+}
+
+#[test]
 fn idml_text_extracts_page_text_to_stdout() {
     let temp = tempdir().unwrap();
     let input = temp.path().join("layout.idml");
@@ -143,6 +155,25 @@ fn idml_text_rejects_conflicting_layout_scopes() {
         .assert()
         .failure()
         .stderr("idml-text: --page-id and --rect-points cannot be combined\n");
+}
+
+#[test]
+fn idml_text_rejects_all_spreads_with_spread_id() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--all-spreads")
+        .arg("--spread-id")
+        .arg("u10")
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: --all-spreads cannot be combined with --spread-id\n");
 }
 
 #[test]

@@ -32,6 +32,7 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     let mut spread_options = SpreadParseOptions::default();
     let mut story_options = StoryParseOptions::default();
     let mut spread_id = None;
+    let mut all_spreads = false;
     let mut page_id = None;
     let mut rect_points = None;
     let mut args = args.into_iter();
@@ -85,6 +86,10 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
                 return Err(CliError::Usage("missing value after --spread-id"));
             };
             spread_id = Some(parse_string(&value, "--spread-id")?);
+            continue;
+        }
+        if arg == "--all-spreads" {
+            all_spreads = true;
             continue;
         }
         if arg == "--page-id" {
@@ -265,6 +270,17 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     let Some(input) = input else {
         return Err(CliError::Usage("missing input IDML path"));
     };
+    if all_spreads && spread_id.is_some() {
+        return Err(CliError::Usage(
+            "--all-spreads cannot be combined with --spread-id",
+        ));
+    }
+    if all_spreads && page_id.is_some() {
+        return Err(CliError::Usage("--page-id requires --spread-id"));
+    }
+    if all_spreads && rect_points.is_some() {
+        return Err(CliError::Usage("--rect-points requires --spread-id"));
+    }
     if page_id.is_some() && spread_id.is_none() {
         return Err(CliError::Usage("--page-id requires --spread-id"));
     }
@@ -280,49 +296,69 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     let file = File::open(input)?;
     let mut package = IdmlPackage::with_limits(file, archive_limits)?;
     let design_map = package.read_designmap_with_options(designmap_options)?;
-    let texts: Vec<String> = match (spread_id.as_deref(), page_id.as_deref(), rect_points) {
-        (Some(spread_id), Some(page_id), None) => package
-            .resolve_spread_text_on_page_with_options(
-                &design_map,
-                spread_id,
-                page_id,
-                spread_options,
-                story_options,
-            )?
-            .into_iter()
-            .map(|frame| frame.text)
-            .collect(),
-        (Some(spread_id), None, Some(query)) => package
-            .resolve_spread_text_in_rect_with_options(
-                &design_map,
-                spread_id,
-                query,
-                spread_options,
-                story_options,
-            )?
-            .into_iter()
-            .map(|frame| frame.text)
-            .collect(),
-        (Some(spread_id), None, None) => package
-            .resolve_spread_text_frames_with_options(
-                &design_map,
-                spread_id,
-                spread_options,
-                story_options,
-            )?
-            .into_iter()
-            .map(|frame| frame.text)
-            .collect(),
-        (None, None, None) => package
-            .extract_story_texts_with_options(&design_map, story_options)?
-            .into_values()
-            .collect(),
-        (None, Some(_), _) => return Err(CliError::Usage("--page-id requires --spread-id")),
-        (None, None, Some(_)) => return Err(CliError::Usage("--rect-points requires --spread-id")),
-        (Some(_), Some(_), Some(_)) => {
-            return Err(CliError::Usage(
-                "--page-id and --rect-points cannot be combined",
-            ));
+    let texts: Vec<String> = if all_spreads {
+        let mut texts = Vec::new();
+        for spread_id in design_map.spread_ids() {
+            texts.extend(
+                package
+                    .resolve_spread_text_frames_with_options(
+                        &design_map,
+                        spread_id,
+                        spread_options,
+                        story_options,
+                    )?
+                    .into_iter()
+                    .map(|frame| frame.text),
+            );
+        }
+        texts
+    } else {
+        match (spread_id.as_deref(), page_id.as_deref(), rect_points) {
+            (Some(spread_id), Some(page_id), None) => package
+                .resolve_spread_text_on_page_with_options(
+                    &design_map,
+                    spread_id,
+                    page_id,
+                    spread_options,
+                    story_options,
+                )?
+                .into_iter()
+                .map(|frame| frame.text)
+                .collect(),
+            (Some(spread_id), None, Some(query)) => package
+                .resolve_spread_text_in_rect_with_options(
+                    &design_map,
+                    spread_id,
+                    query,
+                    spread_options,
+                    story_options,
+                )?
+                .into_iter()
+                .map(|frame| frame.text)
+                .collect(),
+            (Some(spread_id), None, None) => package
+                .resolve_spread_text_frames_with_options(
+                    &design_map,
+                    spread_id,
+                    spread_options,
+                    story_options,
+                )?
+                .into_iter()
+                .map(|frame| frame.text)
+                .collect(),
+            (None, None, None) => package
+                .extract_story_texts_with_options(&design_map, story_options)?
+                .into_values()
+                .collect(),
+            (None, Some(_), _) => return Err(CliError::Usage("--page-id requires --spread-id")),
+            (None, None, Some(_)) => {
+                return Err(CliError::Usage("--rect-points requires --spread-id"));
+            }
+            (Some(_), Some(_), Some(_)) => {
+                return Err(CliError::Usage(
+                    "--page-id and --rect-points cannot be combined",
+                ));
+            }
         }
     };
 
@@ -363,7 +399,7 @@ fn print_help() -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
     writer.write_all(
-        b"Usage: idml-text [--output PATH] [--spread-id ID [--page-id ID | --rect-points T L B R]] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order, or layout-resolved text for one spread/page/rectangle.\n\nLayout:\n  --spread-id ID\n  --page-id ID\n  --rect-points TOP LEFT BOTTOM RIGHT\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-entry-compression-ratio RATIO\n  --max-archive-path-bytes BYTES\n  --max-designmap-package-refs COUNT\n  --max-designmap-package-src-bytes BYTES\n  --max-designmap-attribute-bytes BYTES\n  --max-designmap-xml-bytes BYTES\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-attribute-bytes BYTES\n  --max-story-xml-bytes BYTES\n  --max-story-xml-depth DEPTH\n  --max-spread-pages COUNT\n  --max-spread-xml-bytes BYTES\n  --max-spread-text-frames COUNT\n  --max-spread-page-items COUNT\n  --max-spread-attribute-bytes BYTES\n  --max-spread-xml-depth DEPTH\n",
+        b"Usage: idml-text [--output PATH] [--all-spreads | --spread-id ID [--page-id ID | --rect-points T L B R]] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order, all layout-resolved spread text, or layout-resolved text for one spread/page/rectangle.\n\nLayout:\n  --all-spreads\n  --spread-id ID\n  --page-id ID\n  --rect-points TOP LEFT BOTTOM RIGHT\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-entry-compression-ratio RATIO\n  --max-archive-path-bytes BYTES\n  --max-designmap-package-refs COUNT\n  --max-designmap-package-src-bytes BYTES\n  --max-designmap-attribute-bytes BYTES\n  --max-designmap-xml-bytes BYTES\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-attribute-bytes BYTES\n  --max-story-xml-bytes BYTES\n  --max-story-xml-depth DEPTH\n  --max-spread-pages COUNT\n  --max-spread-xml-bytes BYTES\n  --max-spread-text-frames COUNT\n  --max-spread-page-items COUNT\n  --max-spread-attribute-bytes BYTES\n  --max-spread-xml-depth DEPTH\n",
     )?;
     writer.flush()?;
     Ok(())

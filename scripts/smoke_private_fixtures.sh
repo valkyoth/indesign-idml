@@ -23,6 +23,7 @@ while IFS= read -r fixture; do
     count=$((count + 1))
     echo "smoke: $(basename "$fixture")"
     cargo run --quiet --features cli --bin idml-text -- "$fixture" >/dev/null
+    cargo run --quiet --features cli --bin idml-text -- --all-spreads "$fixture" >/dev/null
 done <"$tmp_list"
 
 echo "private IDML fixture smoke passed for $count file(s)"
