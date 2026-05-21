@@ -55,6 +55,7 @@ mod tests {
         let _: Option<crate::prelude::PackageResourcePointer<'_>> = None;
         let _: Option<crate::prelude::DesignMapPackageRef> = None;
         let _: Option<crate::prelude::DesignMapParseOptions> = None;
+        let _: Option<crate::prelude::Layer> = None;
         let _: Option<crate::prelude::ResourceInventory> = None;
         let _: Option<crate::prelude::ResourceReference> = None;
         let _: Option<crate::prelude::ResourceItem> = None;

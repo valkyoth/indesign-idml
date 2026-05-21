@@ -12,6 +12,7 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(design_map) = DesignMap::from_xml_with_options(
         xml,
         DesignMapParseOptions {
+            max_layers: 1024,
             max_package_refs: 1024,
             max_xml_depth: 256,
         },

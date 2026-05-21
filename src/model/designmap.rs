@@ -15,6 +15,8 @@ use quick_xml::events::{BytesStart, Event};
 pub struct DesignMap {
     /// Document `Self` identifier.
     pub id: String,
+    /// Layers in document order.
+    pub layers: Vec<Layer>,
     /// Ordered spread ID to archive path mapping.
     pub spread_srcs: IndexMap<String, IdmlPath>,
     /// Ordered story ID to archive path mapping.
@@ -34,11 +36,36 @@ pub struct DesignMap {
 impl PartialEq for DesignMap {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
+            && self.layers == other.layers
             && self.spread_srcs == other.spread_srcs
             && self.story_srcs == other.story_srcs
             && self.master_spread_srcs == other.master_spread_srcs
             && self.other_package_srcs == other.other_package_srcs
             && compatible_package_ref_order(self, other)
+    }
+}
+
+/// Layer metadata from `designmap.xml`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Layer {
+    /// Layer `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Human-readable layer name, when present.
+    pub name: Option<String>,
+    /// Layer visibility flag, when present.
+    pub visible: Option<bool>,
+    /// Layer lock flag, when present.
+    pub locked: Option<bool>,
+}
+
+impl Layer {
+    fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
+        Ok(Self {
+            id: optional_attr(event, "Self", reader)?,
+            name: optional_attr(event, "Name", reader)?,
+            visible: optional_bool_attr(event, "Visible", reader)?,
+            locked: optional_bool_attr(event, "Locked", reader)?,
+        })
     }
 }
 
@@ -99,9 +126,14 @@ impl DesignMapPackageRef {
 /// Default maximum package references accepted in one `designmap.xml`.
 pub const DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS: usize = 20_000;
 
+/// Default maximum layers accepted in one `designmap.xml`.
+pub const DEFAULT_MAX_DESIGNMAP_LAYERS: usize = 10_000;
+
 /// DesignMap parser limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DesignMapParseOptions {
+    /// Maximum `Layer` elements collected from one manifest.
+    pub max_layers: usize,
     /// Maximum `idPkg:*` package references collected from one manifest.
     pub max_package_refs: usize,
     /// Maximum XML element nesting depth accepted while parsing.
@@ -111,6 +143,7 @@ pub struct DesignMapParseOptions {
 impl Default for DesignMapParseOptions {
     fn default() -> Self {
         Self {
+            max_layers: DEFAULT_MAX_DESIGNMAP_LAYERS,
             max_package_refs: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
@@ -227,11 +260,23 @@ impl DesignMap {
                         && let Some(id) = optional_attr(&e, "Self", &reader)?
                     {
                         design_map.id = id;
+                    } else if e.name().as_ref() == b"Layer" {
+                        push_layer_limited(
+                            &mut design_map.layers,
+                            Layer::from_xml_event(&e, &reader)?,
+                            options.max_layers,
+                        )?;
                     }
                 }
                 Event::Empty(e) => {
                     xml_depth.visit_empty()?;
-                    if e.name().as_ref() == b"idPkg:Spread" {
+                    if e.name().as_ref() == b"Layer" {
+                        push_layer_limited(
+                            &mut design_map.layers,
+                            Layer::from_xml_event(&e, &reader)?,
+                            options.max_layers,
+                        )?;
+                    } else if e.name().as_ref() == b"idPkg:Spread" {
                         increment_package_refs(&mut package_refs, options.max_package_refs)?;
                         let package_ref = parse_package_ref(
                             &e,
@@ -390,6 +435,28 @@ fn increment_package_refs(package_refs: &mut usize, max_package_refs: usize) -> 
     Ok(())
 }
 
+fn push_layer_limited(layers: &mut Vec<Layer>, layer: Layer, max_layers: usize) -> Result<()> {
+    let next = layers
+        .len()
+        .checked_add(1)
+        .ok_or(IdmlError::LimitExceeded {
+            what: "DesignMap layer count",
+            limit: max_layers as u64,
+            actual: u64::MAX,
+        })?;
+
+    if next > max_layers {
+        return Err(IdmlError::LimitExceeded {
+            what: "DesignMap layer count",
+            limit: max_layers as u64,
+            actual: next as u64,
+        });
+    }
+
+    layers.push(layer);
+    Ok(())
+}
+
 impl XmlLoadable for DesignMap {
     fn from_xml(xml: &str) -> Result<Self> {
         DesignMap::from_xml(xml)
@@ -454,6 +521,25 @@ fn optional_attr(
     Ok(None)
 }
 
+fn optional_bool_attr(
+    event: &BytesStart<'_>,
+    attribute: &'static str,
+    reader: &Reader<&[u8]>,
+) -> Result<Option<bool>> {
+    let Some(value) = optional_attr(event, attribute, reader)? else {
+        return Ok(None);
+    };
+    match value.as_str() {
+        "true" | "True" | "TRUE" => Ok(Some(true)),
+        "false" | "False" | "FALSE" => Ok(Some(false)),
+        _ => Err(IdmlError::InvalidAttribute {
+            element: "Layer".to_owned(),
+            attribute,
+            reason: "expected boolean value",
+        }),
+    }
+}
+
 fn id_from_package_src(src: &str) -> String {
     let file_name = src.rsplit('/').next().unwrap_or(src);
     let stem = file_name.strip_suffix(".xml").unwrap_or(file_name);
@@ -473,6 +559,10 @@ fn serialize_designmap(design_map: &DesignMap) -> Result<String> {
         push_attr(&mut xml, "Document", "Self", &design_map.id)?;
     }
     xml.push_str(" xmlns:idPkg=\"http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging\">\n");
+
+    for layer in &design_map.layers {
+        push_layer(&mut xml, layer)?;
+    }
 
     if design_map.package_refs.is_empty() {
         push_package_refs(&mut xml, "idPkg:Spread", design_map.spread_srcs.values())?;
@@ -496,8 +586,36 @@ fn serialize_designmap(design_map: &DesignMap) -> Result<String> {
     Ok(xml)
 }
 
+fn push_layer(xml: &mut String, layer: &Layer) -> Result<()> {
+    xml.push_str("  <Layer");
+    if let Some(id) = &layer.id {
+        push_attr(xml, "Layer", "Self", id)?;
+    }
+    if let Some(name) = &layer.name {
+        push_attr(xml, "Layer", "Name", name)?;
+    }
+    if let Some(visible) = layer.visible {
+        push_attr(xml, "Layer", "Visible", bool_str(visible))?;
+    }
+    if let Some(locked) = layer.locked {
+        push_attr(xml, "Layer", "Locked", bool_str(locked))?;
+    }
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn bool_str(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
 fn validate_unique_known_ids(design_map: &DesignMap) -> Result<()> {
     let mut seen = IndexSet::new();
+
+    for layer in &design_map.layers {
+        if let Some(id) = &layer.id {
+            remember_designmap_id(&mut seen, id)?;
+        }
+    }
 
     for id in design_map
         .spread_srcs
@@ -505,14 +623,19 @@ fn validate_unique_known_ids(design_map: &DesignMap) -> Result<()> {
         .chain(design_map.story_srcs.keys())
         .chain(design_map.master_spread_srcs.keys())
     {
-        if !seen.insert(id.as_str()) {
-            return Err(IdmlError::DuplicateId {
-                kind: "DesignMap package",
-                id: id.clone(),
-            });
-        }
+        remember_designmap_id(&mut seen, id)?;
     }
 
+    Ok(())
+}
+
+fn remember_designmap_id(seen: &mut IndexSet<String>, id: &str) -> Result<()> {
+    if !seen.insert(id.to_owned()) {
+        return Err(IdmlError::DuplicateId {
+            kind: "DesignMap object",
+            id: id.to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -767,7 +890,7 @@ fn invalid_package_element_name() -> IdmlError {
 
 #[cfg(test)]
 mod tests {
-    use super::{DesignMap, DesignMapParseOptions};
+    use super::{DesignMap, DesignMapParseOptions, Layer};
     use crate::IdmlError;
     use crate::archive::IdmlPath;
 
@@ -935,6 +1058,63 @@ mod tests {
     }
 
     #[test]
+    fn parses_layers_in_document_order() {
+        let xml = r#"<Document>
+  <Layer Self="layer1" Name="Text" Visible="true" Locked="false" />
+  <Layer Self="layer2" Name="Art" Visible="False" Locked="True" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+
+        let design_map = DesignMap::from_xml(xml).unwrap();
+
+        assert_eq!(design_map.layers.len(), 2);
+        assert_eq!(design_map.layers[0].id.as_deref(), Some("layer1"));
+        assert_eq!(design_map.layers[0].name.as_deref(), Some("Text"));
+        assert_eq!(design_map.layers[0].visible, Some(true));
+        assert_eq!(design_map.layers[0].locked, Some(false));
+        assert_eq!(design_map.layers[1].id.as_deref(), Some("layer2"));
+        assert_eq!(design_map.layers[1].visible, Some(false));
+        assert_eq!(design_map.layers[1].locked, Some(true));
+    }
+
+    #[test]
+    fn enforces_layer_count_limit() {
+        let err = DesignMap::from_xml_with_options(
+            r#"<Document><Layer Self="layer1" /><Layer Self="layer2" /></Document>"#,
+            DesignMapParseOptions {
+                max_layers: 1,
+                ..DesignMapParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap layer count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_layer_booleans() {
+        let err =
+            DesignMap::from_xml(r#"<Document><Layer Self="layer1" Visible="maybe" /></Document>"#)
+                .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Visible",
+                reason: "expected boolean value",
+            } if element == "Layer"
+        ));
+    }
+
+    #[test]
     fn enforces_xml_depth_limit() {
         let xml = r#"<Document>
   <Wrapper><idPkg:Story src="Stories/Story_u2.xml" /></Wrapper>
@@ -989,6 +1169,25 @@ mod tests {
     }
 
     #[test]
+    fn rejects_layer_id_colliding_with_package_id() {
+        let err = DesignMap::from_xml(
+            r#"<Document>
+  <Layer Self="u1" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "DesignMap object",
+                id,
+            } if id == "u1"
+        ));
+    }
+
+    #[test]
     fn rejects_cross_type_known_package_id_collisions() {
         let err = DesignMap::from_xml(
             r#"<Document>
@@ -1001,7 +1200,7 @@ mod tests {
         assert!(matches!(
             err,
             IdmlError::DuplicateId {
-                kind: "DesignMap package",
+                kind: "DesignMap object",
                 id,
             } if id == "u1"
         ));
@@ -1031,6 +1230,12 @@ mod tests {
     fn serializes_designmap_with_escaped_attributes_and_round_trips() {
         let mut design_map = DesignMap {
             id: "d&\"1".to_owned(),
+            layers: vec![Layer {
+                id: Some("layer&1".to_owned()),
+                name: Some("Text \"Layer\"".to_owned()),
+                visible: Some(true),
+                locked: Some(false),
+            }],
             ..DesignMap::default()
         };
         design_map.spread_srcs.insert(
@@ -1050,8 +1255,13 @@ mod tests {
         let round_trip = <DesignMap as crate::XmlLoadable>::from_xml(&xml).unwrap();
 
         assert!(xml.contains("Self=\"d&amp;&quot;1\""));
+        assert!(xml.contains("Self=\"layer&amp;1\""));
+        assert!(xml.contains("Name=\"Text &quot;Layer&quot;\""));
+        assert!(xml.contains("Visible=\"true\""));
+        assert!(xml.contains("Locked=\"false\""));
         assert!(xml.contains("src=\"Resources/A&amp;B.xml\""));
         assert_eq!(round_trip.id, design_map.id);
+        assert_eq!(round_trip.layers, design_map.layers);
         assert_eq!(round_trip.spread_srcs, design_map.spread_srcs);
         assert_eq!(round_trip.story_srcs, design_map.story_srcs);
         assert_eq!(

@@ -350,6 +350,7 @@ impl IdmlDocument {
         self.validate_spread_ids()?;
         self.validate_unique_object_ids()?;
         self.validate_parent_stories()?;
+        self.validate_item_layers()?;
         Ok(())
     }
 
@@ -603,6 +604,11 @@ impl IdmlDocument {
         for id in self.design_map.master_spread_srcs.keys() {
             remember_object_id(&mut seen, id)?;
         }
+        for layer in &self.design_map.layers {
+            if let Some(id) = &layer.id {
+                remember_object_id(&mut seen, id)?;
+            }
+        }
         for spread in self.spreads.values() {
             for page in &spread.pages {
                 if let Some(id) = &page.id {
@@ -620,6 +626,30 @@ impl IdmlDocument {
                 {
                     remember_object_id(&mut seen, id)?;
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_item_layers(&self) -> Result<()> {
+        if self.design_map.layers.is_empty() {
+            return Ok(());
+        }
+
+        let layer_ids = self
+            .design_map
+            .layers
+            .iter()
+            .filter_map(|layer| layer.id.as_deref())
+            .collect::<IndexSet<_>>();
+
+        for spread in self.spreads.values() {
+            for frame in &spread.text_frames {
+                validate_layer_id(frame.layer_id.as_deref(), &layer_ids)?;
+            }
+            for page_item in &spread.page_items {
+                validate_page_item_layer_id(page_item, &layer_ids)?;
             }
         }
 
@@ -724,6 +754,40 @@ fn validate_supported_preserved_compression(compression: CompressionMethod) -> R
     }
 }
 
+fn validate_page_item_layer_id(
+    page_item: &crate::model::spread::PageItem,
+    layer_ids: &IndexSet<&str>,
+) -> Result<()> {
+    match page_item {
+        crate::model::spread::PageItem::TextFrame(frame) => {
+            validate_layer_id(frame.layer_id.as_deref(), layer_ids)
+        }
+        crate::model::spread::PageItem::Rectangle(rectangle) => {
+            validate_layer_id(rectangle.layer_id.as_deref(), layer_ids)
+        }
+        crate::model::spread::PageItem::Group(group) => {
+            validate_layer_id(group.layer_id.as_deref(), layer_ids)?;
+            for child in &group.page_items {
+                validate_page_item_layer_id(child, layer_ids)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_layer_id(layer_id: Option<&str>, layer_ids: &IndexSet<&str>) -> Result<()> {
+    let Some(layer_id) = layer_id else {
+        return Ok(());
+    };
+    if layer_ids.contains(layer_id) {
+        return Ok(());
+    }
+    Err(IdmlError::MissingReference {
+        kind: "page item layer",
+        id: layer_id.to_owned(),
+    })
+}
+
 fn unsupported_preserved_compression_error() -> IdmlError {
     IdmlError::InvalidPackage(
         "unsupported ZIP compression method; only stored and deflated entries are accepted",
@@ -774,7 +838,7 @@ mod tests {
     use crate::IdmlError;
     use crate::archive::{ArchiveLimits, IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::core::units::Points;
-    use crate::model::designmap::{DesignMap, DesignMapParseOptions};
+    use crate::model::designmap::{DesignMap, DesignMapParseOptions, Layer};
     use crate::model::resources::ResourceIntegrityOptions;
     use crate::model::spread::{
         Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame,
@@ -1633,6 +1697,78 @@ mod tests {
     }
 
     #[test]
+    fn accepts_known_text_frame_layer_reference() {
+        let mut document = make_document();
+        document.design_map.layers.push(Layer {
+            id: Some("layer1".to_owned()),
+            name: Some("Text".to_owned()),
+            visible: Some(true),
+            locked: Some(false),
+        });
+        document.spreads.get_mut("u10").unwrap().text_frames[0].layer_id =
+            Some("layer1".to_owned());
+
+        document.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_dangling_text_frame_layer_reference() {
+        let mut document = make_document();
+        document.design_map.layers.push(Layer {
+            id: Some("layer1".to_owned()),
+            name: Some("Text".to_owned()),
+            visible: Some(true),
+            locked: Some(false),
+        });
+        document.spreads.get_mut("u10").unwrap().text_frames[0].layer_id =
+            Some("missing".to_owned());
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingReference {
+                kind: "page item layer",
+                id,
+            } if id == "missing"
+        ));
+    }
+
+    #[test]
+    fn rejects_dangling_nested_page_item_layer_reference() {
+        let mut document = make_document();
+        document.design_map.layers.push(Layer {
+            id: Some("layer1".to_owned()),
+            name: Some("Text".to_owned()),
+            visible: Some(true),
+            locked: Some(false),
+        });
+        let spread = document.spreads.get_mut("u10").unwrap();
+        spread
+            .page_items
+            .push(PageItem::Group(crate::model::spread::Group {
+                id: Some("group1".to_owned()),
+                layer_id: Some("layer1".to_owned()),
+                geometric_bounds: None,
+                page_items: vec![PageItem::Rectangle(Rectangle {
+                    id: Some("rect1".to_owned()),
+                    layer_id: Some("missing".to_owned()),
+                    geometric_bounds: None,
+                })],
+            }));
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingReference {
+                kind: "page item layer",
+                id,
+            } if id == "missing"
+        ));
+    }
+
+    #[test]
     fn rejects_duplicate_text_frame_ids() {
         let mut document = make_document();
         document
@@ -1724,7 +1860,7 @@ mod tests {
         assert!(matches!(
             err,
             IdmlError::DuplicateId {
-                kind: "DesignMap package",
+                kind: "DesignMap object",
                 id,
             } if id == "u1"
         ));

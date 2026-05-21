@@ -6,7 +6,7 @@ pub use crate::core::units::{Inches, Millimeters, Points};
 pub use crate::encoding::{Base64Mode, decode_standard, encode_standard};
 pub use crate::error::{IdmlError, Result};
 pub use crate::model::designmap::{
-    DesignMap, DesignMapPackageRef, DesignMapParseOptions, MasterSpreadPointer,
+    DesignMap, DesignMapPackageRef, DesignMapParseOptions, Layer, MasterSpreadPointer,
     PackageResourcePointer, SpreadPointer, StoryPointer,
 };
 pub use crate::model::document::{
