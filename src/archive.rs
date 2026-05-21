@@ -28,6 +28,9 @@ pub const DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE: u64 = 256 * 1024 * 1024;
 /// Default maximum aggregate uncompressed bytes accepted for an archive.
 pub const DEFAULT_MAX_TOTAL_UNCOMPRESSED_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
+/// Maximum initial allocation used when reading one entry.
+const MAX_INITIAL_READ_CAPACITY: usize = 8 * 1024 * 1024;
+
 /// IDML package mimetype required by Adobe tooling.
 pub const IDML_MIMETYPE: &[u8] = b"application/vnd.adobe.indesign-idml-package";
 
@@ -241,25 +244,8 @@ where
             self.limits.max_entry_uncompressed_size,
         )?;
 
-        let capacity =
-            usize::try_from(entry.uncompressed_size).map_err(|_| IdmlError::LimitExceeded {
-                what: "entry uncompressed size",
-                limit: usize::MAX as u64,
-                actual: entry.uncompressed_size,
-            })?;
-        let mut file = self.archive.by_name(path.as_str())?;
-        let mut data = Vec::with_capacity(capacity);
-        file.read_to_end(&mut data)?;
-
-        if u64::try_from(data.len()).unwrap_or(u64::MAX) != entry.uncompressed_size {
-            return Err(IdmlError::LimitExceeded {
-                what: "entry read size mismatch",
-                limit: entry.uncompressed_size,
-                actual: u64::try_from(data.len()).unwrap_or(u64::MAX),
-            });
-        }
-
-        Ok(data)
+        let file = self.archive.by_name(path.as_str())?;
+        read_declared_size(file, entry.uncompressed_size)
     }
 
     /// Reads and validates the package root `designmap.xml`.
@@ -686,9 +672,8 @@ where
         return Err(IdmlError::InvalidPackage("mimetype entry has invalid size"));
     }
 
-    let mut file = archive.by_name("mimetype")?;
-    let mut data = Vec::with_capacity(IDML_MIMETYPE.len());
-    file.read_to_end(&mut data)?;
+    let file = archive.by_name("mimetype")?;
+    let data = read_declared_size(file, IDML_MIMETYPE.len() as u64)?;
     if data != IDML_MIMETYPE {
         return Err(IdmlError::InvalidPackage(
             "mimetype entry has invalid content",
@@ -696,6 +681,37 @@ where
     }
 
     Ok(())
+}
+
+fn read_declared_size(reader: impl Read, expected_size: u64) -> Result<Vec<u8>> {
+    let expected_capacity =
+        usize::try_from(expected_size).map_err(|_| IdmlError::LimitExceeded {
+            what: "entry uncompressed size",
+            limit: usize::MAX as u64,
+            actual: expected_size,
+        })?;
+    let read_limit = expected_size
+        .checked_add(1)
+        .ok_or(IdmlError::LimitExceeded {
+            what: "entry read size mismatch",
+            limit: expected_size,
+            actual: u64::MAX,
+        })?;
+
+    let mut data = Vec::with_capacity(expected_capacity.min(MAX_INITIAL_READ_CAPACITY));
+    let mut limited = reader.take(read_limit);
+    limited.read_to_end(&mut data)?;
+
+    let actual = u64::try_from(data.len()).unwrap_or(u64::MAX);
+    if actual != expected_size {
+        return Err(IdmlError::LimitExceeded {
+            what: "entry read size mismatch",
+            limit: expected_size,
+            actual,
+        });
+    }
+
+    Ok(data)
 }
 
 fn enforce_entry_size(actual: u64, limit: u64) -> Result<()> {
@@ -774,6 +790,34 @@ mod tests {
         ] {
             assert!(IdmlPath::new(path).is_err(), "{path:?} should fail");
         }
+    }
+
+    #[test]
+    fn bounded_entry_reader_rejects_overrun() {
+        let err = super::read_declared_size(Cursor::new(b"abc".as_slice()), 2).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "entry read size mismatch",
+                limit: 2,
+                actual: 3,
+            }
+        ));
+    }
+
+    #[test]
+    fn bounded_entry_reader_rejects_truncation() {
+        let err = super::read_declared_size(Cursor::new(b"abc".as_slice()), 4).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "entry read size mismatch",
+                limit: 4,
+                actual: 3,
+            }
+        ));
     }
 
     #[test]
