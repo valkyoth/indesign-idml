@@ -14,6 +14,7 @@ fuzz_target!(|data: &[u8]| {
     let _ = extract_embedded_assets_with_options(
         xml,
         EmbeddedAssetParseOptions {
+            max_xml_bytes: 1024 * 1024,
             base64_mode: Base64Mode::Strict,
             max_assets: 1024,
             max_encoded_bytes: 16 * 1024,

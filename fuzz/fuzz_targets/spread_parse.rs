@@ -11,6 +11,7 @@ fuzz_target!(|data: &[u8]| {
     let _ = Spread::from_xml_with_options(
         xml,
         SpreadParseOptions {
+            max_xml_bytes: 1024 * 1024,
             max_pages: 128,
             max_text_frames: 1024,
             max_page_items: 2048,

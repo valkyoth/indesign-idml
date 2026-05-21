@@ -46,6 +46,8 @@ Hard rules:
   control characters.
 - Archive entry paths are capped by configured UTF-8 byte length before logical
   path validation or writer emission.
+- Direct XML parser entry points enforce configured XML byte limits before event
+  parsing.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.

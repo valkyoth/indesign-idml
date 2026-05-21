@@ -3,6 +3,7 @@
 use crate::error::{IdmlError, Result};
 
 pub(crate) const DEFAULT_MAX_XML_DEPTH: usize = 1024;
+pub(crate) const DEFAULT_MAX_XML_INPUT_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct XmlDepthTracker {
@@ -58,6 +59,21 @@ pub(crate) fn validate_xml_text(what: &'static str, text: &str) -> Result<()> {
         return Err(IdmlError::InvalidText {
             what,
             reason: "contains an XML-forbidden character",
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn enforce_xml_input_bytes(
+    what: &'static str,
+    xml_content: &str,
+    max_xml_bytes: usize,
+) -> Result<()> {
+    if xml_content.len() > max_xml_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what,
+            limit: max_xml_bytes as u64,
+            actual: xml_content.len() as u64,
         });
     }
     Ok(())

@@ -11,6 +11,7 @@ fuzz_target!(|data: &[u8]| {
     let _ = Story::from_xml_with_options(
         xml,
         StoryParseOptions {
+            max_xml_bytes: 1024 * 1024,
             max_text_bytes: 16 * 1024,
             max_xml_depth: 256,
         },

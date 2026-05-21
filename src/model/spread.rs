@@ -3,7 +3,10 @@
 use crate::core::units::{Millimeters, Points};
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
-use crate::xml::{DEFAULT_MAX_XML_DEPTH, XmlDepthTracker, validate_xml_attribute};
+use crate::xml::{
+    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, enforce_xml_input_bytes,
+    validate_xml_attribute,
+};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::escape::escape;
@@ -46,6 +49,8 @@ pub const DEFAULT_MAX_PAGES_PER_SPREAD: usize = 10_000;
 /// Spread parser limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SpreadParseOptions {
+    /// Maximum UTF-8 bytes accepted for the spread XML document.
+    pub max_xml_bytes: usize,
     /// Maximum `Page` elements collected from one spread.
     pub max_pages: usize,
     /// Maximum `TextFrame` elements collected from one spread.
@@ -59,6 +64,7 @@ pub struct SpreadParseOptions {
 impl Default for SpreadParseOptions {
     fn default() -> Self {
         Self {
+            max_xml_bytes: DEFAULT_MAX_XML_INPUT_BYTES,
             max_pages: DEFAULT_MAX_PAGES_PER_SPREAD,
             max_text_frames: DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD,
             max_page_items: DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD,
@@ -75,6 +81,8 @@ impl Spread {
 
     /// Parses a spread XML document with explicit limits.
     pub fn from_xml_with_options(xml_content: &str, options: SpreadParseOptions) -> Result<Self> {
+        enforce_xml_input_bytes("Spread XML bytes", xml_content, options.max_xml_bytes)?;
+
         let mut reader = Reader::from_str(xml_content);
         reader.config_mut().trim_text(true);
 
@@ -1220,6 +1228,27 @@ mod tests {
                 what: "spread page item count",
                 limit: 2,
                 actual: 3,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_xml_byte_limit() {
+        let err = Spread::from_xml_with_options(
+            "<Spread/>",
+            SpreadParseOptions {
+                max_xml_bytes: 4,
+                ..SpreadParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "Spread XML bytes",
+                limit: 4,
+                actual: 9,
             }
         ));
     }

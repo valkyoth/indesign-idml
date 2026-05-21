@@ -19,6 +19,7 @@ fuzz_target!(|data: &[u8]| {
     };
 
     let _ = package.read_designmap_with_options(DesignMapParseOptions {
+        max_xml_bytes: 1024 * 1024,
         max_layers: 1024,
         max_package_refs: 1024,
         max_xml_depth: 256,

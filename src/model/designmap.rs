@@ -3,7 +3,10 @@
 use crate::archive::IdmlPath;
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
-use crate::xml::{DEFAULT_MAX_XML_DEPTH, XmlDepthTracker, validate_xml_attribute};
+use crate::xml::{
+    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, enforce_xml_input_bytes,
+    validate_xml_attribute,
+};
 use indexmap::{IndexMap, IndexSet};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -132,6 +135,8 @@ pub const DEFAULT_MAX_DESIGNMAP_LAYERS: usize = 10_000;
 /// DesignMap parser limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DesignMapParseOptions {
+    /// Maximum UTF-8 bytes accepted for `designmap.xml`.
+    pub max_xml_bytes: usize,
     /// Maximum `Layer` elements collected from one manifest.
     pub max_layers: usize,
     /// Maximum `idPkg:*` package references collected from one manifest.
@@ -143,6 +148,7 @@ pub struct DesignMapParseOptions {
 impl Default for DesignMapParseOptions {
     fn default() -> Self {
         Self {
+            max_xml_bytes: DEFAULT_MAX_XML_INPUT_BYTES,
             max_layers: DEFAULT_MAX_DESIGNMAP_LAYERS,
             max_package_refs: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
@@ -245,6 +251,8 @@ impl DesignMap {
         xml_content: &str,
         options: DesignMapParseOptions,
     ) -> Result<Self> {
+        enforce_xml_input_bytes("DesignMap XML bytes", xml_content, options.max_xml_bytes)?;
+
         let mut reader = Reader::from_str(xml_content);
         reader.config_mut().trim_text(true);
 
@@ -1094,6 +1102,27 @@ mod tests {
                 what: "DesignMap layer count",
                 limit: 1,
                 actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_xml_byte_limit() {
+        let err = DesignMap::from_xml_with_options(
+            "<Document/>",
+            DesignMapParseOptions {
+                max_xml_bytes: 4,
+                ..DesignMapParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap XML bytes",
+                limit: 4,
+                actual: 11,
             }
         ));
     }

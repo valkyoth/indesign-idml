@@ -4,7 +4,9 @@ use crate::archive::{ArchiveEntry, DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE, IdmlPath
 use crate::encoding::{Base64Mode, decode_standard, decoded_standard_len};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, PackageResourcePointer, validate_package_element_name};
-use crate::xml::{DEFAULT_MAX_XML_DEPTH, XmlDepthTracker};
+use crate::xml::{
+    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, enforce_xml_input_bytes,
+};
 use indexmap::IndexMap;
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -100,6 +102,8 @@ pub struct ResourceIntegrityOptions {
 /// Parser limits for embedded Base64 resource payloads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EmbeddedAssetParseOptions {
+    /// Maximum UTF-8 bytes accepted for the XML entry.
+    pub max_xml_bytes: usize,
     /// Base64 compatibility profile.
     pub base64_mode: Base64Mode,
     /// Maximum `Contents` payloads accepted in one XML entry.
@@ -117,6 +121,8 @@ pub struct EmbeddedAssetParseOptions {
 /// Parser limits for typed resource item inventories.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResourceItemParseOptions {
+    /// Maximum UTF-8 bytes accepted for the XML entry.
+    pub max_xml_bytes: usize,
     /// Maximum resource items collected from one XML entry.
     pub max_items: usize,
     /// Maximum attributes captured for one item.
@@ -130,6 +136,7 @@ pub struct ResourceItemParseOptions {
 impl Default for EmbeddedAssetParseOptions {
     fn default() -> Self {
         Self {
+            max_xml_bytes: DEFAULT_MAX_XML_INPUT_BYTES,
             base64_mode: Base64Mode::Strict,
             max_assets: DEFAULT_MAX_EMBEDDED_ASSETS,
             max_encoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_ENCODED_BYTES,
@@ -143,6 +150,7 @@ impl Default for EmbeddedAssetParseOptions {
 impl Default for ResourceItemParseOptions {
     fn default() -> Self {
         Self {
+            max_xml_bytes: DEFAULT_MAX_XML_INPUT_BYTES,
             max_items: DEFAULT_MAX_RESOURCE_ITEMS,
             max_item_attributes: DEFAULT_MAX_RESOURCE_ITEM_ATTRIBUTES,
             max_item_attribute_bytes: DEFAULT_MAX_RESOURCE_ITEM_ATTRIBUTE_BYTES,
@@ -354,6 +362,12 @@ pub fn extract_embedded_assets_with_options(
     xml_content: &str,
     options: EmbeddedAssetParseOptions,
 ) -> Result<Vec<EmbeddedAsset>> {
+    enforce_xml_input_bytes(
+        "embedded asset XML bytes",
+        xml_content,
+        options.max_xml_bytes,
+    )?;
+
     let mut reader = Reader::from_str(xml_content);
     reader.config_mut().trim_text(false);
 
@@ -447,6 +461,12 @@ pub fn extract_resource_items_with_options(
     kind: ResourceKind,
     options: ResourceItemParseOptions,
 ) -> Result<Vec<ResourceItem>> {
+    enforce_xml_input_bytes(
+        "resource item XML bytes",
+        xml_content,
+        options.max_xml_bytes,
+    )?;
+
     let mut reader = Reader::from_str(xml_content);
     reader.config_mut().trim_text(true);
 
@@ -1119,6 +1139,28 @@ mod tests {
     }
 
     #[test]
+    fn resource_item_parser_enforces_xml_byte_limit() {
+        let err = extract_resource_items_with_options(
+            "<Root/>",
+            ResourceKind::Styles,
+            ResourceItemParseOptions {
+                max_xml_bytes: 4,
+                ..ResourceItemParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item XML bytes",
+                limit: 4,
+                actual: 7,
+            }
+        ));
+    }
+
+    #[test]
     fn resource_item_parser_enforces_xml_depth_limit() {
         let err = extract_resource_items_with_options(
             r#"<Resources><Wrapper><Color Self="c1" /></Wrapper></Resources>"#,
@@ -1514,6 +1556,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(assets[0].bytes, b"hello");
+    }
+
+    #[test]
+    fn embedded_asset_parser_enforces_xml_byte_limit() {
+        let err = extract_embedded_assets_with_options(
+            "<Graphic/>",
+            EmbeddedAssetParseOptions {
+                max_xml_bytes: 4,
+                ..EmbeddedAssetParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "embedded asset XML bytes",
+                limit: 4,
+                actual: 10,
+            }
+        ));
     }
 
     #[test]

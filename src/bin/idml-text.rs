@@ -55,6 +55,13 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
             story_options.max_text_bytes = parse_usize(&value, "--max-story-text-bytes")?;
             continue;
         }
+        if arg == "--max-story-xml-bytes" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage("missing value after --max-story-xml-bytes"));
+            };
+            story_options.max_xml_bytes = parse_usize(&value, "--max-story-xml-bytes")?;
+            continue;
+        }
         if arg == "--max-story-xml-depth" {
             let Some(value) = args.next() else {
                 return Err(CliError::Usage("missing value after --max-story-xml-depth"));
@@ -99,6 +106,15 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
             spread_options.max_pages = parse_usize(&value, "--max-spread-pages")?;
             continue;
         }
+        if arg == "--max-spread-xml-bytes" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-spread-xml-bytes",
+                ));
+            };
+            spread_options.max_xml_bytes = parse_usize(&value, "--max-spread-xml-bytes")?;
+            continue;
+        }
         if arg == "--max-spread-text-frames" {
             let Some(value) = args.next() else {
                 return Err(CliError::Usage(
@@ -134,6 +150,15 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
             };
             designmap_options.max_package_refs =
                 parse_usize(&value, "--max-designmap-package-refs")?;
+            continue;
+        }
+        if arg == "--max-designmap-xml-bytes" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-designmap-xml-bytes",
+                ));
+            };
+            designmap_options.max_xml_bytes = parse_usize(&value, "--max-designmap-xml-bytes")?;
             continue;
         }
         if arg == "--max-designmap-xml-depth" {
@@ -296,7 +321,7 @@ fn print_help() -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
     writer.write_all(
-        b"Usage: idml-text [--output PATH] [--spread-id ID [--page-id ID | --rect-points T L B R]] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order, or layout-resolved text for one spread/page/rectangle.\n\nLayout:\n  --spread-id ID\n  --page-id ID\n  --rect-points TOP LEFT BOTTOM RIGHT\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-entry-compression-ratio RATIO\n  --max-archive-path-bytes BYTES\n  --max-designmap-package-refs COUNT\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-xml-depth DEPTH\n  --max-spread-pages COUNT\n  --max-spread-text-frames COUNT\n  --max-spread-page-items COUNT\n  --max-spread-xml-depth DEPTH\n",
+        b"Usage: idml-text [--output PATH] [--spread-id ID [--page-id ID | --rect-points T L B R]] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order, or layout-resolved text for one spread/page/rectangle.\n\nLayout:\n  --spread-id ID\n  --page-id ID\n  --rect-points TOP LEFT BOTTOM RIGHT\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-entry-compression-ratio RATIO\n  --max-archive-path-bytes BYTES\n  --max-designmap-package-refs COUNT\n  --max-designmap-xml-bytes BYTES\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-xml-bytes BYTES\n  --max-story-xml-depth DEPTH\n  --max-spread-pages COUNT\n  --max-spread-xml-bytes BYTES\n  --max-spread-text-frames COUNT\n  --max-spread-page-items COUNT\n  --max-spread-xml-depth DEPTH\n",
     )?;
     writer.flush()?;
     Ok(())

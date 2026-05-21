@@ -3,7 +3,8 @@
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
-    DEFAULT_MAX_XML_DEPTH, XmlDepthTracker, validate_xml_attribute, validate_xml_text,
+    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, enforce_xml_input_bytes,
+    validate_xml_attribute, validate_xml_text,
 };
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -16,6 +17,8 @@ pub const DEFAULT_MAX_STORY_TEXT_BYTES: usize = 64 * 1024 * 1024;
 /// Story parser limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StoryParseOptions {
+    /// Maximum UTF-8 bytes accepted for the story XML document.
+    pub max_xml_bytes: usize,
     /// Maximum UTF-8 bytes allowed in extracted story text.
     pub max_text_bytes: usize,
     /// Maximum XML element nesting depth accepted while parsing.
@@ -25,6 +28,7 @@ pub struct StoryParseOptions {
 impl Default for StoryParseOptions {
     fn default() -> Self {
         Self {
+            max_xml_bytes: DEFAULT_MAX_XML_INPUT_BYTES,
             max_text_bytes: DEFAULT_MAX_STORY_TEXT_BYTES,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
@@ -48,6 +52,8 @@ impl Story {
 
     /// Parses a story XML document with explicit limits.
     pub fn from_xml_with_options(xml_content: &str, options: StoryParseOptions) -> Result<Self> {
+        enforce_xml_input_bytes("Story XML bytes", xml_content, options.max_xml_bytes)?;
+
         let mut reader = Reader::from_str(xml_content);
         reader.config_mut().trim_text(false);
 
@@ -274,6 +280,27 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
+    }
+
+    #[test]
+    fn enforces_xml_byte_limit() {
+        let err = Story::from_xml_with_options(
+            "<Story/>",
+            StoryParseOptions {
+                max_xml_bytes: 4,
+                ..StoryParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "Story XML bytes",
+                limit: 4,
+                actual: 8,
+            }
+        ));
     }
 
     #[test]

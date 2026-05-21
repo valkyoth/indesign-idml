@@ -23,6 +23,7 @@ fuzz_target!(|data: &[u8]| {
             xml,
             kind,
             ResourceItemParseOptions {
+                max_xml_bytes: 1024 * 1024,
                 max_items: 1024,
                 max_item_attributes: 64,
                 max_item_attribute_bytes: 64 * 1024,

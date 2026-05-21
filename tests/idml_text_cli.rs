@@ -261,6 +261,39 @@ fn idml_text_enforces_designmap_ref_limit() {
 }
 
 #[test]
+fn idml_text_enforces_designmap_xml_byte_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("sample.idml");
+    fs::write(&input, sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--max-designmap-xml-bytes")
+        .arg("8")
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for DesignMap XML bytes: limit 8, actual 179\n");
+}
+
+#[test]
+fn idml_text_enforces_story_xml_byte_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("sample.idml");
+    fs::write(&input, sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command.arg("--max-story-xml-bytes").arg("8").arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for Story XML bytes: limit 8, actual 49\n");
+}
+
+#[test]
 fn idml_text_enforces_story_xml_depth_limit() {
     let temp = tempdir().unwrap();
     let input = temp.path().join("sample.idml");
@@ -273,6 +306,26 @@ fn idml_text_enforces_story_xml_depth_limit() {
         .assert()
         .failure()
         .stderr("idml-text: limit exceeded for Story XML depth: limit 1, actual 2\n");
+}
+
+#[test]
+fn idml_text_enforces_spread_xml_byte_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--spread-id")
+        .arg("u10")
+        .arg("--max-spread-xml-bytes")
+        .arg("8")
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for Spread XML bytes: limit 8, actual 233\n");
 }
 
 #[test]
