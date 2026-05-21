@@ -172,6 +172,16 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
                 parse_u64(&value, "--max-total-uncompressed-bytes")?;
             continue;
         }
+        if arg == "--max-entry-compression-ratio" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-entry-compression-ratio",
+                ));
+            };
+            archive_limits.max_entry_compression_ratio =
+                parse_u64(&value, "--max-entry-compression-ratio")?;
+            continue;
+        }
         if input.replace(PathBuf::from(arg)).is_some() {
             return Err(CliError::Usage("expected exactly one input IDML path"));
         }
@@ -277,7 +287,7 @@ fn print_help() -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
     writer.write_all(
-        b"Usage: idml-text [--output PATH] [--spread-id ID [--page-id ID | --rect-points T L B R]] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order, or layout-resolved text for one spread/page/rectangle.\n\nLayout:\n  --spread-id ID\n  --page-id ID\n  --rect-points TOP LEFT BOTTOM RIGHT\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-designmap-package-refs COUNT\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-xml-depth DEPTH\n  --max-spread-pages COUNT\n  --max-spread-text-frames COUNT\n  --max-spread-page-items COUNT\n  --max-spread-xml-depth DEPTH\n",
+        b"Usage: idml-text [--output PATH] [--spread-id ID [--page-id ID | --rect-points T L B R]] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order, or layout-resolved text for one spread/page/rectangle.\n\nLayout:\n  --spread-id ID\n  --page-id ID\n  --rect-points TOP LEFT BOTTOM RIGHT\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-entry-compression-ratio RATIO\n  --max-designmap-package-refs COUNT\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-xml-depth DEPTH\n  --max-spread-pages COUNT\n  --max-spread-text-frames COUNT\n  --max-spread-page-items COUNT\n  --max-spread-xml-depth DEPTH\n",
     )?;
     writer.flush()?;
     Ok(())

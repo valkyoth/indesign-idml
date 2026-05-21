@@ -212,6 +212,23 @@ fn idml_text_enforces_archive_entry_limit() {
 }
 
 #[test]
+fn idml_text_enforces_entry_compression_ratio_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("compressed.idml");
+    fs::write(&input, compressed_entry_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--max-entry-compression-ratio")
+        .arg("1")
+        .arg(&input);
+
+    command.assert().failure().stderr(
+        "idml-text: limit exceeded for archive entry compression ratio: limit 1, actual 196\n",
+    );
+}
+
+#[test]
 fn idml_text_enforces_designmap_ref_limit() {
     let temp = tempdir().unwrap();
     let input = temp.path().join("sample.idml");
@@ -296,6 +313,28 @@ fn sample_idml() -> Vec<u8> {
         .unwrap();
     writer.finish().unwrap();
 
+    buffer.into_inner()
+}
+
+fn compressed_entry_idml() -> Vec<u8> {
+    let mut buffer = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(&mut buffer);
+    let stored = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .last_modified_time(zip::DateTime::DEFAULT);
+    let deflated = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .last_modified_time(zip::DateTime::DEFAULT);
+
+    writer.start_file("mimetype", stored).unwrap();
+    writer
+        .write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    writer
+        .start_file("Resources/Compressed.bin", deflated)
+        .unwrap();
+    writer.write_all(&vec![0u8; 4096]).unwrap();
+    writer.finish().unwrap();
     buffer.into_inner()
 }
 
