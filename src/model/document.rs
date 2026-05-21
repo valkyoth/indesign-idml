@@ -1,6 +1,6 @@
 //! High-level typed IDML document aggregate.
 
-use crate::archive::{IdmlPackage, IdmlPackageWriter, IdmlPath};
+use crate::archive::{ArchiveLimits, IdmlPackage, IdmlPackageWriter, IdmlPath};
 use crate::core::resolver::{
     ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
 };
@@ -435,9 +435,17 @@ impl IdmlDocument {
     where
         W: Write + Seek,
     {
+        self.write_to_with_limits(writer, ArchiveLimits::default())
+    }
+
+    /// Validates and writes the aggregate with explicit archive output limits.
+    pub fn write_to_with_limits<W>(&self, writer: W, limits: ArchiveLimits) -> Result<W>
+    where
+        W: Write + Seek,
+    {
         self.validate()?;
 
-        let mut package = IdmlPackageWriter::new(writer)?;
+        let mut package = IdmlPackageWriter::with_limits(writer, limits)?;
         package.add_designmap(&self.design_map)?;
         for (spread_id, path) in &self.design_map.spread_srcs {
             let spread =
@@ -718,7 +726,7 @@ fn validate_id_prefix(prefix: &str) -> Result<()> {
 mod tests {
     use super::{IdmlDocument, IdmlDocumentReadOptions, IdmlIdAllocator, PreservedEntry};
     use crate::IdmlError;
-    use crate::archive::{IdmlPackage, IdmlPackageWriter, IdmlPath};
+    use crate::archive::{ArchiveLimits, IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::core::units::Points;
     use crate::model::designmap::{DesignMap, DesignMapParseOptions};
     use crate::model::resources::ResourceIntegrityOptions;
@@ -1418,6 +1426,30 @@ mod tests {
                 limit: 1,
                 actual,
             } if actual == b"<Graphic />".len() as u64
+        ));
+    }
+
+    #[test]
+    fn write_to_with_limits_enforces_archive_output_limits() {
+        let document = make_document();
+
+        let err = document
+            .write_to_with_limits(
+                Cursor::new(Vec::new()),
+                ArchiveLimits {
+                    max_entries: 1,
+                    ..ArchiveLimits::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "archive entry count",
+                limit: 1,
+                actual: 2,
+            }
         ));
     }
 
