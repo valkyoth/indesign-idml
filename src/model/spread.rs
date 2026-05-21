@@ -126,6 +126,7 @@ impl Spread {
                             group,
                             options,
                             &mut xml_depth,
+                            &mut root,
                             &mut spread.text_frames,
                             &mut page_item_count,
                         )?;
@@ -575,12 +576,14 @@ fn parse_group_contents(
     mut group: Group,
     options: SpreadParseOptions,
     xml_depth: &mut XmlDepthTracker,
+    root: &mut RootElementTracker,
     text_frames: &mut Vec<TextFrame>,
     page_item_count: &mut usize,
 ) -> Result<Group> {
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
+                root.enter(e.name().as_ref())?;
                 xml_depth.enter()?;
                 if e.name().as_ref() == b"TextFrame" {
                     push_text_frame_page_item_limited(
@@ -604,6 +607,7 @@ fn parse_group_contents(
                         child,
                         options,
                         xml_depth,
+                        root,
                         text_frames,
                         page_item_count,
                     )?;
@@ -616,6 +620,7 @@ fn parse_group_contents(
                 }
             }
             Event::Empty(e) => {
+                root.visit_empty(e.name().as_ref())?;
                 xml_depth.visit_empty()?;
                 if e.name().as_ref() == b"TextFrame" {
                     push_text_frame_page_item_limited(
@@ -643,11 +648,26 @@ fn parse_group_contents(
             }
             Event::End(e) => {
                 xml_depth.exit();
+                root.exit();
                 if e.name().as_ref() == b"Group" {
                     break;
                 }
             }
-            Event::Eof => break,
+            Event::Text(e) => {
+                root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                root.visit_reference()?;
+            }
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "Group".to_owned(),
+                    reason: "unclosed Group element",
+                });
+            }
             _ => {}
         }
     }
@@ -1038,6 +1058,32 @@ mod tests {
                 element,
                 reason: "non-whitespace character data outside root element",
             } if element == "#text"
+        ));
+    }
+
+    #[test]
+    fn rejects_trailing_spread_text_after_grouped_root() {
+        let err = Spread::from_xml("<Spread><Group /></Spread>tail").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "non-whitespace character data outside root element",
+            } if element == "#text"
+        ));
+    }
+
+    #[test]
+    fn rejects_unclosed_group_before_eof() {
+        let err = Spread::from_xml("<Spread><Group>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "unclosed Group element",
+            } if element == "Group"
         ));
     }
 

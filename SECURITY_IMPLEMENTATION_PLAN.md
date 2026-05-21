@@ -62,6 +62,8 @@ Hard rules:
   interpreting recognized child tags as a valid model.
 - Non-whitespace character data, CDATA, and entity references outside the root
   element are rejected instead of being ignored.
+- EOF before closing the root or a nested Group is rejected as malformed XML
+  state instead of producing a partial model.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.

@@ -93,13 +93,19 @@ impl RootElementTracker {
     }
 
     pub(crate) fn finish(self) -> Result<()> {
-        if self.seen {
-            return Ok(());
+        if !self.seen {
+            return Err(IdmlError::InvalidElement {
+                element: String::new(),
+                reason: "missing root element",
+            });
         }
-        Err(IdmlError::InvalidElement {
-            element: String::new(),
-            reason: "missing root element",
-        })
+        if !self.closed {
+            return Err(IdmlError::InvalidElement {
+                element: String::from_utf8_lossy(self.expected_name).into_owned(),
+                reason: "unclosed root element",
+            });
+        }
+        Ok(())
     }
 
     fn validate_root(&self, name: &[u8]) -> Result<()> {
