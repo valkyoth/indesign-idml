@@ -3,7 +3,7 @@
 use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
-    DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
+    AnyRootTracker, DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker,
     configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype,
     reject_xml_entity_reference, validate_xml_attribute, validate_xml_text,
 };
@@ -67,12 +67,16 @@ impl Story {
         let mut id = None;
         let mut text = String::new();
         let mut content_depth = 0usize;
+        let mut story_depth = 0usize;
+        let mut seen_story = false;
+        let mut root_name = None;
         let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "Story XML depth");
-        let mut root = RootElementTracker::new(b"Story", "expected Story root element");
+        let mut root = AnyRootTracker::default();
 
         loop {
             match reader.read_event()? {
                 Event::Start(e) => {
+                    validate_story_root(&mut root_name, e.name().as_ref())?;
                     root.enter(e.name().as_ref())?;
                     xml_depth.enter()?;
                     if content_depth > 0 {
@@ -81,18 +85,24 @@ impl Story {
                             reason: "element inside story Content",
                         });
                     }
-                    if e.name().as_ref() == b"Story" && id.is_none() {
+                    if e.name().as_ref() == b"Story" {
+                        enter_story_element(&mut seen_story, &mut story_depth)?;
                         id = optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?;
-                    } else if e.name().as_ref() == b"Content" {
+                    } else if story_depth > 0 {
+                        story_depth = increment_story_depth(story_depth)?;
+                    }
+                    if story_depth > 0 && e.name().as_ref() == b"Content" {
                         content_depth = 1;
                     }
                 }
                 Event::End(e) if e.name().as_ref() == b"Content" => {
                     exit_content_depth(&mut content_depth)?;
+                    exit_story_depth(&mut story_depth)?;
                     xml_depth.exit()?;
                     root.exit(e.name().as_ref())?;
                 }
                 Event::End(e) => {
+                    exit_story_depth(&mut story_depth)?;
                     xml_depth.exit()?;
                     root.exit(e.name().as_ref())?;
                 }
@@ -134,6 +144,7 @@ impl Story {
                     }
                 }
                 Event::Empty(e) => {
+                    validate_story_root(&mut root_name, e.name().as_ref())?;
                     root.visit_empty(e.name().as_ref())?;
                     xml_depth.visit_empty()?;
                     if content_depth > 0 {
@@ -142,11 +153,12 @@ impl Story {
                             reason: "element inside story Content",
                         });
                     }
-                    if e.name().as_ref() == b"Story" && id.is_none() {
+                    if e.name().as_ref() == b"Story" {
+                        enter_empty_story_element(&mut seen_story)?;
                         id = optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?;
-                    } else if e.name().as_ref() == b"Br" {
+                    } else if story_depth > 0 && e.name().as_ref() == b"Br" {
                         push_limited(&mut text, "\n", options.max_text_bytes)?;
-                    } else if e.name().as_ref() == b"Tab" {
+                    } else if story_depth > 0 && e.name().as_ref() == b"Tab" {
                         push_limited(&mut text, "\t", options.max_text_bytes)?;
                     }
                 }
@@ -158,6 +170,14 @@ impl Story {
 
         root.finish()?;
         xml_depth.finish()?;
+        if !seen_story {
+            return Err(IdmlError::InvalidElement {
+                element: root_name
+                    .map(|name| String::from_utf8_lossy(&name).into_owned())
+                    .unwrap_or_default(),
+                reason: "missing Story element",
+            });
+        }
         Ok(Self { id, text })
     }
 
@@ -218,6 +238,69 @@ fn enforce_story_attribute_bytes(actual: usize, max_attribute_bytes: usize) -> R
             limit: max_attribute_bytes as u64,
             actual: actual as u64,
         });
+    }
+    Ok(())
+}
+
+fn validate_story_root(root_name: &mut Option<Vec<u8>>, name: &[u8]) -> Result<()> {
+    if root_name.is_some() {
+        return Ok(());
+    }
+
+    if matches!(name, b"Story" | b"idPkg:Story") {
+        *root_name = Some(name.to_vec());
+        return Ok(());
+    }
+
+    Err(IdmlError::InvalidElement {
+        element: String::from_utf8_lossy(name).into_owned(),
+        reason: "expected Story root element",
+    })
+}
+
+fn enter_story_element(seen_story: &mut bool, story_depth: &mut usize) -> Result<()> {
+    if *story_depth > 0 {
+        return Err(IdmlError::InvalidElement {
+            element: "Story".to_owned(),
+            reason: "nested Story element",
+        });
+    }
+    if *seen_story {
+        return Err(IdmlError::InvalidElement {
+            element: "Story".to_owned(),
+            reason: "multiple Story elements",
+        });
+    }
+
+    *seen_story = true;
+    *story_depth = 1;
+    Ok(())
+}
+
+fn enter_empty_story_element(seen_story: &mut bool) -> Result<()> {
+    if *seen_story {
+        return Err(IdmlError::InvalidElement {
+            element: "Story".to_owned(),
+            reason: "multiple Story elements",
+        });
+    }
+
+    *seen_story = true;
+    Ok(())
+}
+
+fn increment_story_depth(story_depth: usize) -> Result<usize> {
+    story_depth
+        .checked_add(1)
+        .ok_or_else(|| IdmlError::InvalidElement {
+            element: "Story".to_owned(),
+            reason: "story depth overflow",
+        })
+}
+
+fn exit_story_depth(story_depth: &mut usize) -> Result<()> {
+    if *story_depth > 0 {
+        *story_depth -= 1;
     }
     Ok(())
 }
@@ -354,6 +437,41 @@ mod tests {
 
         assert_eq!(story.id.as_deref(), Some("u2"));
         assert_eq!(story.text, "Hello & welcome !\nNext\tCell");
+    }
+
+    #[test]
+    fn extracts_story_from_idpkg_wrapper() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u2">
+    <ParagraphStyleRange>
+      <CharacterStyleRange>
+        <Content>Wrapped</Content><Br/><Content>Story</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#;
+
+        let story = Story::from_xml(xml).unwrap();
+
+        assert_eq!(story.id.as_deref(), Some("u2"));
+        assert_eq!(story.text, "Wrapped\nStory");
+    }
+
+    #[test]
+    fn rejects_idpkg_story_wrapper_without_story_model() {
+        let err = Story::from_xml(
+            r#"<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" />"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "missing Story element",
+            } if element == "idPkg:Story"
+        ));
     }
 
     #[test]
