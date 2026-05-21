@@ -186,7 +186,7 @@ impl ResourceInventory {
                 } else if !matches!(reference.element.as_str(), "idPkg:Story" | "idPkg:Spread") {
                     validate_package_element_name(&reference.element)?;
                     resources.push(ResourceReference {
-                        kind: ResourceKind::from_idpkg_element(&reference.element),
+                        kind: ResourceKind::from_reference(&reference.element, &reference.path),
                         element: reference.element.clone(),
                         id: None,
                         path: reference.path.clone(),
@@ -266,7 +266,7 @@ fn push_resource_pointer(
 ) -> Result<()> {
     validate_package_element_name(pointer.element())?;
     resources.push(ResourceReference {
-        kind: ResourceKind::from_idpkg_element(pointer.element()),
+        kind: ResourceKind::from_reference(pointer.element(), pointer.path()),
         element: pointer.element().to_owned(),
         id: None,
         path: pointer.path().clone(),
@@ -373,6 +373,17 @@ pub fn extract_embedded_assets_with_options(
 }
 
 impl ResourceKind {
+    /// Classifies a package reference using the element first, then the archive path.
+    #[must_use]
+    pub fn from_reference(element: &str, path: &IdmlPath) -> Self {
+        match Self::from_idpkg_element(element) {
+            Self::Other(_) => {
+                Self::from_path(path).unwrap_or_else(|| Self::Other(element.to_owned()))
+            }
+            known => known,
+        }
+    }
+
     /// Classifies an `idPkg:*` element name into a broad resource kind.
     #[must_use]
     pub fn from_idpkg_element(element: &str) -> Self {
@@ -386,6 +397,33 @@ impl ResourceKind {
             "Preference" | "Preferences" => Self::Preferences,
             "Tag" | "Tags" => Self::Tags,
             _ => Self::Other(element.to_owned()),
+        }
+    }
+
+    /// Classifies a resource by conventional IDML archive path.
+    #[must_use]
+    pub fn from_path(path: &IdmlPath) -> Option<Self> {
+        let path = path.as_str().to_ascii_lowercase();
+        let file = path.rsplit('/').next().unwrap_or(path.as_str());
+
+        if path.contains("masterspreads/") {
+            Some(Self::MasterSpread)
+        } else if file.contains("style") {
+            Some(Self::Styles)
+        } else if file.contains("swatch") || file.contains("color") {
+            Some(Self::Swatches)
+        } else if file.contains("font") {
+            Some(Self::Fonts)
+        } else if file.contains("link") {
+            Some(Self::Links)
+        } else if file.contains("graphic") || path.contains("links/") {
+            Some(Self::Graphics)
+        } else if file.contains("preference") || file.contains("setting") {
+            Some(Self::Preferences)
+        } else if file.contains("tag") {
+            Some(Self::Tags)
+        } else {
+            None
         }
     }
 }
@@ -581,6 +619,38 @@ mod tests {
     }
 
     #[test]
+    fn inventory_classifies_generic_resources_by_path() {
+        let xml = r#"<Document>
+  <idPkg:Resource src="Resources/Styles.xml" />
+  <idPkg:Resource src="Resources/Fonts.xml" />
+  <idPkg:Resource src="Resources/Swatches.xml" />
+  <idPkg:Resource src="Resources/Links.xml" />
+  <idPkg:Resource src="Resources/Preferences.xml" />
+  <idPkg:Resource src="XML/Tags.xml" />
+</Document>"#;
+        let design_map = DesignMap::from_xml(xml).unwrap();
+
+        let inventory = ResourceInventory::from_designmap(&design_map).unwrap();
+        let kinds = inventory
+            .resources
+            .iter()
+            .map(|resource| resource.kind.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            kinds,
+            [
+                ResourceKind::Styles,
+                ResourceKind::Fonts,
+                ResourceKind::Swatches,
+                ResourceKind::Links,
+                ResourceKind::Preferences,
+                ResourceKind::Tags,
+            ]
+        );
+    }
+
+    #[test]
     fn inventory_preserves_mixed_manifest_resource_order() {
         let xml = r#"<Document>
   <idPkg:Graphic src="Resources/Graphic.xml" />
@@ -652,6 +722,16 @@ mod tests {
         assert_eq!(
             ResourceKind::from_idpkg_element("idPkg:Custom"),
             ResourceKind::Other("idPkg:Custom".to_owned())
+        );
+    }
+
+    #[test]
+    fn known_resource_element_takes_precedence_over_path_hint() {
+        let path = IdmlPath::new("Resources/Fonts.xml").unwrap();
+
+        assert_eq!(
+            ResourceKind::from_reference("idPkg:Graphic", &path),
+            ResourceKind::Graphics
         );
     }
 
