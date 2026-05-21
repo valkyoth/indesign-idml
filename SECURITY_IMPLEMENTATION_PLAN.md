@@ -52,6 +52,9 @@ Hard rules:
   parsing.
 - Duplicate XML attributes are rejected instead of being silently overwritten or
   interpreted by first-match behavior.
+- Decoded XML attribute values captured into the model are validated against the
+  crate XML character policy before they can become IDs, references, or resource
+  metadata.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.

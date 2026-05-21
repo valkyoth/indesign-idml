@@ -6,6 +6,7 @@ use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, PackageResourcePointer, validate_package_element_name};
 use crate::xml::{
     DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker, enforce_xml_input_bytes,
+    validate_xml_attribute,
 };
 use indexmap::IndexMap;
 use quick_xml::Reader;
@@ -704,6 +705,11 @@ fn collect_resource_attrs_limited(
         let value = attr
             .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
             .into_owned();
+        validate_xml_attribute(
+            String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+            "resource item attribute",
+            &value,
+        )?;
         let next_count = attributes
             .len()
             .checked_add(1)
@@ -1141,6 +1147,24 @@ mod tests {
                 } if element == "ParagraphStyle"
             ) || matches!(&err, IdmlError::XmlAttribute(_))
         );
+    }
+
+    #[test]
+    fn resource_item_parser_rejects_xml_forbidden_attribute_values() {
+        let err = extract_resource_items(
+            "<Styles><ParagraphStyle Self=\"bad\0id\" /></Styles>",
+            ResourceKind::Styles,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "resource item attribute",
+                reason: "contains an XML-forbidden character",
+            } if element == "ParagraphStyle"
+        ));
     }
 
     #[test]

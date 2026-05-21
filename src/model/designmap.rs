@@ -528,10 +528,15 @@ fn optional_attr(
                     reason: "duplicate attribute",
                 });
             }
-            value = Some(
-                attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
-                    .into_owned(),
-            );
+            let decoded = attr
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
+                .into_owned();
+            validate_xml_attribute(
+                String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+                attribute,
+                &decoded,
+            )?;
+            value = Some(decoded);
         }
     }
     Ok(value)
@@ -1090,6 +1095,20 @@ mod tests {
                 } if element == "idPkg:Story"
             ) || matches!(&err, IdmlError::XmlAttribute(_))
         );
+    }
+
+    #[test]
+    fn rejects_xml_forbidden_document_id_attribute_on_parse() {
+        let err = DesignMap::from_xml("<Document Self=\"bad\0id\"></Document>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Self",
+                reason: "contains an XML-forbidden character",
+            } if element == "Document"
+        ));
     }
 
     #[test]

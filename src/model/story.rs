@@ -155,10 +155,15 @@ fn optional_attr(
                     reason: "duplicate attribute",
                 });
             }
-            value = Some(
-                attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
-                    .into_owned(),
-            );
+            let decoded = attr
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
+                .into_owned();
+            validate_xml_attribute(
+                String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+                attribute,
+                &decoded,
+            )?;
+            value = Some(decoded);
         }
     }
     Ok(value)
@@ -326,6 +331,21 @@ mod tests {
                 } if element == "Story"
             ) || matches!(&err, IdmlError::XmlAttribute(_))
         );
+    }
+
+    #[test]
+    fn rejects_xml_forbidden_story_id_attribute_on_parse() {
+        let err =
+            Story::from_xml("<Story Self=\"bad\0id\"><Content>x</Content></Story>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Self",
+                reason: "contains an XML-forbidden character",
+            } if element == "Story"
+        ));
     }
 
     #[test]
