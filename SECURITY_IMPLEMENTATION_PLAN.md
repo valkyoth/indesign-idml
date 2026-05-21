@@ -42,6 +42,8 @@ Hard rules:
 - No filesystem writes during read-only parsing.
 - No extraction APIs that write archive paths directly to disk.
 - All archive paths are normalized as logical ZIP paths, never host paths.
+- Archive paths reject traversal, host path syntax, directory entries, and
+  control characters.
 - Archive entry paths are capped by configured UTF-8 byte length before logical
   path validation or writer emission.
 - All parsing APIs accept explicit size limits.

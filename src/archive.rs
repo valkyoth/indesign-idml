@@ -1011,6 +1011,9 @@ fn validate_archive_path(path: &str) -> Result<()> {
     if path.as_bytes().contains(&0) {
         return Err(reject("NUL byte"));
     }
+    if path.chars().any(char::is_control) {
+        return Err(reject("control character"));
+    }
     if path.starts_with('/') {
         return Err(reject("absolute path"));
     }
@@ -1063,6 +1066,8 @@ mod tests {
             "Stories/",
             "Stories//Story.xml",
             "bad\0name",
+            "Stories/\nStory.xml",
+            "Stories/\tStory.xml",
         ] {
             assert!(IdmlPath::new(path).is_err(), "{path:?} should fail");
         }
