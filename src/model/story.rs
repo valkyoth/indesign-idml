@@ -83,12 +83,12 @@ impl Story {
                 }
                 Event::End(e) if e.name().as_ref() == b"Content" => {
                     content_depth = content_depth.saturating_sub(1);
-                    xml_depth.exit();
-                    root.exit();
+                    xml_depth.exit()?;
+                    root.exit(e.name().as_ref())?;
                 }
-                Event::End(_) => {
-                    xml_depth.exit();
-                    root.exit();
+                Event::End(e) => {
+                    xml_depth.exit()?;
+                    root.exit(e.name().as_ref())?;
                 }
                 Event::Text(e) => {
                     root.visit_text(e.as_ref())?;

@@ -77,11 +77,15 @@ impl RootElementTracker {
         Ok(())
     }
 
-    pub(crate) fn exit(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+    pub(crate) fn exit(&mut self, name: &[u8]) -> Result<()> {
+        if self.depth == 0 {
+            return Err(self.invalid_element(name, "unexpected closing element"));
+        }
+        self.depth -= 1;
         if self.seen && self.depth == 0 {
             self.closed = true;
         }
+        Ok(())
     }
 
     pub(crate) fn visit_text(&self, text: &[u8]) -> Result<()> {
@@ -185,11 +189,15 @@ impl AnyRootTracker {
         Ok(())
     }
 
-    pub(crate) fn exit(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+    pub(crate) fn exit(&mut self, name: &[u8]) -> Result<()> {
+        if self.depth == 0 {
+            return Err(invalid_element(name, "unexpected closing element"));
+        }
+        self.depth -= 1;
         if self.root_name.is_some() && self.depth == 0 {
             self.closed = true;
         }
+        Ok(())
     }
 
     pub(crate) fn visit_text(&self, text: &[u8]) -> Result<()> {
@@ -281,13 +289,20 @@ impl XmlDepthTracker {
         Ok(())
     }
 
-    pub(crate) fn exit(&mut self) {
-        self.current = self.current.saturating_sub(1);
+    pub(crate) fn exit(&mut self) -> Result<()> {
+        if self.current == 0 {
+            return Err(IdmlError::InvalidElement {
+                element: "#document".to_owned(),
+                reason: "unexpected closing XML element",
+            });
+        }
+        self.current -= 1;
+        Ok(())
     }
 
     pub(crate) fn visit_empty(&mut self) -> Result<()> {
         self.enter()?;
-        self.exit();
+        self.exit()?;
         Ok(())
     }
 
@@ -360,5 +375,67 @@ fn invalid_element(name: &[u8], reason: &'static str) -> IdmlError {
     IdmlError::InvalidElement {
         element: String::from_utf8_lossy(name).into_owned(),
         reason,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AnyRootTracker, RootElementTracker, XmlDepthTracker};
+    use crate::IdmlError;
+
+    #[test]
+    fn root_tracker_rejects_unexpected_close() {
+        let mut tracker = RootElementTracker::new(b"Story", "expected Story root element");
+        let err = tracker.exit(b"Story").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "unexpected closing element",
+            } if element == "Story"
+        ));
+    }
+
+    #[test]
+    fn any_root_tracker_rejects_unexpected_close() {
+        let mut tracker = AnyRootTracker::default();
+        let err = tracker.exit(b"Styles").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "unexpected closing element",
+            } if element == "Styles"
+        ));
+    }
+
+    #[test]
+    fn xml_depth_tracker_rejects_unexpected_close() {
+        let mut tracker = XmlDepthTracker::new(8, "test XML depth");
+        let err = tracker.exit().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "unexpected closing XML element",
+            } if element == "#document"
+        ));
+    }
+
+    #[test]
+    fn trackers_close_balanced_roots() {
+        let mut root = RootElementTracker::new(b"Story", "expected Story root element");
+        let mut depth = XmlDepthTracker::new(8, "test XML depth");
+
+        root.enter(b"Story").unwrap();
+        depth.enter().unwrap();
+        depth.exit().unwrap();
+        root.exit(b"Story").unwrap();
+
+        root.finish().unwrap();
+        depth.finish().unwrap();
     }
 }

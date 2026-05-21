@@ -438,12 +438,12 @@ pub fn extract_embedded_assets_with_options(
                     )?;
                     encoded.clear();
                 }
-                xml_depth.exit();
-                root.exit();
+                xml_depth.exit()?;
+                root.exit(e.name().as_ref())?;
             }
-            Event::End(_) => {
-                xml_depth.exit();
-                root.exit();
+            Event::End(e) => {
+                xml_depth.exit()?;
+                root.exit(e.name().as_ref())?;
             }
             Event::Text(e) => {
                 root.visit_text(e.as_ref())?;
@@ -528,9 +528,9 @@ pub fn extract_resource_items_with_options(
                 xml_depth.visit_empty()?;
                 maybe_push_resource_item(&mut items, &e, &reader, &kind, options)?;
             }
-            Event::End(_) => {
-                xml_depth.exit();
-                root.exit();
+            Event::End(e) => {
+                xml_depth.exit()?;
+                root.exit(e.name().as_ref())?;
             }
             Event::Text(e) => {
                 root.visit_text(e.as_ref())?;

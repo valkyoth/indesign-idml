@@ -72,6 +72,8 @@ Hard rules:
   decoded attribute values; structural element bodies reject them.
 - EOF before closing the root or a nested Group is rejected as malformed XML
   state instead of producing a partial model.
+- XML root and depth trackers use checked close-state transitions instead of
+  saturating counters, so unexpected closing events cannot be normalized away.
 - Resource XML extractors finalize depth tracking and reject EOF inside open
   elements, including partial embedded `Contents` payloads.
 - XML readers are centrally configured to keep end-tag name validation enabled

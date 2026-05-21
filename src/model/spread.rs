@@ -174,9 +174,9 @@ impl Spread {
                         )?;
                     }
                 }
-                Event::End(_) => {
-                    xml_depth.exit();
-                    root.exit();
+                Event::End(e) => {
+                    xml_depth.exit()?;
+                    root.exit(e.name().as_ref())?;
                 }
                 Event::Text(e) => {
                     root.visit_text(e.as_ref())?;
@@ -651,8 +651,8 @@ fn parse_group_contents(
                 }
             }
             Event::End(e) => {
-                xml_depth.exit();
-                root.exit();
+                xml_depth.exit()?;
+                root.exit(e.name().as_ref())?;
                 if e.name().as_ref() == b"Group" {
                     break;
                 }

@@ -334,9 +334,9 @@ impl DesignMap {
                             .push(DesignMapPackageRef::resource(name, path)?);
                     }
                 }
-                Event::End(_) => {
-                    xml_depth.exit();
-                    root.exit();
+                Event::End(e) => {
+                    xml_depth.exit()?;
+                    root.exit(e.name().as_ref())?;
                 }
                 Event::Text(e) => {
                     root.visit_text(e.as_ref())?;
