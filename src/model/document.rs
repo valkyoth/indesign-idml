@@ -595,6 +595,13 @@ impl IdmlDocument {
                     remember_object_id(&mut seen, id)?;
                 }
             }
+            for page_item in &spread.page_items {
+                if let crate::model::spread::PageItem::Rectangle(rectangle) = page_item
+                    && let Some(id) = &rectangle.id
+                {
+                    remember_object_id(&mut seen, id)?;
+                }
+            }
         }
 
         Ok(())
@@ -750,7 +757,7 @@ mod tests {
     use crate::core::units::Points;
     use crate::model::designmap::{DesignMap, DesignMapParseOptions};
     use crate::model::resources::ResourceIntegrityOptions;
-    use crate::model::spread::{Rect, Spread, SpreadParseOptions, TextFrame};
+    use crate::model::spread::{PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame};
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::Cursor;
     use zip::CompressionMethod;
@@ -815,6 +822,7 @@ mod tests {
                         parent_story: Some("u1".to_owned()),
                         geometric_bounds: None,
                     }],
+                    page_items: Vec::new(),
                 },
             )
             .unwrap();
@@ -882,6 +890,7 @@ mod tests {
                 Spread {
                     id: Some("u11".to_owned()),
                     text_frames: Vec::new(),
+                    page_items: Vec::new(),
                 },
             )
             .unwrap_err();
@@ -1605,6 +1614,30 @@ mod tests {
     }
 
     #[test]
+    fn rejects_rectangle_id_colliding_with_text_frame() {
+        let mut document = make_document();
+        document
+            .spreads
+            .get_mut("u10")
+            .unwrap()
+            .page_items
+            .push(PageItem::Rectangle(Rectangle {
+                id: Some("tf1".to_owned()),
+                geometric_bounds: None,
+            }));
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "tf1"
+        ));
+    }
+
+    #[test]
     fn rejects_cross_type_id_collisions() {
         let mut document = make_document();
         document.design_map.spread_srcs.insert(
@@ -1616,6 +1649,7 @@ mod tests {
             Spread {
                 id: Some("u1".to_owned()),
                 text_frames: Vec::new(),
+                page_items: Vec::new(),
             },
         );
 
@@ -1728,6 +1762,7 @@ mod tests {
                         Points::new(144.0),
                     )),
                 }],
+                page_items: Vec::new(),
             },
         );
         document

@@ -1572,6 +1572,7 @@ mod tests {
                     Points::new(144.0),
                 )),
             }],
+            page_items: Vec::new(),
         };
         let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
         writer.add_file("designmap.xml", designmap).unwrap();

@@ -10,22 +10,40 @@ use quick_xml::escape::escape;
 use quick_xml::events::{BytesStart, Event};
 
 /// Represents a parsed IDML spread.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Spread {
     /// Spread `Self` identifier, when present.
     pub id: Option<String>,
     /// Text frames in XML order.
     pub text_frames: Vec<TextFrame>,
+    /// Page items in XML order for z-order preservation.
+    ///
+    /// This list is populated by the parser. Manually constructed spreads may
+    /// leave it empty; in that case serialization falls back to `text_frames`.
+    pub page_items: Vec<PageItem>,
+}
+
+impl PartialEq for Spread {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.text_frames == other.text_frames
+            && compatible_page_items(self, other)
+    }
 }
 
 /// Default maximum text frames accepted in one spread.
 pub const DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD: usize = 100_000;
+
+/// Default maximum page items accepted in one spread.
+pub const DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD: usize = 200_000;
 
 /// Spread parser limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SpreadParseOptions {
     /// Maximum `TextFrame` elements collected from one spread.
     pub max_text_frames: usize,
+    /// Maximum supported page items collected from one spread.
+    pub max_page_items: usize,
     /// Maximum XML element nesting depth accepted while parsing.
     pub max_xml_depth: usize,
 }
@@ -34,6 +52,7 @@ impl Default for SpreadParseOptions {
     fn default() -> Self {
         Self {
             max_text_frames: DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD,
+            max_page_items: DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
@@ -60,20 +79,28 @@ impl Spread {
                     if e.name().as_ref() == b"Spread" && spread.id.is_none() {
                         spread.id = optional_attr(&e, "Self", &reader)?;
                     } else if e.name().as_ref() == b"TextFrame" {
-                        push_text_frame_limited(
-                            &mut spread.text_frames,
+                        spread.push_text_frame_limited(
                             TextFrame::from_xml_event(&e, &reader)?,
-                            options.max_text_frames,
+                            options,
+                        )?;
+                    } else if e.name().as_ref() == b"Rectangle" {
+                        spread.push_page_item_limited(
+                            PageItem::Rectangle(Rectangle::from_xml_event(&e, &reader)?),
+                            options.max_page_items,
                         )?;
                     }
                 }
                 Event::Empty(e) => {
                     xml_depth.visit_empty()?;
                     if e.name().as_ref() == b"TextFrame" {
-                        push_text_frame_limited(
-                            &mut spread.text_frames,
+                        spread.push_text_frame_limited(
                             TextFrame::from_xml_event(&e, &reader)?,
-                            options.max_text_frames,
+                            options,
+                        )?;
+                    } else if e.name().as_ref() == b"Rectangle" {
+                        spread.push_page_item_limited(
+                            PageItem::Rectangle(Rectangle::from_xml_event(&e, &reader)?),
+                            options.max_page_items,
                         )?;
                     }
                 }
@@ -102,6 +129,42 @@ impl Spread {
     pub fn to_xml(&self) -> Result<String> {
         serialize_spread(self)
     }
+
+    fn push_text_frame_limited(
+        &mut self,
+        text_frame: TextFrame,
+        options: SpreadParseOptions,
+    ) -> Result<()> {
+        push_text_frame_index_limited(
+            &mut self.text_frames,
+            text_frame.clone(),
+            options.max_text_frames,
+        )?;
+        self.push_page_item_limited(PageItem::TextFrame(text_frame), options.max_page_items)
+    }
+
+    fn push_page_item_limited(&mut self, page_item: PageItem, max_page_items: usize) -> Result<()> {
+        let next_len = self
+            .page_items
+            .len()
+            .checked_add(1)
+            .ok_or(IdmlError::LimitExceeded {
+                what: "spread page item count",
+                limit: max_page_items as u64,
+                actual: u64::MAX,
+            })?;
+
+        if next_len > max_page_items {
+            return Err(IdmlError::LimitExceeded {
+                what: "spread page item count",
+                limit: max_page_items as u64,
+                actual: next_len as u64,
+            });
+        }
+
+        self.page_items.push(page_item);
+        Ok(())
+    }
 }
 
 impl XmlLoadable for Spread {
@@ -127,12 +190,44 @@ pub struct TextFrame {
     pub geometric_bounds: Option<Rect>,
 }
 
+/// Rectangle geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rectangle {
+    /// Rectangle `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Geometric bounds in points, when represented directly.
+    pub geometric_bounds: Option<Rect>,
+}
+
+impl Rectangle {
+    fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader)?;
+        let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
+            .map(|value| parse_geometric_bounds("Rectangle", &value))
+            .transpose()?;
+
+        Ok(Self {
+            id,
+            geometric_bounds,
+        })
+    }
+}
+
+/// Supported spread page item in z-order.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PageItem {
+    /// A text frame page item.
+    TextFrame(TextFrame),
+    /// A rectangle page item.
+    Rectangle(Rectangle),
+}
+
 impl TextFrame {
     fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
         let id = optional_attr(event, "Self", reader)?;
         let parent_story = optional_attr(event, "ParentStory", reader)?;
         let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
-            .map(|value| parse_geometric_bounds(&value))
+            .map(|value| parse_geometric_bounds("TextFrame", &value))
             .transpose()?;
 
         Ok(Self {
@@ -239,7 +334,7 @@ fn optional_attr(
     Ok(None)
 }
 
-fn parse_geometric_bounds(value: &str) -> Result<Rect> {
+fn parse_geometric_bounds(element: &'static str, value: &str) -> Result<Rect> {
     let values = value
         .split_whitespace()
         .map(str::parse::<f64>)
@@ -247,7 +342,7 @@ fn parse_geometric_bounds(value: &str) -> Result<Rect> {
 
     let [top, left, bottom, right] = values.as_slice() else {
         return Err(IdmlError::InvalidAttribute {
-            element: "TextFrame".to_owned(),
+            element: element.to_owned(),
             attribute: "GeometricBounds",
             reason: "expected four point coordinates",
         });
@@ -259,11 +354,11 @@ fn parse_geometric_bounds(value: &str) -> Result<Rect> {
         bottom: Points::new(*bottom),
         right: Points::new(*right),
     };
-    validate_finite_bounds(rect)?;
+    validate_finite_bounds(element, rect)?;
     Ok(rect)
 }
 
-fn push_text_frame_limited(
+fn push_text_frame_index_limited(
     text_frames: &mut Vec<TextFrame>,
     text_frame: TextFrame,
     max_text_frames: usize,
@@ -290,6 +385,8 @@ fn push_text_frame_limited(
 }
 
 fn serialize_spread(spread: &Spread) -> Result<String> {
+    validate_page_items(spread)?;
+
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Spread");
     if let Some(id) = &spread.id {
@@ -297,12 +394,60 @@ fn serialize_spread(spread: &Spread) -> Result<String> {
     }
     xml.push_str(">\n");
 
-    for frame in &spread.text_frames {
-        serialize_text_frame(&mut xml, frame)?;
+    if spread.page_items.is_empty() {
+        for frame in &spread.text_frames {
+            serialize_text_frame(&mut xml, frame)?;
+        }
+    } else {
+        for page_item in &spread.page_items {
+            match page_item {
+                PageItem::TextFrame(frame) => serialize_text_frame(&mut xml, frame)?,
+                PageItem::Rectangle(rectangle) => serialize_rectangle(&mut xml, rectangle)?,
+            }
+        }
     }
 
     xml.push_str("</Spread>\n");
     Ok(xml)
+}
+
+fn validate_page_items(spread: &Spread) -> Result<()> {
+    if spread.page_items.is_empty() {
+        return Ok(());
+    }
+
+    let page_item_text_frames = spread
+        .page_items
+        .iter()
+        .filter_map(|item| match item {
+            PageItem::TextFrame(frame) => Some(frame),
+            PageItem::Rectangle(_) => None,
+        })
+        .collect::<Vec<_>>();
+
+    if page_item_text_frames.len() != spread.text_frames.len() {
+        return Err(stale_page_items_error());
+    }
+
+    for (from_items, from_index) in page_item_text_frames.iter().zip(&spread.text_frames) {
+        if *from_items != from_index {
+            return Err(stale_page_items_error());
+        }
+    }
+
+    Ok(())
+}
+
+fn stale_page_items_error() -> IdmlError {
+    IdmlError::InvalidReference {
+        kind: "spread page items",
+        id: "text_frames".to_owned(),
+        reason: "ordered page items do not match text frame index",
+    }
+}
+
+fn compatible_page_items(left: &Spread, right: &Spread) -> bool {
+    left.page_items.is_empty() || right.page_items.is_empty() || left.page_items == right.page_items
 }
 
 fn serialize_text_frame(xml: &mut String, frame: &TextFrame) -> Result<()> {
@@ -314,15 +459,28 @@ fn serialize_text_frame(xml: &mut String, frame: &TextFrame) -> Result<()> {
         push_attr(xml, "TextFrame", "ParentStory", parent_story)?;
     }
     if let Some(bounds) = frame.geometric_bounds {
-        let bounds = format_geometric_bounds(bounds)?;
+        let bounds = format_geometric_bounds("TextFrame", bounds)?;
         push_attr(xml, "TextFrame", "GeometricBounds", &bounds)?;
     }
     xml.push_str(" />\n");
     Ok(())
 }
 
-fn format_geometric_bounds(bounds: Rect) -> Result<String> {
-    validate_finite_bounds(bounds)?;
+fn serialize_rectangle(xml: &mut String, rectangle: &Rectangle) -> Result<()> {
+    xml.push_str("  <Rectangle");
+    if let Some(id) = &rectangle.id {
+        push_attr(xml, "Rectangle", "Self", id)?;
+    }
+    if let Some(bounds) = rectangle.geometric_bounds {
+        let bounds = format_geometric_bounds("Rectangle", bounds)?;
+        push_attr(xml, "Rectangle", "GeometricBounds", &bounds)?;
+    }
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn format_geometric_bounds(element: &'static str, bounds: Rect) -> Result<String> {
+    validate_finite_bounds(element, bounds)?;
     Ok(format!(
         "{} {} {} {}",
         format_point(bounds.top),
@@ -332,18 +490,18 @@ fn format_geometric_bounds(bounds: Rect) -> Result<String> {
     ))
 }
 
-fn validate_finite_bounds(bounds: Rect) -> Result<()> {
+fn validate_finite_bounds(element: &'static str, bounds: Rect) -> Result<()> {
     for value in [bounds.top, bounds.left, bounds.bottom, bounds.right] {
         if !value.as_f64().is_finite() {
-            return Err(non_finite_bounds_error());
+            return Err(non_finite_bounds_error(element));
         }
     }
     Ok(())
 }
 
-fn non_finite_bounds_error() -> IdmlError {
+fn non_finite_bounds_error(element: &'static str) -> IdmlError {
     IdmlError::InvalidAttribute {
-        element: "TextFrame".to_owned(),
+        element: element.to_owned(),
         attribute: "GeometricBounds",
         reason: "coordinate must be finite",
     }
@@ -374,7 +532,7 @@ fn push_attr(
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, Spread, SpreadParseOptions, TextFrame};
+    use super::{PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame};
     use crate::IdmlError;
     use crate::core::units::Points;
 
@@ -389,6 +547,8 @@ mod tests {
 
         assert_eq!(spread.id.as_deref(), Some("u10"));
         assert_eq!(spread.text_frames.len(), 2);
+        assert_eq!(spread.page_items.len(), 2);
+        assert!(matches!(spread.page_items[0], PageItem::TextFrame(_)));
         assert_eq!(spread.text_frames[0].id.as_deref(), Some("tf1"));
         assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
         let bounds = spread.text_frames[0].geometric_bounds.unwrap();
@@ -396,6 +556,38 @@ mod tests {
         assert_eq!(bounds.height().as_f64(), 144.0);
         assert_eq!(bounds.to_millimeters().left.as_f64(), 25.4);
         assert!(spread.text_frames[1].geometric_bounds.is_none());
+    }
+
+    #[test]
+    fn parses_rectangles_and_preserves_page_item_order() {
+        let xml = r#"<Spread Self="u10">
+  <Rectangle Self="r1" GeometricBounds="0 0 72 72" />
+  <TextFrame Self="tf1" ParentStory="u2" GeometricBounds="72 0 144 72" />
+  <Rectangle Self="r2" />
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.text_frames.len(), 1);
+        assert_eq!(spread.page_items.len(), 3);
+        assert!(matches!(
+            &spread.page_items[0],
+            PageItem::Rectangle(Rectangle {
+                id,
+                geometric_bounds: Some(_)
+            }) if id.as_deref() == Some("r1")
+        ));
+        assert!(matches!(
+            &spread.page_items[1],
+            PageItem::TextFrame(TextFrame { id, .. }) if id.as_deref() == Some("tf1")
+        ));
+        assert!(matches!(
+            &spread.page_items[2],
+            PageItem::Rectangle(Rectangle {
+                id,
+                geometric_bounds: None
+            }) if id.as_deref() == Some("r2")
+        ));
     }
 
     #[test]
@@ -467,6 +659,27 @@ mod tests {
     }
 
     #[test]
+    fn enforces_page_item_count_limit() {
+        let err = Spread::from_xml_with_options(
+            r#"<Spread><Rectangle Self="r1" /><TextFrame Self="tf1" /></Spread>"#,
+            SpreadParseOptions {
+                max_page_items: 1,
+                ..SpreadParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread page item count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
+    }
+
+    #[test]
     fn enforces_xml_depth_limit() {
         let err = Spread::from_xml_with_options(
             r#"<Spread><Group><TextFrame Self="tf1" /></Group></Spread>"#,
@@ -526,6 +739,7 @@ mod tests {
                     Points::new(216.25),
                 )),
             }],
+            page_items: Vec::new(),
         };
 
         let xml = <Spread as crate::XmlSaveable>::to_xml(&spread).unwrap();
@@ -535,6 +749,73 @@ mod tests {
         assert!(xml.contains("Self=\"tf&amp;1\""));
         assert!(xml.contains("GeometricBounds=\"0 72.5 144 216.25\""));
         assert_eq!(parsed, spread);
+    }
+
+    #[test]
+    fn serializer_preserves_page_item_order() {
+        let text_frame = TextFrame {
+            id: Some("tf1".to_owned()),
+            parent_story: Some("u2".to_owned()),
+            geometric_bounds: Some(Rect::new(
+                Points::new(72.0),
+                Points::new(0.0),
+                Points::new(144.0),
+                Points::new(72.0),
+            )),
+        };
+        let spread = Spread {
+            id: Some("u10".to_owned()),
+            text_frames: vec![text_frame.clone()],
+            page_items: vec![
+                PageItem::Rectangle(Rectangle {
+                    id: Some("r1".to_owned()),
+                    geometric_bounds: Some(Rect::new(
+                        Points::new(0.0),
+                        Points::new(0.0),
+                        Points::new(72.0),
+                        Points::new(72.0),
+                    )),
+                }),
+                PageItem::TextFrame(text_frame),
+            ],
+        };
+
+        let xml = spread.to_xml().unwrap();
+        let rectangle = xml.find("<Rectangle").unwrap();
+        let frame = xml.find("<TextFrame").unwrap();
+        let parsed = Spread::from_xml(&xml).unwrap();
+
+        assert!(rectangle < frame);
+        assert_eq!(parsed, spread);
+        assert_eq!(parsed.page_items, spread.page_items);
+    }
+
+    #[test]
+    fn serializer_rejects_stale_page_item_index() {
+        let spread = Spread {
+            id: Some("u10".to_owned()),
+            text_frames: vec![TextFrame {
+                id: Some("tf1".to_owned()),
+                parent_story: Some("u2".to_owned()),
+                geometric_bounds: None,
+            }],
+            page_items: vec![PageItem::TextFrame(TextFrame {
+                id: Some("tf2".to_owned()),
+                parent_story: Some("u2".to_owned()),
+                geometric_bounds: None,
+            })],
+        };
+
+        let err = spread.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "spread page items",
+                reason: "ordered page items do not match text frame index",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -551,6 +832,7 @@ mod tests {
                     Points::new(216.0),
                 )),
             }],
+            page_items: Vec::new(),
         };
 
         let err = spread.to_xml().unwrap_err();
@@ -574,6 +856,7 @@ mod tests {
                 parent_story: Some("u1".to_owned()),
                 geometric_bounds: None,
             }],
+            page_items: Vec::new(),
         };
 
         let err = spread.to_xml().unwrap_err();
