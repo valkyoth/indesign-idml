@@ -11,6 +11,7 @@ fuzz_target!(|data: &[u8]| {
         max_entry_uncompressed_size: 1024 * 1024,
         max_total_uncompressed_size: 4 * 1024 * 1024,
         max_entry_compression_ratio: 100,
+        max_path_bytes: 4096,
     };
 
     let Ok(mut package) = IdmlPackage::with_limits(Cursor::new(data), limits) else {

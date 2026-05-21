@@ -33,6 +33,9 @@ pub const DEFAULT_MAX_TOTAL_UNCOMPRESSED_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 /// Default maximum per-entry uncompressed-to-compressed size ratio.
 pub const DEFAULT_MAX_ENTRY_COMPRESSION_RATIO: u64 = 100;
 
+/// Default maximum UTF-8 bytes accepted for one archive entry path.
+pub const DEFAULT_MAX_ARCHIVE_PATH_BYTES: usize = 4096;
+
 /// Maximum initial allocation used when reading one entry.
 const MAX_INITIAL_READ_CAPACITY: usize = 8 * 1024 * 1024;
 
@@ -75,6 +78,8 @@ pub struct ArchiveLimits {
     pub max_total_uncompressed_size: u64,
     /// Maximum allowed uncompressed-to-compressed size ratio for one deflated entry.
     pub max_entry_compression_ratio: u64,
+    /// Maximum UTF-8 bytes accepted for one archive entry path.
+    pub max_path_bytes: usize,
 }
 
 impl Default for ArchiveLimits {
@@ -84,6 +89,7 @@ impl Default for ArchiveLimits {
             max_entry_uncompressed_size: DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE,
             max_total_uncompressed_size: DEFAULT_MAX_TOTAL_UNCOMPRESSED_SIZE,
             max_entry_compression_ratio: DEFAULT_MAX_ENTRY_COMPRESSION_RATIO,
+            max_path_bytes: DEFAULT_MAX_ARCHIVE_PATH_BYTES,
         }
     }
 }
@@ -201,6 +207,7 @@ where
         data: &[u8],
         compression: CompressionMethod,
     ) -> Result<()> {
+        enforce_archive_path_len(path.as_str(), self.limits.max_path_bytes)?;
         if self.entries.contains_key(&path) {
             return Err(IdmlError::DuplicateArchiveEntry(path.to_string()));
         }
@@ -705,7 +712,9 @@ where
 
         for index in 0..archive.len() {
             let file = archive.by_index(index)?;
-            let path = IdmlPath::new(file.name().to_owned())?;
+            let name = file.name();
+            enforce_archive_path_len(name, limits.max_path_bytes)?;
+            let path = IdmlPath::new(name.to_owned())?;
             let uncompressed_size = file.size();
             enforce_entry_size(uncompressed_size, limits.max_entry_uncompressed_size)?;
             enforce_supported_compression(file.compression())?;
@@ -810,6 +819,17 @@ fn enforce_entry_count(actual: usize, limit: usize) -> Result<()> {
             what: "archive entry count",
             limit: limit as u64,
             actual: actual as u64,
+        });
+    }
+    Ok(())
+}
+
+fn enforce_archive_path_len(path: &str, max_path_bytes: usize) -> Result<()> {
+    if path.len() > max_path_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what: "archive path bytes",
+            limit: max_path_bytes as u64,
+            actual: path.len() as u64,
         });
     }
     Ok(())
@@ -1173,6 +1193,33 @@ mod tests {
                 limit: 1,
                 actual,
             } if actual > 1
+        ));
+    }
+
+    #[test]
+    fn archive_inventory_rejects_long_entry_paths() {
+        let long_name = format!("Resources/{}.xml", "a".repeat(64));
+        let zip = make_zip_raw(&[
+            ("mimetype", IDML_MIMETYPE, CompressionMethod::Stored),
+            (&long_name, b"<Resource />", CompressionMethod::Stored),
+        ]);
+
+        let err = IdmlPackage::with_limits(
+            Cursor::new(zip),
+            ArchiveLimits {
+                max_path_bytes: 16,
+                ..ArchiveLimits::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "archive path bytes",
+                limit: 16,
+                actual,
+            } if actual == long_name.len() as u64
         ));
     }
 
@@ -2181,6 +2228,32 @@ mod tests {
                 limit,
                 actual,
             } if limit == IDML_MIMETYPE.len() as u64 && actual == oversized.len() as u64
+        ));
+    }
+
+    #[test]
+    fn writer_rejects_path_length_over_limit() {
+        let mut writer = IdmlPackageWriter::with_limits(
+            Cursor::new(Vec::new()),
+            ArchiveLimits {
+                max_path_bytes: "mimetype".len(),
+                ..ArchiveLimits::default()
+            },
+        )
+        .unwrap();
+
+        let err = writer
+            .add_file("Resources/LongName.xml", b"<Resource />")
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "archive path bytes",
+                limit,
+                actual,
+            } if limit == "mimetype".len() as u64
+                && actual == "Resources/LongName.xml".len() as u64
         ));
     }
 
