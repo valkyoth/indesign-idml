@@ -5,6 +5,7 @@ cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo check --examples --all-features
 sh scripts/smoke_examples.sh
+sh scripts/smoke_downstream.sh
 cargo test --all-features
 cargo test --no-default-features
 cargo test --no-default-features --features std
