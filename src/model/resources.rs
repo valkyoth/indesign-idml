@@ -1,7 +1,7 @@
 //! Resource inventory for untyped IDML package references.
 
 use crate::archive::{ArchiveEntry, DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE, IdmlPath};
-use crate::encoding::{Base64Mode, decode_standard};
+use crate::encoding::{Base64Mode, decode_standard, decoded_standard_len};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, validate_package_element_name};
 use indexmap::IndexMap;
@@ -12,6 +12,10 @@ use zip::CompressionMethod;
 
 /// Default maximum decoded bytes accepted for one embedded resource asset.
 pub const DEFAULT_MAX_EMBEDDED_ASSET_DECODED_BYTES: usize =
+    DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE as usize;
+
+/// Default maximum total decoded embedded asset bytes accepted in one XML entry.
+pub const DEFAULT_MAX_EMBEDDED_ASSET_TOTAL_DECODED_BYTES: usize =
     DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE as usize;
 
 /// Default maximum encoded Base64 bytes accepted for one embedded resource asset.
@@ -94,6 +98,8 @@ pub struct EmbeddedAssetParseOptions {
     pub max_encoded_bytes: usize,
     /// Maximum decoded bytes accepted from one `Contents` element.
     pub max_decoded_bytes: usize,
+    /// Maximum total decoded bytes accepted across all `Contents` elements.
+    pub max_total_decoded_bytes: usize,
 }
 
 impl Default for EmbeddedAssetParseOptions {
@@ -103,6 +109,7 @@ impl Default for EmbeddedAssetParseOptions {
             max_assets: DEFAULT_MAX_EMBEDDED_ASSETS,
             max_encoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_ENCODED_BYTES,
             max_decoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_DECODED_BYTES,
+            max_total_decoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_TOTAL_DECODED_BYTES,
         }
     }
 }
@@ -253,6 +260,7 @@ pub fn extract_embedded_assets_with_options(
 
     let mut assets = Vec::new();
     let mut contents_depth = 0usize;
+    let mut total_decoded_bytes = 0usize;
     let mut source_element = String::new();
     let mut encoded = String::new();
 
@@ -266,7 +274,7 @@ pub fn extract_embedded_assets_with_options(
                 contents_depth = contents_depth.saturating_add(1);
             }
             Event::Empty(e) if is_contents_element(&e) => {
-                let bytes = decode_standard(&[], options.base64_mode, options.max_decoded_bytes)?;
+                let bytes = decode_embedded_asset_limited(&[], options, &mut total_decoded_bytes)?;
                 push_asset_limited(
                     &mut assets,
                     options.max_assets,
@@ -279,10 +287,10 @@ pub fn extract_embedded_assets_with_options(
             Event::End(e) if local_name(e.name().as_ref()) == b"Contents" && contents_depth > 0 => {
                 contents_depth -= 1;
                 if contents_depth == 0 {
-                    let bytes = decode_standard(
+                    let bytes = decode_embedded_asset_limited(
                         encoded.as_bytes(),
-                        options.base64_mode,
-                        options.max_decoded_bytes,
+                        options,
+                        &mut total_decoded_bytes,
                     )?;
                     push_asset_limited(
                         &mut assets,
@@ -435,6 +443,34 @@ fn push_encoded_limited(output: &mut String, text: &str, max_encoded_bytes: usiz
 
     output.push_str(text);
     Ok(())
+}
+
+fn decode_embedded_asset_limited(
+    input: &[u8],
+    options: EmbeddedAssetParseOptions,
+    total_decoded_bytes: &mut usize,
+) -> Result<Vec<u8>> {
+    let decoded_len = decoded_standard_len(input, options.base64_mode)?;
+    let next_total =
+        total_decoded_bytes
+            .checked_add(decoded_len)
+            .ok_or(IdmlError::LimitExceeded {
+                what: "embedded asset total decoded bytes",
+                limit: options.max_total_decoded_bytes as u64,
+                actual: u64::MAX,
+            })?;
+
+    if next_total > options.max_total_decoded_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what: "embedded asset total decoded bytes",
+            limit: options.max_total_decoded_bytes as u64,
+            actual: next_total as u64,
+        });
+    }
+
+    let bytes = decode_standard(input, options.base64_mode, options.max_decoded_bytes)?;
+    *total_decoded_bytes = next_total;
+    Ok(bytes)
 }
 
 fn push_asset_limited(
@@ -878,6 +914,28 @@ mod tests {
                 what: "embedded asset count",
                 limit: 1,
                 actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_enforces_total_decoded_limit_before_allocation() {
+        let err = extract_embedded_assets_with_options(
+            "<Image><Contents>aGk=</Contents><Contents>aGk=</Contents></Image>",
+            EmbeddedAssetParseOptions {
+                max_decoded_bytes: 8,
+                max_total_decoded_bytes: 3,
+                ..EmbeddedAssetParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "embedded asset total decoded bytes",
+                limit: 3,
+                actual: 4,
             }
         ));
     }
