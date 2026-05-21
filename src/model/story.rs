@@ -83,30 +83,39 @@ impl Story {
                     xml_depth.exit();
                     root.exit();
                 }
-                Event::Text(e) if content_depth > 0 => {
-                    let decoded = e.decode()?;
-                    push_limited(&mut text, decoded.as_ref(), options.max_text_bytes)?;
+                Event::Text(e) => {
+                    root.visit_text(e.as_ref())?;
+                    if content_depth > 0 {
+                        let decoded = e.decode()?;
+                        push_limited(&mut text, decoded.as_ref(), options.max_text_bytes)?;
+                    }
                 }
-                Event::CData(e) if content_depth > 0 => {
-                    push_limited(
-                        &mut text,
-                        e.xml_content(XmlVersion::Implicit1_0)?.as_ref(),
-                        options.max_text_bytes,
-                    )?;
+                Event::CData(e) => {
+                    root.visit_cdata()?;
+                    if content_depth > 0 {
+                        push_limited(
+                            &mut text,
+                            e.xml_content(XmlVersion::Implicit1_0)?.as_ref(),
+                            options.max_text_bytes,
+                        )?;
+                    }
                 }
-                Event::GeneralRef(e) if content_depth > 0 => {
-                    if let Some(ch) = e.resolve_char_ref()? {
-                        push_char_limited(&mut text, ch, options.max_text_bytes)?;
-                    } else {
-                        let entity = e.decode()?;
-                        let replacement =
-                            resolve_predefined_entity(entity.as_ref()).ok_or_else(|| {
-                                IdmlError::XmlEscape(EscapeError::UnrecognizedEntity(
-                                    0..entity.len(),
-                                    entity.to_string(),
-                                ))
-                            })?;
-                        push_limited(&mut text, replacement, options.max_text_bytes)?;
+                Event::GeneralRef(e) => {
+                    root.visit_reference()?;
+                    if content_depth > 0 {
+                        if let Some(ch) = e.resolve_char_ref()? {
+                            push_char_limited(&mut text, ch, options.max_text_bytes)?;
+                        } else {
+                            let entity = e.decode()?;
+                            let replacement = resolve_predefined_entity(entity.as_ref())
+                                .ok_or_else(|| {
+                                    IdmlError::XmlEscape(EscapeError::UnrecognizedEntity(
+                                        0..entity.len(),
+                                        entity.to_string(),
+                                    ))
+                                })?;
+                            push_limited(&mut text, replacement, options.max_text_bytes)?;
+                        }
                     }
                 }
                 Event::Empty(e) => {
@@ -321,6 +330,26 @@ mod tests {
                 reason: "multiple root elements",
             } if element == "Story"
         ));
+    }
+
+    #[test]
+    fn rejects_trailing_story_text_after_root() {
+        let err = Story::from_xml("<Story />tail").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "non-whitespace character data outside root element",
+            } if element == "#text"
+        ));
+    }
+
+    #[test]
+    fn allows_boundary_whitespace_around_story_root() {
+        let story = Story::from_xml(" \n\t<Story Self=\"u2\" />\r\n ").unwrap();
+
+        assert_eq!(story.id.as_deref(), Some("u2"));
     }
 
     #[test]

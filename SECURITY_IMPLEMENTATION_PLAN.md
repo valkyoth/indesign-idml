@@ -60,6 +60,8 @@ Hard rules:
   confusion.
 - Top-level XML parsers reject missing, wrong, or repeated root elements before
   interpreting recognized child tags as a valid model.
+- Non-whitespace character data, CDATA, and entity references outside the root
+  element are rejected instead of being ignored.
 - All parsing APIs accept explicit size limits.
 - All public error types are typed, non-panicking, and non-exhaustive.
 - No `unwrap`, `expect`, or panics in parser, resolver, writer, or CLI paths.

@@ -176,6 +176,15 @@ impl Spread {
                     xml_depth.exit();
                     root.exit();
                 }
+                Event::Text(e) => {
+                    root.visit_text(e.as_ref())?;
+                }
+                Event::CData(_) => {
+                    root.visit_cdata()?;
+                }
+                Event::GeneralRef(_) => {
+                    root.visit_reference()?;
+                }
                 Event::Eof => break,
                 _ => {}
             }
@@ -1016,6 +1025,19 @@ mod tests {
                 element,
                 reason: "expected Spread root element",
             } if element == "Wrapper"
+        ));
+    }
+
+    #[test]
+    fn rejects_trailing_spread_text_after_root() {
+        let err = Spread::from_xml("<Spread />tail").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "non-whitespace character data outside root element",
+            } if element == "#text"
         ));
     }
 

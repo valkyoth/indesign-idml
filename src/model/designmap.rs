@@ -337,6 +337,15 @@ impl DesignMap {
                     xml_depth.exit();
                     root.exit();
                 }
+                Event::Text(e) => {
+                    root.visit_text(e.as_ref())?;
+                }
+                Event::CData(_) => {
+                    root.visit_cdata()?;
+                }
+                Event::GeneralRef(_) => {
+                    root.visit_reference()?;
+                }
                 Event::Eof => break,
                 _ => {}
             }
@@ -998,6 +1007,19 @@ mod tests {
                 element,
                 reason: "expected Document root element",
             } if element == "Wrapper"
+        ));
+    }
+
+    #[test]
+    fn rejects_trailing_designmap_text_after_root() {
+        let err = DesignMap::from_xml("<Document />tail").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "non-whitespace character data outside root element",
+            } if element == "#text"
         ));
     }
 

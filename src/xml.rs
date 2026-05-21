@@ -62,6 +62,36 @@ impl RootElementTracker {
         }
     }
 
+    pub(crate) fn visit_text(&self, text: &[u8]) -> Result<()> {
+        if self.is_outside_root() && !is_xml_space(text) {
+            return Err(IdmlError::InvalidElement {
+                element: "#text".to_owned(),
+                reason: "non-whitespace character data outside root element",
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn visit_cdata(&self) -> Result<()> {
+        if self.is_outside_root() {
+            return Err(IdmlError::InvalidElement {
+                element: "#cdata".to_owned(),
+                reason: "CDATA outside root element",
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn visit_reference(&self) -> Result<()> {
+        if self.is_outside_root() {
+            return Err(IdmlError::InvalidElement {
+                element: "#reference".to_owned(),
+                reason: "entity reference outside root element",
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) fn finish(self) -> Result<()> {
         if self.seen {
             return Ok(());
@@ -84,6 +114,10 @@ impl RootElementTracker {
             element: String::from_utf8_lossy(name).into_owned(),
             reason,
         }
+    }
+
+    const fn is_outside_root(&self) -> bool {
+        !self.seen || self.closed
     }
 }
 
@@ -181,4 +215,10 @@ fn is_xml_char(ch: char) -> bool {
         || ('\u{20}'..='\u{D7FF}').contains(&ch)
         || ('\u{E000}'..='\u{FFFD}').contains(&ch)
         || ('\u{10000}'..='\u{10FFFF}').contains(&ch)
+}
+
+fn is_xml_space(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .all(|byte| matches!(byte, b'\t' | b'\n' | b'\r' | b' '))
 }
