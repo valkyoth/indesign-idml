@@ -69,10 +69,16 @@ impl Story {
                 Event::Start(e) => {
                     root.enter(e.name().as_ref())?;
                     xml_depth.enter()?;
+                    if content_depth > 0 {
+                        return Err(IdmlError::InvalidElement {
+                            element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                            reason: "element inside story Content",
+                        });
+                    }
                     if e.name().as_ref() == b"Story" && id.is_none() {
                         id = optional_attr(&e, "Self", &reader)?;
                     } else if e.name().as_ref() == b"Content" {
-                        content_depth = content_depth.saturating_add(1);
+                        content_depth = 1;
                     }
                 }
                 Event::End(e) if e.name().as_ref() == b"Content" => {
@@ -122,6 +128,12 @@ impl Story {
                 Event::Empty(e) => {
                     root.visit_empty(e.name().as_ref())?;
                     xml_depth.visit_empty()?;
+                    if content_depth > 0 {
+                        return Err(IdmlError::InvalidElement {
+                            element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                            reason: "element inside story Content",
+                        });
+                    }
                     if e.name().as_ref() == b"Story" && id.is_none() {
                         id = optional_attr(&e, "Self", &reader)?;
                     } else if e.name().as_ref() == b"Br" {
@@ -381,6 +393,47 @@ mod tests {
                 element,
                 reason: "DOCTYPE declarations are not supported",
             } if element == "!DOCTYPE"
+        ));
+    }
+
+    #[test]
+    fn rejects_child_elements_inside_content() {
+        let err =
+            Story::from_xml("<Story><Content>a<Span>b</Span>c</Content></Story>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "element inside story Content",
+            } if element == "Span"
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_child_elements_inside_content() {
+        let err = Story::from_xml("<Story><Content>a<Br/>c</Content></Story>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "element inside story Content",
+            } if element == "Br"
+        ));
+    }
+
+    #[test]
+    fn rejects_nested_content_elements() {
+        let err =
+            Story::from_xml("<Story><Content><Content>x</Content></Content></Story>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "element inside story Content",
+            } if element == "Content"
         ));
     }
 
