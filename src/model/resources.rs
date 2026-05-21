@@ -161,6 +161,15 @@ pub struct ResourceItem {
     pub name: Option<String>,
 }
 
+/// Typed item inventory for one manifest-referenced resource entry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResourceItemGroup {
+    /// Manifest resource reference.
+    pub resource: ResourceReference,
+    /// Items extracted from that resource XML entry.
+    pub items: Vec<ResourceItem>,
+}
+
 impl Default for ResourceIntegrityOptions {
     fn default() -> Self {
         Self {

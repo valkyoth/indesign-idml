@@ -58,6 +58,7 @@ mod tests {
         let _: Option<crate::prelude::ResourceInventory> = None;
         let _: Option<crate::prelude::ResourceReference> = None;
         let _: Option<crate::prelude::ResourceItem> = None;
+        let _: Option<crate::prelude::ResourceItemGroup> = None;
         let _: Option<crate::prelude::ResourceItemParseOptions> = None;
         let _: Option<crate::prelude::ResourceArchiveMetadata> = None;
         let _: Option<crate::prelude::ResourceIntegrityOptions> = None;

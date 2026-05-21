@@ -14,9 +14,9 @@ pub use crate::model::document::{
 };
 pub use crate::model::resources::{
     EmbeddedAsset, EmbeddedAssetParseOptions, ResourceArchiveMetadata, ResourceIntegrityOptions,
-    ResourceInventory, ResourceItem, ResourceItemParseOptions, ResourceKind, ResourceReference,
-    extract_embedded_assets, extract_embedded_assets_with_options, extract_resource_items,
-    extract_resource_items_with_options,
+    ResourceInventory, ResourceItem, ResourceItemGroup, ResourceItemParseOptions, ResourceKind,
+    ResourceReference, extract_embedded_assets, extract_embedded_assets_with_options,
+    extract_resource_items, extract_resource_items_with_options,
 };
 pub use crate::model::spread::{
     Group, Page, PageItem, Rect, RectMm, Rectangle, Spread, SpreadParseOptions, TextFrame,

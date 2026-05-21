@@ -11,8 +11,8 @@ use crate::model::designmap::{
 };
 use crate::model::resources::{
     EmbeddedAsset, EmbeddedAssetParseOptions, ResourceIntegrityOptions, ResourceInventory,
-    ResourceItem, ResourceItemParseOptions, ResourceKind, extract_embedded_assets_with_options,
-    extract_resource_items_with_options,
+    ResourceItem, ResourceItemGroup, ResourceItemParseOptions, ResourceKind,
+    extract_embedded_assets_with_options, extract_resource_items_with_options,
 };
 use crate::model::spread::{Rect, Spread, SpreadParseOptions};
 use crate::model::story::{Story, StoryParseOptions};
@@ -317,6 +317,37 @@ where
         let inventory = self.read_resource_inventory()?;
         inventory.validate_integrity_with_options(options)?;
         Ok(inventory)
+    }
+
+    /// Reads all manifest resource entries and extracts typed item inventories.
+    ///
+    /// This applies resource integrity checks before reading entry bodies.
+    pub fn read_resource_item_inventory(&mut self) -> Result<Vec<ResourceItemGroup>> {
+        self.read_resource_item_inventory_with_options(
+            ResourceIntegrityOptions::default(),
+            ResourceItemParseOptions::default(),
+        )
+    }
+
+    /// Reads all manifest resource entries and extracts typed item inventories with limits.
+    pub fn read_resource_item_inventory_with_options(
+        &mut self,
+        integrity_options: ResourceIntegrityOptions,
+        item_options: ResourceItemParseOptions,
+    ) -> Result<Vec<ResourceItemGroup>> {
+        let inventory = self.read_checked_resource_inventory_with_options(integrity_options)?;
+        let mut groups = Vec::with_capacity(inventory.resources.len());
+
+        for resource in inventory.resources {
+            let items = self.read_resource_items_with_options(
+                &resource.path,
+                resource.kind.clone(),
+                item_options,
+            )?;
+            groups.push(ResourceItemGroup { resource, items });
+        }
+
+        Ok(groups)
     }
 
     /// Reads and parses a story XML entry.
@@ -1155,6 +1186,65 @@ mod tests {
                 limit: 1,
                 actual,
             } if actual == b"<Graphic />".len() as u64
+        ));
+    }
+
+    #[test]
+    fn reads_resource_item_inventory_with_integrity_checks() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Resource src="Resources/Styles.xml" />
+  <idPkg:Resource src="Resources/Fonts.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            (
+                "Resources/Styles.xml",
+                br#"<Styles><ParagraphStyle Self="p1" Name="Body" /></Styles>"#,
+            ),
+            (
+                "Resources/Fonts.xml",
+                br#"<Fonts><Font Self="f1" Name="Minion Pro" /></Fonts>"#,
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let groups = package.read_resource_item_inventory().unwrap();
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].resource.kind, ResourceKind::Styles);
+        assert_eq!(groups[0].items[0].name.as_deref(), Some("Body"));
+        assert_eq!(groups[1].resource.kind, ResourceKind::Fonts);
+        assert_eq!(groups[1].items[0].id.as_deref(), Some("f1"));
+    }
+
+    #[test]
+    fn resource_item_inventory_enforces_integrity_before_reading_items() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Graphic src="Resources/Graphic.xml" />
+</Document>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Resources/Graphic.xml", b"<Graphic Self=\"g1\" />"),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = package
+            .read_resource_item_inventory_with_options(
+                ResourceIntegrityOptions {
+                    max_graphic_uncompressed_size: 1,
+                    ..ResourceIntegrityOptions::default()
+                },
+                ResourceItemParseOptions::default(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource uncompressed size",
+                limit: 1,
+                ..
+            }
         ));
     }
 
