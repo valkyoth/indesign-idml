@@ -157,6 +157,25 @@ mod tests {
     }
 
     #[test]
+    fn resolves_grouped_text_frames_against_story_text_map() {
+        let spread = Spread::from_xml(
+            r#"<Spread>
+  <Group Self="g1">
+    <TextFrame Self="tf1" ParentStory="u2" />
+  </Group>
+</Spread>"#,
+        )
+        .unwrap();
+        let story_texts = IndexMap::from([("u2".to_owned(), "Grouped".to_owned())]);
+
+        let resolved = resolve_text_frames(&spread, &story_texts).unwrap();
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].frame.id.as_deref(), Some("tf1"));
+        assert_eq!(resolved[0].text, "Grouped");
+    }
+
+    #[test]
     fn rejects_dangling_parent_story() {
         let spread =
             Spread::from_xml(r#"<Spread><TextFrame ParentStory="missing" /></Spread>"#).unwrap();

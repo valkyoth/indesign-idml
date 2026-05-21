@@ -79,6 +79,7 @@ impl Spread {
         reader.config_mut().trim_text(true);
 
         let mut spread = Self::default();
+        let mut page_item_count = 0usize;
         let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "Spread XML depth");
 
         loop {
@@ -94,13 +95,34 @@ impl Spread {
                             options.max_pages,
                         )?;
                     } else if e.name().as_ref() == b"TextFrame" {
-                        spread.push_text_frame_limited(
+                        push_text_frame_page_item_limited(
+                            &mut spread.text_frames,
+                            &mut spread.page_items,
                             TextFrame::from_xml_event(&e, &reader)?,
                             options,
+                            &mut page_item_count,
                         )?;
                     } else if e.name().as_ref() == b"Rectangle" {
-                        spread.push_page_item_limited(
+                        push_page_item_limited(
+                            &mut spread.page_items,
                             PageItem::Rectangle(Rectangle::from_xml_event(&e, &reader)?),
+                            &mut page_item_count,
+                            options.max_page_items,
+                        )?;
+                    } else if e.name().as_ref() == b"Group" {
+                        let group = Group::from_xml_event(&e, &reader)?;
+                        let group = parse_group_contents(
+                            &mut reader,
+                            group,
+                            options,
+                            &mut xml_depth,
+                            &mut spread.text_frames,
+                            &mut page_item_count,
+                        )?;
+                        push_page_item_limited(
+                            &mut spread.page_items,
+                            PageItem::Group(group),
+                            &mut page_item_count,
                             options.max_page_items,
                         )?;
                     }
@@ -114,13 +136,25 @@ impl Spread {
                             options.max_pages,
                         )?;
                     } else if e.name().as_ref() == b"TextFrame" {
-                        spread.push_text_frame_limited(
+                        push_text_frame_page_item_limited(
+                            &mut spread.text_frames,
+                            &mut spread.page_items,
                             TextFrame::from_xml_event(&e, &reader)?,
                             options,
+                            &mut page_item_count,
                         )?;
                     } else if e.name().as_ref() == b"Rectangle" {
-                        spread.push_page_item_limited(
+                        push_page_item_limited(
+                            &mut spread.page_items,
                             PageItem::Rectangle(Rectangle::from_xml_event(&e, &reader)?),
+                            &mut page_item_count,
+                            options.max_page_items,
+                        )?;
+                    } else if e.name().as_ref() == b"Group" {
+                        push_page_item_limited(
+                            &mut spread.page_items,
+                            PageItem::Group(Group::from_xml_event(&e, &reader)?),
+                            &mut page_item_count,
                             options.max_page_items,
                         )?;
                     }
@@ -149,42 +183,6 @@ impl Spread {
     /// Serializes this spread into a minimal standalone spread XML document.
     pub fn to_xml(&self) -> Result<String> {
         serialize_spread(self)
-    }
-
-    fn push_text_frame_limited(
-        &mut self,
-        text_frame: TextFrame,
-        options: SpreadParseOptions,
-    ) -> Result<()> {
-        push_text_frame_index_limited(
-            &mut self.text_frames,
-            text_frame.clone(),
-            options.max_text_frames,
-        )?;
-        self.push_page_item_limited(PageItem::TextFrame(text_frame), options.max_page_items)
-    }
-
-    fn push_page_item_limited(&mut self, page_item: PageItem, max_page_items: usize) -> Result<()> {
-        let next_len = self
-            .page_items
-            .len()
-            .checked_add(1)
-            .ok_or(IdmlError::LimitExceeded {
-                what: "spread page item count",
-                limit: max_page_items as u64,
-                actual: u64::MAX,
-            })?;
-
-        if next_len > max_page_items {
-            return Err(IdmlError::LimitExceeded {
-                what: "spread page item count",
-                limit: max_page_items as u64,
-                actual: next_len as u64,
-            });
-        }
-
-        self.page_items.push(page_item);
-        Ok(())
     }
 }
 
@@ -257,6 +255,32 @@ impl Rectangle {
     }
 }
 
+/// Grouped page items in spread z-order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    /// Group `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Group geometric bounds in points, when represented directly.
+    pub geometric_bounds: Option<Rect>,
+    /// Child page items in XML order.
+    pub page_items: Vec<PageItem>,
+}
+
+impl Group {
+    fn from_xml_event(event: &BytesStart<'_>, reader: &Reader<&[u8]>) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader)?;
+        let geometric_bounds = optional_attr(event, "GeometricBounds", reader)?
+            .map(|value| parse_geometric_bounds("Group", &value))
+            .transpose()?;
+
+        Ok(Self {
+            id,
+            geometric_bounds,
+            page_items: Vec::new(),
+        })
+    }
+}
+
 /// Supported spread page item in z-order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PageItem {
@@ -264,6 +288,8 @@ pub enum PageItem {
     TextFrame(TextFrame),
     /// A rectangle page item.
     Rectangle(Rectangle),
+    /// A grouped page item.
+    Group(Group),
 }
 
 impl TextFrame {
@@ -447,6 +473,134 @@ fn push_text_frame_index_limited(
     Ok(())
 }
 
+fn push_text_frame_page_item_limited(
+    text_frames: &mut Vec<TextFrame>,
+    page_items: &mut Vec<PageItem>,
+    text_frame: TextFrame,
+    options: SpreadParseOptions,
+    page_item_count: &mut usize,
+) -> Result<()> {
+    push_text_frame_index_limited(text_frames, text_frame.clone(), options.max_text_frames)?;
+    push_page_item_limited(
+        page_items,
+        PageItem::TextFrame(text_frame),
+        page_item_count,
+        options.max_page_items,
+    )
+}
+
+fn push_page_item_limited(
+    page_items: &mut Vec<PageItem>,
+    page_item: PageItem,
+    page_item_count: &mut usize,
+    max_page_items: usize,
+) -> Result<()> {
+    let next_len = page_item_count
+        .checked_add(1)
+        .ok_or(IdmlError::LimitExceeded {
+            what: "spread page item count",
+            limit: max_page_items as u64,
+            actual: u64::MAX,
+        })?;
+
+    if next_len > max_page_items {
+        return Err(IdmlError::LimitExceeded {
+            what: "spread page item count",
+            limit: max_page_items as u64,
+            actual: next_len as u64,
+        });
+    }
+
+    *page_item_count = next_len;
+    page_items.push(page_item);
+    Ok(())
+}
+
+fn parse_group_contents(
+    reader: &mut Reader<&[u8]>,
+    mut group: Group,
+    options: SpreadParseOptions,
+    xml_depth: &mut XmlDepthTracker,
+    text_frames: &mut Vec<TextFrame>,
+    page_item_count: &mut usize,
+) -> Result<Group> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                xml_depth.enter()?;
+                if e.name().as_ref() == b"TextFrame" {
+                    push_text_frame_page_item_limited(
+                        text_frames,
+                        &mut group.page_items,
+                        TextFrame::from_xml_event(&e, reader)?,
+                        options,
+                        page_item_count,
+                    )?;
+                } else if e.name().as_ref() == b"Rectangle" {
+                    push_page_item_limited(
+                        &mut group.page_items,
+                        PageItem::Rectangle(Rectangle::from_xml_event(&e, reader)?),
+                        page_item_count,
+                        options.max_page_items,
+                    )?;
+                } else if e.name().as_ref() == b"Group" {
+                    let child = Group::from_xml_event(&e, reader)?;
+                    let child = parse_group_contents(
+                        reader,
+                        child,
+                        options,
+                        xml_depth,
+                        text_frames,
+                        page_item_count,
+                    )?;
+                    push_page_item_limited(
+                        &mut group.page_items,
+                        PageItem::Group(child),
+                        page_item_count,
+                        options.max_page_items,
+                    )?;
+                }
+            }
+            Event::Empty(e) => {
+                xml_depth.visit_empty()?;
+                if e.name().as_ref() == b"TextFrame" {
+                    push_text_frame_page_item_limited(
+                        text_frames,
+                        &mut group.page_items,
+                        TextFrame::from_xml_event(&e, reader)?,
+                        options,
+                        page_item_count,
+                    )?;
+                } else if e.name().as_ref() == b"Rectangle" {
+                    push_page_item_limited(
+                        &mut group.page_items,
+                        PageItem::Rectangle(Rectangle::from_xml_event(&e, reader)?),
+                        page_item_count,
+                        options.max_page_items,
+                    )?;
+                } else if e.name().as_ref() == b"Group" {
+                    push_page_item_limited(
+                        &mut group.page_items,
+                        PageItem::Group(Group::from_xml_event(&e, reader)?),
+                        page_item_count,
+                        options.max_page_items,
+                    )?;
+                }
+            }
+            Event::End(e) => {
+                xml_depth.exit();
+                if e.name().as_ref() == b"Group" {
+                    break;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(group)
+}
+
 fn serialize_spread(spread: &Spread) -> Result<String> {
     validate_page_items(spread)?;
 
@@ -467,10 +621,7 @@ fn serialize_spread(spread: &Spread) -> Result<String> {
         }
     } else {
         for page_item in &spread.page_items {
-            match page_item {
-                PageItem::TextFrame(frame) => serialize_text_frame(&mut xml, frame)?,
-                PageItem::Rectangle(rectangle) => serialize_rectangle(&mut xml, rectangle)?,
-            }
+            serialize_page_item(&mut xml, page_item, 2)?;
         }
     }
 
@@ -486,11 +637,10 @@ fn validate_page_items(spread: &Spread) -> Result<()> {
     let page_item_text_frames = spread
         .page_items
         .iter()
-        .filter_map(|item| match item {
-            PageItem::TextFrame(frame) => Some(frame),
-            PageItem::Rectangle(_) => None,
-        })
-        .collect::<Vec<_>>();
+        .fold(Vec::new(), |mut frames, item| {
+            collect_text_frames_from_page_item(item, &mut frames);
+            frames
+        });
 
     if page_item_text_frames.len() != spread.text_frames.len() {
         return Err(stale_page_items_error());
@@ -521,6 +671,21 @@ fn compatible_pages(left: &Spread, right: &Spread) -> bool {
     left.pages.is_empty() || right.pages.is_empty() || left.pages == right.pages
 }
 
+fn collect_text_frames_from_page_item<'a>(
+    page_item: &'a PageItem,
+    frames: &mut Vec<&'a TextFrame>,
+) {
+    match page_item {
+        PageItem::TextFrame(frame) => frames.push(frame),
+        PageItem::Rectangle(_) => {}
+        PageItem::Group(group) => {
+            for child in &group.page_items {
+                collect_text_frames_from_page_item(child, frames);
+            }
+        }
+    }
+}
+
 fn serialize_page(xml: &mut String, page: &Page) -> Result<()> {
     xml.push_str("  <Page");
     if let Some(id) = &page.id {
@@ -535,7 +700,24 @@ fn serialize_page(xml: &mut String, page: &Page) -> Result<()> {
 }
 
 fn serialize_text_frame(xml: &mut String, frame: &TextFrame) -> Result<()> {
-    xml.push_str("  <TextFrame");
+    serialize_text_frame_with_indent(xml, frame, 2)
+}
+
+fn serialize_page_item(xml: &mut String, page_item: &PageItem, indent: usize) -> Result<()> {
+    match page_item {
+        PageItem::TextFrame(frame) => serialize_text_frame_with_indent(xml, frame, indent),
+        PageItem::Rectangle(rectangle) => serialize_rectangle_with_indent(xml, rectangle, indent),
+        PageItem::Group(group) => serialize_group(xml, group, indent),
+    }
+}
+
+fn serialize_text_frame_with_indent(
+    xml: &mut String,
+    frame: &TextFrame,
+    indent: usize,
+) -> Result<()> {
+    push_indent(xml, indent);
+    xml.push_str("<TextFrame");
     if let Some(id) = &frame.id {
         push_attr(xml, "TextFrame", "Self", id)?;
     }
@@ -550,8 +732,13 @@ fn serialize_text_frame(xml: &mut String, frame: &TextFrame) -> Result<()> {
     Ok(())
 }
 
-fn serialize_rectangle(xml: &mut String, rectangle: &Rectangle) -> Result<()> {
-    xml.push_str("  <Rectangle");
+fn serialize_rectangle_with_indent(
+    xml: &mut String,
+    rectangle: &Rectangle,
+    indent: usize,
+) -> Result<()> {
+    push_indent(xml, indent);
+    xml.push_str("<Rectangle");
     if let Some(id) = &rectangle.id {
         push_attr(xml, "Rectangle", "Self", id)?;
     }
@@ -561,6 +748,35 @@ fn serialize_rectangle(xml: &mut String, rectangle: &Rectangle) -> Result<()> {
     }
     xml.push_str(" />\n");
     Ok(())
+}
+
+fn serialize_group(xml: &mut String, group: &Group, indent: usize) -> Result<()> {
+    push_indent(xml, indent);
+    xml.push_str("<Group");
+    if let Some(id) = &group.id {
+        push_attr(xml, "Group", "Self", id)?;
+    }
+    if let Some(bounds) = group.geometric_bounds {
+        let bounds = format_geometric_bounds("Group", bounds)?;
+        push_attr(xml, "Group", "GeometricBounds", &bounds)?;
+    }
+    if group.page_items.is_empty() {
+        xml.push_str(" />\n");
+        return Ok(());
+    }
+    xml.push_str(">\n");
+    for child in &group.page_items {
+        serialize_page_item(xml, child, indent + 2)?;
+    }
+    push_indent(xml, indent);
+    xml.push_str("</Group>\n");
+    Ok(())
+}
+
+fn push_indent(xml: &mut String, spaces: usize) {
+    for _ in 0..spaces {
+        xml.push(' ');
+    }
 }
 
 fn format_geometric_bounds(element: &'static str, bounds: Rect) -> Result<String> {
@@ -616,7 +832,7 @@ fn push_attr(
 
 #[cfg(test)]
 mod tests {
-    use super::{Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame};
+    use super::{Group, Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame};
     use crate::IdmlError;
     use crate::core::units::Points;
 
@@ -689,6 +905,48 @@ mod tests {
                 id,
                 geometric_bounds: None
             }) if id.as_deref() == Some("r2")
+        ));
+    }
+
+    #[test]
+    fn parses_groups_recursively_and_indexes_nested_text_frames() {
+        let xml = r#"<Spread Self="u10">
+  <Rectangle Self="r1" />
+  <Group Self="g1" GeometricBounds="0 0 200 200">
+    <TextFrame Self="tf1" ParentStory="u2" GeometricBounds="10 10 20 20" />
+    <Group Self="g2">
+      <Rectangle Self="r2" />
+      <TextFrame Self="tf2" ParentStory="u3" />
+    </Group>
+  </Group>
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.text_frames.len(), 2);
+        assert_eq!(spread.text_frames[0].id.as_deref(), Some("tf1"));
+        assert_eq!(spread.text_frames[1].id.as_deref(), Some("tf2"));
+        assert_eq!(spread.page_items.len(), 2);
+        assert!(matches!(
+            &spread.page_items[1],
+            PageItem::Group(Group {
+                id,
+                geometric_bounds: Some(_),
+                page_items,
+            }) if id.as_deref() == Some("g1") && page_items.len() == 2
+        ));
+
+        let PageItem::Group(group) = &spread.page_items[1] else {
+            panic!("expected group page item");
+        };
+        assert!(matches!(
+            &group.page_items[0],
+            PageItem::TextFrame(TextFrame { id, .. }) if id.as_deref() == Some("tf1")
+        ));
+        assert!(matches!(
+            &group.page_items[1],
+            PageItem::Group(Group { id, page_items, .. })
+                if id.as_deref() == Some("g2") && page_items.len() == 2
         ));
     }
 
@@ -798,6 +1056,27 @@ mod tests {
                 what: "spread page item count",
                 limit: 1,
                 actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_page_item_count_limit_inside_groups() {
+        let err = Spread::from_xml_with_options(
+            r#"<Spread><Group Self="g1"><Rectangle Self="r1" /><TextFrame Self="tf1" /></Group></Spread>"#,
+            SpreadParseOptions {
+                max_page_items: 2,
+                ..SpreadParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread page item count",
+                limit: 2,
+                actual: 3,
             }
         ));
     }
@@ -945,6 +1224,46 @@ mod tests {
         assert!(rectangle < frame);
         assert_eq!(parsed, spread);
         assert_eq!(parsed.page_items, spread.page_items);
+    }
+
+    #[test]
+    fn serializes_group_page_items_and_round_trips() {
+        let text_frame = TextFrame {
+            id: Some("tf1".to_owned()),
+            parent_story: Some("u2".to_owned()),
+            geometric_bounds: None,
+        };
+        let spread = Spread {
+            id: Some("u10".to_owned()),
+            pages: Vec::new(),
+            text_frames: vec![text_frame.clone()],
+            page_items: vec![PageItem::Group(Group {
+                id: Some("g1".to_owned()),
+                geometric_bounds: Some(Rect::new(
+                    Points::new(0.0),
+                    Points::new(0.0),
+                    Points::new(200.0),
+                    Points::new(200.0),
+                )),
+                page_items: vec![
+                    PageItem::Rectangle(Rectangle {
+                        id: Some("r1".to_owned()),
+                        geometric_bounds: None,
+                    }),
+                    PageItem::TextFrame(text_frame),
+                ],
+            })],
+        };
+
+        let xml = spread.to_xml().unwrap();
+        let group = xml.find("<Group").unwrap();
+        let rectangle = xml.find("<Rectangle").unwrap();
+        let frame = xml.find("<TextFrame").unwrap();
+        let parsed = Spread::from_xml(&xml).unwrap();
+
+        assert!(group < rectangle);
+        assert!(rectangle < frame);
+        assert_eq!(parsed, spread);
     }
 
     #[test]

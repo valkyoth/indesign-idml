@@ -18,7 +18,7 @@ pub use crate::model::resources::{
     extract_embedded_assets_with_options,
 };
 pub use crate::model::spread::{
-    Page, PageItem, Rect, RectMm, Rectangle, Spread, SpreadParseOptions, TextFrame,
+    Group, Page, PageItem, Rect, RectMm, Rectangle, Spread, SpreadParseOptions, TextFrame,
 };
 pub use crate::model::story::{Story, StoryParseOptions};
 pub use crate::traits::{XmlLoadable, XmlSaveable};
