@@ -46,3 +46,10 @@ path = "fuzz_targets/resource_items_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "archive_open"
+path = "fuzz_targets/archive_open.rs"
+test = false
+doc = false
+bench = false
