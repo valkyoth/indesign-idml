@@ -68,6 +68,8 @@ Hard rules:
   count ceilings before XML emission.
 - Story writer output enforces default text and attribute byte ceilings before
   XML emission.
+- Resource inventory construction uses checked reference counts and enforces the
+  default package-reference ceiling before preallocation or collection growth.
 - Duplicate XML attributes are rejected instead of being silently overwritten or
   interpreted by first-match behavior.
 - Decoded XML attribute values captured into the model are validated against the

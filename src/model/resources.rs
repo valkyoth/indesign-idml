@@ -3,7 +3,10 @@
 use crate::archive::{ArchiveEntry, DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE, IdmlPath};
 use crate::encoding::{Base64Mode, decode_standard, decoded_standard_len};
 use crate::error::{IdmlError, Result};
-use crate::model::designmap::{DesignMap, PackageResourcePointer, validate_package_element_name};
+use crate::model::designmap::{
+    DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS, DesignMap, PackageResourcePointer,
+    validate_package_element_name,
+};
 use crate::xml::{
     AnyRootTracker, DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker,
     configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype,
@@ -224,24 +227,20 @@ impl ResourceInventory {
     pub fn from_designmap(design_map: &DesignMap) -> Result<Self> {
         design_map.validate()?;
 
-        let mut resources = Vec::with_capacity(
-            design_map.master_spread_srcs.len()
-                + design_map
-                    .other_package_srcs
-                    .values()
-                    .map(Vec::len)
-                    .sum::<usize>(),
-        );
+        let mut resources = Vec::with_capacity(resource_inventory_capacity(design_map)?);
 
         if design_map.package_refs.is_empty() {
             for pointer in design_map.master_spread_pointers() {
-                resources.push(ResourceReference {
-                    kind: ResourceKind::MasterSpread,
-                    element: "idPkg:MasterSpread".to_owned(),
-                    id: Some(pointer.id().to_owned()),
-                    path: pointer.path().clone(),
-                    archive: None,
-                });
+                push_resource_reference_limited(
+                    &mut resources,
+                    ResourceReference {
+                        kind: ResourceKind::MasterSpread,
+                        element: "idPkg:MasterSpread".to_owned(),
+                        id: Some(pointer.id().to_owned()),
+                        path: pointer.path().clone(),
+                        archive: None,
+                    },
+                )?;
             }
 
             for pointer in design_map.package_resource_pointers() {
@@ -250,22 +249,28 @@ impl ResourceInventory {
         } else {
             for reference in &design_map.package_refs {
                 if reference.element == "idPkg:MasterSpread" {
-                    resources.push(ResourceReference {
-                        kind: ResourceKind::MasterSpread,
-                        element: reference.element.clone(),
-                        id: reference.id.clone(),
-                        path: reference.path.clone(),
-                        archive: None,
-                    });
+                    push_resource_reference_limited(
+                        &mut resources,
+                        ResourceReference {
+                            kind: ResourceKind::MasterSpread,
+                            element: reference.element.clone(),
+                            id: reference.id.clone(),
+                            path: reference.path.clone(),
+                            archive: None,
+                        },
+                    )?;
                 } else if !matches!(reference.element.as_str(), "idPkg:Story" | "idPkg:Spread") {
                     validate_package_element_name(&reference.element)?;
-                    resources.push(ResourceReference {
-                        kind: ResourceKind::from_reference(&reference.element, &reference.path),
-                        element: reference.element.clone(),
-                        id: None,
-                        path: reference.path.clone(),
-                        archive: None,
-                    });
+                    push_resource_reference_limited(
+                        &mut resources,
+                        ResourceReference {
+                            kind: ResourceKind::from_reference(&reference.element, &reference.path),
+                            element: reference.element.clone(),
+                            id: None,
+                            path: reference.path.clone(),
+                            archive: None,
+                        },
+                    )?;
                 }
             }
         }
@@ -334,19 +339,77 @@ impl ResourceInventory {
     }
 }
 
+fn resource_inventory_capacity(design_map: &DesignMap) -> Result<usize> {
+    if !design_map.package_refs.is_empty() {
+        return enforce_resource_inventory_count(design_map.package_refs.len());
+    }
+
+    let untyped_count =
+        design_map
+            .other_package_srcs
+            .values()
+            .try_fold(0usize, |count, paths| {
+                count
+                    .checked_add(paths.len())
+                    .ok_or(IdmlError::LimitExceeded {
+                        what: "resource inventory reference count",
+                        limit: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS as u64,
+                        actual: u64::MAX,
+                    })
+            })?;
+
+    let count = design_map
+        .master_spread_srcs
+        .len()
+        .checked_add(untyped_count)
+        .ok_or(IdmlError::LimitExceeded {
+            what: "resource inventory reference count",
+            limit: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS as u64,
+            actual: u64::MAX,
+        })?;
+
+    enforce_resource_inventory_count(count)
+}
+
+fn enforce_resource_inventory_count(count: usize) -> Result<usize> {
+    if count > DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS {
+        return Err(IdmlError::LimitExceeded {
+            what: "resource inventory reference count",
+            limit: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS as u64,
+            actual: count as u64,
+        });
+    }
+    Ok(count)
+}
+
+fn push_resource_reference_limited(
+    resources: &mut Vec<ResourceReference>,
+    reference: ResourceReference,
+) -> Result<()> {
+    next_limited_count(
+        resources.len(),
+        DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS,
+        "resource inventory reference count",
+    )?;
+    resources.push(reference);
+    Ok(())
+}
+
 fn push_resource_pointer(
     resources: &mut Vec<ResourceReference>,
     pointer: PackageResourcePointer<'_>,
 ) -> Result<()> {
     validate_package_element_name(pointer.element())?;
-    resources.push(ResourceReference {
-        kind: ResourceKind::from_reference(pointer.element(), pointer.path()),
-        element: pointer.element().to_owned(),
-        id: None,
-        path: pointer.path().clone(),
-        archive: None,
-    });
-    Ok(())
+    push_resource_reference_limited(
+        resources,
+        ResourceReference {
+            kind: ResourceKind::from_reference(pointer.element(), pointer.path()),
+            element: pointer.element().to_owned(),
+            id: None,
+            path: pointer.path().clone(),
+            archive: None,
+        },
+    )
 }
 
 /// Extracts embedded Base64 assets from `Contents` elements with secure defaults.
@@ -945,7 +1008,7 @@ mod tests {
     use crate::IdmlError;
     use crate::archive::{ArchiveEntry, IdmlPath};
     use crate::encoding::Base64Mode;
-    use crate::model::designmap::DesignMap;
+    use crate::model::designmap::{DesignMap, DesignMapPackageRef};
     use indexmap::IndexMap;
     use zip::CompressionMethod;
 
@@ -1064,6 +1127,54 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(graphics, ["Resources/A.xml", "Resources/B.xml"]);
+    }
+
+    #[test]
+    fn inventory_enforces_reference_count_limit_from_maps() {
+        let mut design_map = DesignMap::default();
+        design_map.other_package_srcs.insert(
+            "idPkg:Graphic".to_owned(),
+            (0..=super::DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS)
+                .map(|index| IdmlPath::new(format!("Resources/Graphic_{index}.xml")).unwrap())
+                .collect(),
+        );
+
+        let err = ResourceInventory::from_designmap(&design_map).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource inventory reference count",
+                limit: 20_000,
+                actual: 20_001,
+            }
+        ));
+    }
+
+    #[test]
+    fn inventory_enforces_reference_count_limit_from_ordered_refs() {
+        let paths = (0..=super::DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS)
+            .map(|index| IdmlPath::new(format!("Resources/Graphic_{index}.xml")).unwrap())
+            .collect::<Vec<_>>();
+        let mut design_map = DesignMap::default();
+        design_map
+            .other_package_srcs
+            .insert("idPkg:Graphic".to_owned(), paths.clone());
+        design_map.package_refs = paths
+            .into_iter()
+            .map(|path| DesignMapPackageRef::resource("idPkg:Graphic", path).unwrap())
+            .collect();
+
+        let err = ResourceInventory::from_designmap(&design_map).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource inventory reference count",
+                limit: 20_000,
+                actual: 20_001,
+            }
+        ));
     }
 
     #[test]
