@@ -32,3 +32,10 @@ path = "fuzz_targets/spread_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "embedded_assets_parse"
+path = "fuzz_targets/embedded_assets_parse.rs"
+test = false
+doc = false
+bench = false

@@ -1,10 +1,22 @@
 //! Resource inventory for untyped IDML package references.
 
 use crate::archive::{ArchiveEntry, DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE, IdmlPath};
+use crate::encoding::{Base64Mode, decode_standard};
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, validate_package_element_name};
 use indexmap::IndexMap;
+use quick_xml::Reader;
+use quick_xml::XmlVersion;
+use quick_xml::events::{BytesStart, Event};
 use zip::CompressionMethod;
+
+/// Default maximum decoded bytes accepted for one embedded resource asset.
+pub const DEFAULT_MAX_EMBEDDED_ASSET_DECODED_BYTES: usize =
+    DEFAULT_MAX_ENTRY_UNCOMPRESSED_SIZE as usize;
+
+/// Default maximum encoded Base64 bytes accepted for one embedded resource asset.
+pub const DEFAULT_MAX_EMBEDDED_ASSET_ENCODED_BYTES: usize =
+    DEFAULT_MAX_EMBEDDED_ASSET_DECODED_BYTES * 2;
 
 /// Broad resource category inferred from a `designmap.xml` package reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,6 +78,36 @@ pub struct ResourceIntegrityOptions {
     pub max_graphic_uncompressed_size: u64,
     /// Maximum allowed uncompressed-to-compressed size ratio.
     pub max_compression_ratio: u64,
+}
+
+/// Parser limits for embedded Base64 resource payloads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EmbeddedAssetParseOptions {
+    /// Base64 compatibility profile.
+    pub base64_mode: Base64Mode,
+    /// Maximum encoded Base64 bytes collected from one `Contents` element.
+    pub max_encoded_bytes: usize,
+    /// Maximum decoded bytes accepted from one `Contents` element.
+    pub max_decoded_bytes: usize,
+}
+
+impl Default for EmbeddedAssetParseOptions {
+    fn default() -> Self {
+        Self {
+            base64_mode: Base64Mode::Strict,
+            max_encoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_ENCODED_BYTES,
+            max_decoded_bytes: DEFAULT_MAX_EMBEDDED_ASSET_DECODED_BYTES,
+        }
+    }
+}
+
+/// Decoded embedded asset payload found in a resource or spread XML file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmbeddedAsset {
+    /// Qualified XML element that carried the Base64 payload.
+    pub source_element: String,
+    /// Decoded asset bytes.
+    pub bytes: Vec<u8>,
 }
 
 impl Default for ResourceIntegrityOptions {
@@ -185,6 +227,82 @@ impl ResourceInventory {
     }
 }
 
+/// Extracts embedded Base64 assets from `Contents` elements with secure defaults.
+///
+/// IDML can store embedded image bytes in `Contents` elements. The payload may
+/// be split across multiple text or CDATA chunks, so this parser joins chunks
+/// only within one `Contents` element and applies explicit encoded and decoded
+/// size limits before returning bytes.
+pub fn extract_embedded_assets(xml_content: &str) -> Result<Vec<EmbeddedAsset>> {
+    extract_embedded_assets_with_options(xml_content, EmbeddedAssetParseOptions::default())
+}
+
+/// Extracts embedded Base64 assets from `Contents` elements with explicit limits.
+pub fn extract_embedded_assets_with_options(
+    xml_content: &str,
+    options: EmbeddedAssetParseOptions,
+) -> Result<Vec<EmbeddedAsset>> {
+    let mut reader = Reader::from_str(xml_content);
+    reader.config_mut().trim_text(false);
+
+    let mut assets = Vec::new();
+    let mut contents_depth = 0usize;
+    let mut source_element = String::new();
+    let mut encoded = String::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) if is_contents_element(&e) => {
+                if contents_depth == 0 {
+                    source_element = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                    encoded.clear();
+                }
+                contents_depth = contents_depth.saturating_add(1);
+            }
+            Event::Empty(e) if is_contents_element(&e) => {
+                let bytes = decode_standard(&[], options.base64_mode, options.max_decoded_bytes)?;
+                assets.push(EmbeddedAsset {
+                    source_element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                    bytes,
+                });
+            }
+            Event::End(e) if local_name(e.name().as_ref()) == b"Contents" && contents_depth > 0 => {
+                contents_depth -= 1;
+                if contents_depth == 0 {
+                    let bytes = decode_standard(
+                        encoded.as_bytes(),
+                        options.base64_mode,
+                        options.max_decoded_bytes,
+                    )?;
+                    assets.push(EmbeddedAsset {
+                        source_element: source_element.clone(),
+                        bytes,
+                    });
+                    encoded.clear();
+                }
+            }
+            Event::Text(e) if contents_depth > 0 => {
+                push_encoded_limited(
+                    &mut encoded,
+                    e.decode()?.as_ref(),
+                    options.max_encoded_bytes,
+                )?;
+            }
+            Event::CData(e) if contents_depth > 0 => {
+                push_encoded_limited(
+                    &mut encoded,
+                    e.xml_content(XmlVersion::Implicit1_0)?.as_ref(),
+                    options.max_encoded_bytes,
+                )?;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    Ok(assets)
+}
+
 impl ResourceKind {
     /// Classifies an `idPkg:*` element name into a broad resource kind.
     #[must_use]
@@ -264,13 +382,46 @@ fn validate_resource_compression_ratio(
     Ok(())
 }
 
+fn is_contents_element(event: &BytesStart<'_>) -> bool {
+    local_name(event.name().as_ref()) == b"Contents"
+}
+
+fn local_name(name: &[u8]) -> &[u8] {
+    name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
+}
+
+fn push_encoded_limited(output: &mut String, text: &str, max_encoded_bytes: usize) -> Result<()> {
+    let next_len = output
+        .len()
+        .checked_add(text.len())
+        .ok_or(IdmlError::LimitExceeded {
+            what: "embedded asset base64 bytes",
+            limit: max_encoded_bytes as u64,
+            actual: u64::MAX,
+        })?;
+
+    if next_len > max_encoded_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what: "embedded asset base64 bytes",
+            limit: max_encoded_bytes as u64,
+            actual: next_len as u64,
+        });
+    }
+
+    output.push_str(text);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ResourceArchiveMetadata, ResourceIntegrityOptions, ResourceInventory, ResourceKind,
+        EmbeddedAssetParseOptions, ResourceArchiveMetadata, ResourceIntegrityOptions,
+        ResourceInventory, ResourceKind, extract_embedded_assets,
+        extract_embedded_assets_with_options,
     };
     use crate::IdmlError;
     use crate::archive::{ArchiveEntry, IdmlPath};
+    use crate::encoding::Base64Mode;
     use crate::model::designmap::DesignMap;
     use indexmap::IndexMap;
     use zip::CompressionMethod;
@@ -555,5 +706,94 @@ mod tests {
                 reason: "invalid XML element name",
             } if element == "DesignMap"
         ));
+    }
+
+    #[test]
+    fn extracts_embedded_assets_from_split_contents_chunks() {
+        let xml = r#"<Image>
+  <Properties><Label>ignored</Label></Properties>
+  <Contents><![CDATA[aGVs]]><![CDATA[bG8=]]></Contents>
+</Image>"#;
+
+        let assets = extract_embedded_assets(xml).unwrap();
+
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].source_element, "Contents");
+        assert_eq!(assets[0].bytes, b"hello");
+    }
+
+    #[test]
+    fn extracts_prefixed_embedded_asset_contents() {
+        let xml = r#"<Image><idPkg:Contents>aGk=</idPkg:Contents></Image>"#;
+
+        let assets = extract_embedded_assets(xml).unwrap();
+
+        assert_eq!(assets[0].source_element, "idPkg:Contents");
+        assert_eq!(assets[0].bytes, b"hi");
+    }
+
+    #[test]
+    fn strict_embedded_asset_mode_rejects_whitespace() {
+        let err = extract_embedded_assets("<Image><Contents>aG Vs</Contents></Image>").unwrap_err();
+
+        assert!(matches!(err, IdmlError::Base64Decode(_)));
+    }
+
+    #[test]
+    fn legacy_embedded_asset_mode_allows_transport_whitespace() {
+        let assets = extract_embedded_assets_with_options(
+            "<Image><Contents> aG\r\nVs\tbG8= </Contents></Image>",
+            EmbeddedAssetParseOptions {
+                base64_mode: Base64Mode::LegacyWhitespace,
+                ..EmbeddedAssetParseOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(assets[0].bytes, b"hello");
+    }
+
+    #[test]
+    fn embedded_asset_parser_enforces_encoded_limit_before_decoding() {
+        let err = extract_embedded_assets_with_options(
+            "<Image><Contents>aGVsbG8=</Contents></Image>",
+            EmbeddedAssetParseOptions {
+                max_encoded_bytes: 4,
+                ..EmbeddedAssetParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "embedded asset base64 bytes",
+                limit: 4,
+                actual: 8,
+            }
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_enforces_decoded_limit_before_allocation() {
+        let err = extract_embedded_assets_with_options(
+            "<Image><Contents>aGVsbG8=</Contents></Image>",
+            EmbeddedAssetParseOptions {
+                max_decoded_bytes: 4,
+                ..EmbeddedAssetParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, IdmlError::LimitExceeded { what, .. } if what == "base64 decoded length")
+        );
+    }
+
+    #[test]
+    fn embedded_asset_parser_ignores_story_content_elements() {
+        let assets = extract_embedded_assets("<Story><Content>aGVsbG8=</Content></Story>").unwrap();
+
+        assert!(assets.is_empty());
     }
 }
