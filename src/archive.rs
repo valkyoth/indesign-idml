@@ -211,10 +211,11 @@ where
         if self.entries.contains_key(&path) {
             return Err(IdmlError::DuplicateArchiveEntry(path.to_string()));
         }
+        let entry_size = usize_to_u64("archive entry bytes", data.len())?;
         enforce_writer_entry_limits(
             self.entries.len(),
             self.total_uncompressed,
-            u64::try_from(data.len()).unwrap_or(u64::MAX),
+            entry_size,
             self.limits,
         )?;
 
@@ -222,14 +223,14 @@ where
             .start_file(path.as_str(), deterministic_file_options(compression))?;
         self.writer.write_all(data)?;
         self.entries.insert(path, ());
-        self.total_uncompressed = self
-            .total_uncompressed
-            .checked_add(u64::try_from(data.len()).unwrap_or(u64::MAX))
-            .ok_or(IdmlError::LimitExceeded {
-                what: "archive total uncompressed size",
-                limit: self.limits.max_total_uncompressed_size,
-                actual: u64::MAX,
-            })?;
+        self.total_uncompressed =
+            self.total_uncompressed
+                .checked_add(entry_size)
+                .ok_or(IdmlError::LimitExceeded {
+                    what: "archive total uncompressed size",
+                    limit: self.limits.max_total_uncompressed_size,
+                    actual: u64::MAX,
+                })?;
         Ok(())
     }
 }
@@ -836,6 +837,14 @@ fn enforce_archive_path_len(path: &str, max_path_bytes: usize) -> Result<()> {
     Ok(())
 }
 
+fn usize_to_u64(what: &'static str, value: usize) -> Result<u64> {
+    u64::try_from(value).map_err(|_| IdmlError::LimitExceeded {
+        what,
+        limit: u64::MAX,
+        actual: u64::MAX,
+    })
+}
+
 fn enforce_regular_unencrypted_entry(encrypted: bool, is_file: bool) -> Result<()> {
     if encrypted {
         return Err(IdmlError::InvalidPackage(
@@ -999,7 +1008,7 @@ fn read_declared_size(reader: impl Read, expected_size: u64) -> Result<Vec<u8>> 
     let mut limited = reader.take(read_limit);
     limited.read_to_end(&mut data)?;
 
-    let actual = u64::try_from(data.len()).unwrap_or(u64::MAX);
+    let actual = usize_to_u64("entry read size mismatch", data.len())?;
     if actual != expected_size {
         return Err(IdmlError::LimitExceeded {
             what: "entry read size mismatch",
@@ -2355,6 +2364,11 @@ mod tests {
             } if limit == IDML_MIMETYPE.len() as u64
                 && actual == (IDML_MIMETYPE.len() + b"<Document />".len()) as u64
         ));
+    }
+
+    #[test]
+    fn usize_to_u64_reports_exact_values() {
+        assert_eq!(super::usize_to_u64("test bytes", 42).unwrap(), 42);
     }
 
     #[test]
