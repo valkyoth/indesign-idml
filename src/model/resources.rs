@@ -760,6 +760,7 @@ fn collect_resource_attrs_limited(
                 reason: "duplicate attribute",
             });
         }
+        enforce_resource_item_attribute_bytes(attr.value.len(), options.max_item_attribute_bytes)?;
         let value = attr
             .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
             .into_owned();
@@ -801,6 +802,20 @@ fn collect_resource_attrs_limited(
         attributes.insert(name, value);
     }
     Ok(attributes)
+}
+
+fn enforce_resource_item_attribute_bytes(
+    actual: usize,
+    max_item_attribute_bytes: usize,
+) -> Result<()> {
+    if actual > max_item_attribute_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what: "resource item attribute bytes",
+            limit: max_item_attribute_bytes as u64,
+            actual: actual as u64,
+        });
+    }
+    Ok(())
 }
 
 fn first_attr_value<'a>(
@@ -1192,6 +1207,28 @@ mod tests {
                 what: "resource item attribute bytes",
                 limit: 10,
                 ..
+            }
+        ));
+    }
+
+    #[test]
+    fn resource_item_parser_enforces_raw_attribute_byte_limit_before_decoding() {
+        let err = extract_resource_items_with_options(
+            r#"<Styles><ParagraphStyle Self="style1" /></Styles>"#,
+            ResourceKind::Styles,
+            ResourceItemParseOptions {
+                max_item_attribute_bytes: 5,
+                ..ResourceItemParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item attribute bytes",
+                limit: 5,
+                actual: 6,
             }
         ));
     }

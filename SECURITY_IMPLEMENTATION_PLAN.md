@@ -71,6 +71,8 @@ Hard rules:
   normalization or decoding can allocate their values.
 - Spread XML attributes are capped by configured raw byte length before
   normalization or decoding can allocate their values.
+- Resource item XML attributes are capped by configured raw byte length before
+  normalization or decoding can allocate their values.
 - Semantically equivalent XML start and empty events are handled consistently
   where IDML allows self-closing elements, avoiding first/empty event parser
   confusion.
