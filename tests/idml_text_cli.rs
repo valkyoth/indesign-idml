@@ -75,6 +75,53 @@ fn idml_text_rejects_invalid_story_text_limit() {
         .stderr("idml-text: invalid value `not-a-number` for --max-story-text-bytes\n");
 }
 
+#[test]
+fn idml_text_enforces_archive_entry_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("sample.idml");
+    fs::write(&input, sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command.arg("--max-archive-entries").arg("1").arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for archive entry count: limit 1, actual 4\n");
+}
+
+#[test]
+fn idml_text_enforces_designmap_ref_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("sample.idml");
+    fs::write(&input, sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--max-designmap-package-refs")
+        .arg("1")
+        .arg(&input);
+
+    command.assert().failure().stderr(
+        "idml-text: limit exceeded for DesignMap package reference count: limit 1, actual 2\n",
+    );
+}
+
+#[test]
+fn idml_text_enforces_story_xml_depth_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("sample.idml");
+    fs::write(&input, sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command.arg("--max-story-xml-depth").arg("1").arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for Story XML depth: limit 1, actual 2\n");
+}
+
 fn sample_idml() -> Vec<u8> {
     let mut buffer = Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(&mut buffer);

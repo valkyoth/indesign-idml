@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 
-use indesign_idml::archive::IdmlPackage;
+use indesign_idml::archive::{ArchiveLimits, IdmlPackage};
+use indesign_idml::model::designmap::DesignMapParseOptions;
 use indesign_idml::model::story::StoryParseOptions;
 use std::env;
 use std::fs::File;
@@ -22,6 +23,8 @@ fn main() -> ExitCode {
 fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliError> {
     let mut input = None;
     let mut output = OutputTarget::Stdout;
+    let mut archive_limits = ArchiveLimits::default();
+    let mut designmap_options = DesignMapParseOptions::default();
     let mut story_options = StoryParseOptions::default();
     let mut args = args.into_iter();
 
@@ -46,6 +49,59 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
             story_options.max_text_bytes = parse_usize(&value, "--max-story-text-bytes")?;
             continue;
         }
+        if arg == "--max-story-xml-depth" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage("missing value after --max-story-xml-depth"));
+            };
+            story_options.max_xml_depth = parse_usize(&value, "--max-story-xml-depth")?;
+            continue;
+        }
+        if arg == "--max-designmap-package-refs" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-designmap-package-refs",
+                ));
+            };
+            designmap_options.max_package_refs =
+                parse_usize(&value, "--max-designmap-package-refs")?;
+            continue;
+        }
+        if arg == "--max-designmap-xml-depth" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-designmap-xml-depth",
+                ));
+            };
+            designmap_options.max_xml_depth = parse_usize(&value, "--max-designmap-xml-depth")?;
+            continue;
+        }
+        if arg == "--max-archive-entries" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage("missing value after --max-archive-entries"));
+            };
+            archive_limits.max_entries = parse_usize(&value, "--max-archive-entries")?;
+            continue;
+        }
+        if arg == "--max-entry-uncompressed-bytes" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-entry-uncompressed-bytes",
+                ));
+            };
+            archive_limits.max_entry_uncompressed_size =
+                parse_u64(&value, "--max-entry-uncompressed-bytes")?;
+            continue;
+        }
+        if arg == "--max-total-uncompressed-bytes" {
+            let Some(value) = args.next() else {
+                return Err(CliError::Usage(
+                    "missing value after --max-total-uncompressed-bytes",
+                ));
+            };
+            archive_limits.max_total_uncompressed_size =
+                parse_u64(&value, "--max-total-uncompressed-bytes")?;
+            continue;
+        }
         if input.replace(PathBuf::from(arg)).is_some() {
             return Err(CliError::Usage("expected exactly one input IDML path"));
         }
@@ -56,8 +112,8 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     };
 
     let file = File::open(input)?;
-    let mut package = IdmlPackage::new(file)?;
-    let design_map = package.read_designmap()?;
+    let mut package = IdmlPackage::with_limits(file, archive_limits)?;
+    let design_map = package.read_designmap_with_options(designmap_options)?;
     let texts = package.extract_story_texts_with_options(&design_map, story_options)?;
 
     match output {
@@ -97,7 +153,7 @@ fn print_help() -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
     writer.write_all(
-        b"Usage: idml-text [--output PATH] [--max-story-text-bytes BYTES] INPUT.idml\n\nExtracts story text in designmap.xml order.\n",
+        b"Usage: idml-text [--output PATH] [limits] INPUT.idml\n\nExtracts story text in designmap.xml order.\n\nLimits:\n  --max-archive-entries COUNT\n  --max-entry-uncompressed-bytes BYTES\n  --max-total-uncompressed-bytes BYTES\n  --max-designmap-package-refs COUNT\n  --max-designmap-xml-depth DEPTH\n  --max-story-text-bytes BYTES\n  --max-story-xml-depth DEPTH\n",
     )?;
     writer.flush()?;
     Ok(())
@@ -108,6 +164,16 @@ fn parse_usize(value: &std::ffi::OsStr, flag: &'static str) -> Result<usize, Cli
         return Err(CliError::Usage("numeric option must be valid UTF-8"));
     };
     value.parse::<usize>().map_err(|_| CliError::InvalidNumber {
+        flag,
+        value: value.to_owned(),
+    })
+}
+
+fn parse_u64(value: &std::ffi::OsStr, flag: &'static str) -> Result<u64, CliError> {
+    let Some(value) = value.to_str() else {
+        return Err(CliError::Usage("numeric option must be valid UTF-8"));
+    };
+    value.parse::<u64>().map_err(|_| CliError::InvalidNumber {
         flag,
         value: value.to_owned(),
     })
