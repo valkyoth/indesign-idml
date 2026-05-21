@@ -385,17 +385,27 @@ pub fn extract_embedded_assets_with_options(
             Event::Start(e) => {
                 root.enter(e.name().as_ref())?;
                 xml_depth.enter()?;
+                if contents_depth > 0 {
+                    return Err(IdmlError::InvalidElement {
+                        element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                        reason: "element inside embedded asset contents",
+                    });
+                }
                 if is_contents_element(&e) {
-                    if contents_depth == 0 {
-                        source_element = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                        encoded.clear();
-                    }
-                    contents_depth = contents_depth.saturating_add(1);
+                    source_element = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                    encoded.clear();
+                    contents_depth = 1;
                 }
             }
             Event::Empty(e) => {
                 root.visit_empty(e.name().as_ref())?;
                 xml_depth.visit_empty()?;
+                if contents_depth > 0 {
+                    return Err(IdmlError::InvalidElement {
+                        element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                        reason: "element inside embedded asset contents",
+                    });
+                }
                 if is_contents_element(&e) {
                     let bytes =
                         decode_embedded_asset_limited(&[], options, &mut total_decoded_bytes)?;
@@ -1933,6 +1943,51 @@ mod tests {
                 element,
                 reason: "entity reference inside embedded asset contents",
             } if element == "#reference"
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_rejects_child_elements_inside_contents() {
+        let err =
+            extract_embedded_assets("<Image><Contents>a<Chunk>G</Chunk>k=</Contents></Image>")
+                .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "element inside embedded asset contents",
+            } if element == "Chunk"
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_rejects_empty_child_elements_inside_contents() {
+        let err = extract_embedded_assets("<Image><Contents>aG<Chunk />k=</Contents></Image>")
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "element inside embedded asset contents",
+            } if element == "Chunk"
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_rejects_nested_contents() {
+        let err = extract_embedded_assets(
+            "<Image><Contents><Contents>aGk=</Contents></Contents></Image>",
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "element inside embedded asset contents",
+            } if element == "Contents"
         ));
     }
 

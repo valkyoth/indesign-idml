@@ -62,8 +62,8 @@ Hard rules:
   interpreting recognized child tags as a valid model.
 - Resource XML extractors reject missing roots, repeated roots, and non-whitespace
   data outside the document root.
-- Embedded asset `Contents` payloads reject entity references instead of
-  silently dropping or rewriting bytes before Base64 decoding.
+- Embedded asset `Contents` payloads accept only text and CDATA chunks; child
+  markup and entity references are rejected before Base64 decoding.
 - Non-whitespace character data, CDATA, and entity references outside the root
   element are rejected instead of being ignored.
 - EOF before closing the root or a nested Group is rejected as malformed XML
