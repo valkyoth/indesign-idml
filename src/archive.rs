@@ -507,7 +507,9 @@ where
         options: ResourceItemParseOptions,
     ) -> Result<Vec<ResourceItem>> {
         let kind = ResourceKind::from_reference(pointer.element(), pointer.path());
-        self.read_resource_items_with_options(pointer.path(), kind, options)
+        let items = self.read_resource_items_with_options(pointer.path(), kind, options)?;
+        validate_resource_items(pointer, &items)?;
+        Ok(items)
     }
 
     /// Resolves a story ID through a parsed design map and parses that story.
@@ -851,6 +853,23 @@ fn deterministic_file_options(compression: CompressionMethod) -> SimpleFileOptio
     SimpleFileOptions::default()
         .compression_method(compression)
         .last_modified_time(zip::DateTime::DEFAULT)
+}
+
+fn validate_resource_items(
+    pointer: PackageResourcePointer<'_>,
+    items: &[ResourceItem],
+) -> Result<()> {
+    ResourceItemGroup {
+        resource: crate::model::resources::ResourceReference {
+            kind: ResourceKind::from_reference(pointer.element(), pointer.path()),
+            element: pointer.element().to_owned(),
+            id: None,
+            path: pointer.path().clone(),
+            archive: None,
+        },
+        items: items.to_vec(),
+    }
+    .validate()
 }
 
 fn validate_mimetype_entry<R>(
@@ -1643,6 +1662,32 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].kind, ResourceKind::Fonts);
         assert_eq!(items[0].id.as_deref(), Some("f1"));
+    }
+
+    #[test]
+    fn resolving_package_resource_items_rejects_duplicate_item_ids() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Resource src="Resources/Styles.xml" />
+</Document>"#;
+        let styles =
+            br#"<Styles><ParagraphStyle Self="p1" /><CharacterStyle Self="p1" /></Styles>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Resources/Styles.xml", styles),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let pointer = design_map.package_resource_pointers().next().unwrap();
+        let err = package.resolve_package_resource_items(pointer).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "resource item",
+                id,
+            } if id == "p1"
+        ));
     }
 
     #[test]
