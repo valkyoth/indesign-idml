@@ -361,6 +361,7 @@ impl IdmlDocument {
         self.validate_preserved_entries()?;
         self.validate_story_ids()?;
         self.validate_spread_ids()?;
+        self.validate_spread_models()?;
         self.validate_unique_object_ids()?;
         self.validate_parent_stories()?;
         self.validate_item_layers()?;
@@ -548,6 +549,13 @@ impl IdmlDocument {
     fn validate_spread_ids(&self) -> Result<()> {
         for (id, spread) in &self.spreads {
             validate_optional_self_id("spread", id, spread.id.as_deref())?;
+        }
+        Ok(())
+    }
+
+    fn validate_spread_models(&self) -> Result<()> {
+        for spread in self.spreads.values() {
+            spread.validate()?;
         }
         Ok(())
     }
@@ -1580,6 +1588,9 @@ mod tests {
             locked: Some(false),
         });
         let spread = document.spreads.get_mut("u10").unwrap();
+        spread
+            .page_items
+            .push(PageItem::TextFrame(spread.text_frames[0].clone()));
         spread.pages.push(Page {
             id: Some("u3".to_owned()),
             geometric_bounds: None,
@@ -1818,6 +1829,51 @@ mod tests {
     }
 
     #[test]
+    fn rejects_stale_spread_page_item_index() {
+        let mut document = make_document();
+        let spread = document.spreads.get_mut("u10").unwrap();
+        spread.page_items.push(PageItem::TextFrame(TextFrame {
+            id: Some("tf2".to_owned()),
+            layer_id: None,
+            parent_story: Some("u1".to_owned()),
+            geometric_bounds: None,
+        }));
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "spread page items",
+                reason: "ordered page items do not match text frame index",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_non_finite_spread_geometry() {
+        let mut document = make_document();
+        document.spreads.get_mut("u10").unwrap().text_frames[0].geometric_bounds = Some(Rect::new(
+            Points::new(0.0),
+            Points::new(f64::NAN),
+            Points::new(72.0),
+            Points::new(144.0),
+        ));
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "GeometricBounds",
+                reason: "coordinate must be finite",
+            } if element == "TextFrame"
+        ));
+    }
+
+    #[test]
     fn rejects_missing_story_model() {
         let mut document = make_document();
         document.stories.clear();
@@ -1940,6 +1996,9 @@ mod tests {
         let spread = document.spreads.get_mut("u10").unwrap();
         spread
             .page_items
+            .push(PageItem::TextFrame(spread.text_frames[0].clone()));
+        spread
+            .page_items
             .push(PageItem::Group(crate::model::spread::Group {
                 id: Some("group1".to_owned()),
                 layer_id: Some("layer1".to_owned()),
@@ -1991,16 +2050,15 @@ mod tests {
     #[test]
     fn rejects_rectangle_id_colliding_with_text_frame() {
         let mut document = make_document();
-        document
-            .spreads
-            .get_mut("u10")
-            .unwrap()
+        let spread = document.spreads.get_mut("u10").unwrap();
+        spread
             .page_items
-            .push(PageItem::Rectangle(Rectangle {
-                id: Some("tf1".to_owned()),
-                layer_id: None,
-                geometric_bounds: None,
-            }));
+            .push(PageItem::TextFrame(spread.text_frames[0].clone()));
+        spread.page_items.push(PageItem::Rectangle(Rectangle {
+            id: Some("tf1".to_owned()),
+            layer_id: None,
+            geometric_bounds: None,
+        }));
 
         let err = document.validate().unwrap_err();
 
@@ -2016,17 +2074,16 @@ mod tests {
     #[test]
     fn rejects_group_id_colliding_with_text_frame() {
         let mut document = make_document();
-        document
-            .spreads
-            .get_mut("u10")
-            .unwrap()
+        let spread = document.spreads.get_mut("u10").unwrap();
+        spread
             .page_items
-            .push(PageItem::Group(Group {
-                id: Some("tf1".to_owned()),
-                layer_id: None,
-                geometric_bounds: None,
-                page_items: Vec::new(),
-            }));
+            .push(PageItem::TextFrame(spread.text_frames[0].clone()));
+        spread.page_items.push(PageItem::Group(Group {
+            id: Some("tf1".to_owned()),
+            layer_id: None,
+            geometric_bounds: None,
+            page_items: Vec::new(),
+        }));
 
         let err = document.validate().unwrap_err();
 
@@ -2043,6 +2100,9 @@ mod tests {
     fn rejects_nested_rectangle_id_colliding_with_page() {
         let mut document = make_document();
         let spread = document.spreads.get_mut("u10").unwrap();
+        spread
+            .page_items
+            .push(PageItem::TextFrame(spread.text_frames[0].clone()));
         spread.pages.push(Page {
             id: Some("page1".to_owned()),
             geometric_bounds: None,

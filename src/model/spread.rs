@@ -184,6 +184,11 @@ impl Spread {
     pub fn to_xml(&self) -> Result<String> {
         serialize_spread(self)
     }
+
+    /// Validates spread-local serialization invariants without allocating XML.
+    pub fn validate(&self) -> Result<()> {
+        validate_spread(self)
+    }
 }
 
 impl XmlLoadable for Spread {
@@ -613,14 +618,31 @@ fn parse_group_contents(
     Ok(group)
 }
 
-fn serialize_spread(spread: &Spread) -> Result<String> {
+fn validate_spread(spread: &Spread) -> Result<()> {
     validate_page_items(spread)?;
+
+    if let Some(id) = &spread.id {
+        validate_xml_attribute("Spread", "Self", id)?;
+    }
+    for page in &spread.pages {
+        validate_page(page)?;
+    }
+    for frame in &spread.text_frames {
+        validate_text_frame(frame)?;
+    }
+    for page_item in &spread.page_items {
+        validate_page_item(page_item)?;
+    }
+
+    Ok(())
+}
+
+fn serialize_spread(spread: &Spread) -> Result<String> {
+    validate_spread(spread)?;
 
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Spread");
-    if let Some(id) = &spread.id {
-        push_attr(&mut xml, "Spread", "Self", id)?;
-    }
+    push_optional_attr(&mut xml, "Self", spread.id.as_deref());
     xml.push_str(">\n");
 
     for page in &spread.pages {
@@ -696,6 +718,64 @@ fn collect_text_frames_from_page_item<'a>(
             }
         }
     }
+}
+
+fn validate_page(page: &Page) -> Result<()> {
+    validate_optional_attr("Page", "Self", page.id.as_deref())?;
+    if let Some(bounds) = page.geometric_bounds {
+        validate_finite_bounds("Page", bounds)?;
+    }
+    Ok(())
+}
+
+fn validate_text_frame(frame: &TextFrame) -> Result<()> {
+    validate_optional_attr("TextFrame", "Self", frame.id.as_deref())?;
+    validate_optional_attr("TextFrame", "ItemLayer", frame.layer_id.as_deref())?;
+    validate_optional_attr("TextFrame", "ParentStory", frame.parent_story.as_deref())?;
+    if let Some(bounds) = frame.geometric_bounds {
+        validate_finite_bounds("TextFrame", bounds)?;
+    }
+    Ok(())
+}
+
+fn validate_page_item(page_item: &PageItem) -> Result<()> {
+    match page_item {
+        PageItem::TextFrame(frame) => validate_text_frame(frame),
+        PageItem::Rectangle(rectangle) => validate_rectangle(rectangle),
+        PageItem::Group(group) => validate_group(group),
+    }
+}
+
+fn validate_rectangle(rectangle: &Rectangle) -> Result<()> {
+    validate_optional_attr("Rectangle", "Self", rectangle.id.as_deref())?;
+    validate_optional_attr("Rectangle", "ItemLayer", rectangle.layer_id.as_deref())?;
+    if let Some(bounds) = rectangle.geometric_bounds {
+        validate_finite_bounds("Rectangle", bounds)?;
+    }
+    Ok(())
+}
+
+fn validate_group(group: &Group) -> Result<()> {
+    validate_optional_attr("Group", "Self", group.id.as_deref())?;
+    validate_optional_attr("Group", "ItemLayer", group.layer_id.as_deref())?;
+    if let Some(bounds) = group.geometric_bounds {
+        validate_finite_bounds("Group", bounds)?;
+    }
+    for child in &group.page_items {
+        validate_page_item(child)?;
+    }
+    Ok(())
+}
+
+fn validate_optional_attr(
+    element: &'static str,
+    name: &'static str,
+    value: Option<&str>,
+) -> Result<()> {
+    if let Some(value) = value {
+        validate_xml_attribute(element, name, value)?;
+    }
+    Ok(())
 }
 
 fn serialize_page(xml: &mut String, page: &Page) -> Result<()> {
@@ -849,6 +929,16 @@ fn push_attr(
     xml.push_str(escape(value).as_ref());
     xml.push('"');
     Ok(())
+}
+
+fn push_optional_attr(xml: &mut String, name: &'static str, value: Option<&str>) {
+    if let Some(value) = value {
+        xml.push(' ');
+        xml.push_str(name);
+        xml.push_str("=\"");
+        xml.push_str(escape(value).as_ref());
+        xml.push('"');
+    }
 }
 
 #[cfg(test)]
@@ -1391,6 +1481,94 @@ mod tests {
                 reason: "ordered page items do not match text frame index",
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_stale_page_item_index() {
+        let spread = Spread {
+            id: Some("u10".to_owned()),
+            pages: Vec::new(),
+            text_frames: vec![TextFrame {
+                id: Some("tf1".to_owned()),
+                layer_id: None,
+                parent_story: Some("u2".to_owned()),
+                geometric_bounds: None,
+            }],
+            page_items: vec![PageItem::TextFrame(TextFrame {
+                id: Some("tf2".to_owned()),
+                layer_id: None,
+                parent_story: Some("u2".to_owned()),
+                geometric_bounds: None,
+            })],
+        };
+
+        let err = spread.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "spread page items",
+                reason: "ordered page items do not match text frame index",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_non_finite_group_coordinates() {
+        let spread = Spread {
+            id: Some("u1".to_owned()),
+            pages: Vec::new(),
+            text_frames: Vec::new(),
+            page_items: vec![PageItem::Group(Group {
+                id: Some("g1".to_owned()),
+                layer_id: None,
+                geometric_bounds: Some(Rect::new(
+                    Points::new(0.0),
+                    Points::new(f64::INFINITY),
+                    Points::new(144.0),
+                    Points::new(216.0),
+                )),
+                page_items: Vec::new(),
+            })],
+        };
+
+        let err = spread.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "GeometricBounds",
+                reason: "coordinate must be finite",
+            } if element == "Group"
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_xml_forbidden_group_attributes() {
+        let spread = Spread {
+            id: Some("u1".to_owned()),
+            pages: Vec::new(),
+            text_frames: Vec::new(),
+            page_items: vec![PageItem::Group(Group {
+                id: Some("g\u{0}".to_owned()),
+                layer_id: None,
+                geometric_bounds: None,
+                page_items: Vec::new(),
+            })],
+        };
+
+        let err = spread.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Self",
+                reason: "contains an XML-forbidden character",
+            } if element == "Group"
         ));
     }
 
