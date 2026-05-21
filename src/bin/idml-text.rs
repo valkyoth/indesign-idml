@@ -320,52 +320,44 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
         let mut writer = TextWriter::new(output);
         if all_spreads {
             for spread_id in design_map.spread_ids() {
-                let frames = package.resolve_spread_text_frames_with_options(
+                package.try_for_each_spread_text_frame_with_options(
                     &design_map,
                     spread_id,
                     spread_options,
                     story_options,
+                    |frame| writer.write_text(frame.text),
                 )?;
-                for frame in &frames {
-                    writer.write_text(&frame.text)?;
-                }
             }
         } else {
             match (spread_id.as_deref(), page_id.as_deref(), rect_points) {
                 (Some(spread_id), Some(page_id), None) => {
-                    let frames = package.resolve_spread_text_on_page_with_options(
+                    package.try_for_each_spread_text_on_page_with_options(
                         &design_map,
                         spread_id,
                         page_id,
                         spread_options,
                         story_options,
+                        |frame| writer.write_text(frame.text),
                     )?;
-                    for frame in &frames {
-                        writer.write_text(&frame.text)?;
-                    }
                 }
                 (Some(spread_id), None, Some(query)) => {
-                    let frames = package.resolve_spread_text_in_rect_with_options(
+                    package.try_for_each_spread_text_in_rect_with_options(
                         &design_map,
                         spread_id,
                         query,
                         spread_options,
                         story_options,
+                        |frame| writer.write_text(frame.text),
                     )?;
-                    for frame in &frames {
-                        writer.write_text(&frame.text)?;
-                    }
                 }
                 (Some(spread_id), None, None) => {
-                    let frames = package.resolve_spread_text_frames_with_options(
+                    package.try_for_each_spread_text_frame_with_options(
                         &design_map,
                         spread_id,
                         spread_options,
                         story_options,
+                        |frame| writer.write_text(frame.text),
                     )?;
-                    for frame in &frames {
-                        writer.write_text(&frame.text)?;
-                    }
                 }
                 (None, None, None) => {
                     package.try_for_each_story_text_with_options(

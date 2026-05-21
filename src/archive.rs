@@ -1,8 +1,8 @@
 //! Secure ZIP archive inventory and bounded read support.
 
 use crate::core::resolver::{
-    ResolvedTextFrameData, page_by_id, resolve_text_frames, text_frames_intersecting,
-    text_frames_on_page, to_owned_records,
+    ResolvedTextFrame, ResolvedTextFrameData, page_by_id, resolve_text_frames,
+    text_frames_intersecting, text_frames_on_page, to_owned_records,
 };
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{
@@ -778,6 +778,172 @@ where
         Ok(to_owned_records(text_frames_on_page(resolved, page)?))
     }
 
+    /// Visits all resolved text frames on a spread without collecting them first.
+    pub fn try_for_each_spread_text_frame<E, F>(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+    {
+        self.try_for_each_spread_text_frame_with_options(
+            design_map,
+            spread_id,
+            SpreadParseOptions::default(),
+            StoryParseOptions::default(),
+            visit,
+        )
+    }
+
+    /// Visits all resolved text frames on a spread with explicit parser limits.
+    ///
+    /// This is the streaming alternative to
+    /// [`IdmlPackage::resolve_spread_text_frames_with_options`]. Stories are
+    /// parsed on first use by a matching frame and cached for the duration of
+    /// the spread visit.
+    pub fn try_for_each_spread_text_frame_with_options<E, F>(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        spread_options: SpreadParseOptions,
+        story_options: StoryParseOptions,
+        visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+    {
+        let spread = self
+            .resolve_spread_with_options(design_map, spread_id, spread_options)
+            .map_err(E::from)?;
+        self.try_for_each_resolved_spread_text_frame(
+            design_map,
+            &spread,
+            story_options,
+            |_| true,
+            visit,
+        )
+    }
+
+    /// Visits resolved text frames on a spread whose direct bounds intersect `query`.
+    pub fn try_for_each_spread_text_in_rect<E, F>(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        query: Rect,
+        visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+    {
+        self.try_for_each_spread_text_in_rect_with_options(
+            design_map,
+            spread_id,
+            query,
+            SpreadParseOptions::default(),
+            StoryParseOptions::default(),
+            visit,
+        )
+    }
+
+    /// Visits resolved text frames intersecting `query` with explicit parser limits.
+    pub fn try_for_each_spread_text_in_rect_with_options<E, F>(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        query: Rect,
+        spread_options: SpreadParseOptions,
+        story_options: StoryParseOptions,
+        visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+    {
+        let spread = self
+            .resolve_spread_with_options(design_map, spread_id, spread_options)
+            .map_err(E::from)?;
+        self.try_for_each_resolved_spread_text_frame(
+            design_map,
+            &spread,
+            story_options,
+            |frame| {
+                frame
+                    .geometric_bounds
+                    .is_some_and(|bounds| bounds.intersects(query))
+            },
+            visit,
+        )
+    }
+
+    /// Visits resolved text frames on a spread whose direct bounds intersect a page.
+    pub fn try_for_each_spread_text_on_page<E, F>(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        page_id: &str,
+        visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+    {
+        self.try_for_each_spread_text_on_page_with_options(
+            design_map,
+            spread_id,
+            page_id,
+            SpreadParseOptions::default(),
+            StoryParseOptions::default(),
+            visit,
+        )
+    }
+
+    /// Visits resolved text frames on a page with explicit parser limits.
+    pub fn try_for_each_spread_text_on_page_with_options<E, F>(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        page_id: &str,
+        spread_options: SpreadParseOptions,
+        story_options: StoryParseOptions,
+        visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+    {
+        let spread = self
+            .resolve_spread_with_options(design_map, spread_id, spread_options)
+            .map_err(E::from)?;
+        let page = page_by_id(&spread, page_id).map_err(E::from)?;
+        let page_bounds = page
+            .geometric_bounds
+            .ok_or_else(|| IdmlError::InvalidReference {
+                kind: "spread page",
+                id: page
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| "<unidentified>".to_owned()),
+                reason: "page has no geometric bounds",
+            })
+            .map_err(E::from)?;
+        self.try_for_each_resolved_spread_text_frame(
+            design_map,
+            &spread,
+            story_options,
+            |frame| {
+                frame
+                    .geometric_bounds
+                    .is_some_and(|bounds| bounds.intersects(page_bounds))
+            },
+            visit,
+        )
+    }
+
     fn from_archive(mut archive: ZipArchive<R>, limits: ArchiveLimits) -> Result<Self> {
         enforce_entry_count(archive.len(), limits.max_entries)?;
 
@@ -885,6 +1051,59 @@ where
         }
 
         Ok(texts)
+    }
+
+    fn try_for_each_resolved_spread_text_frame<E, F, P>(
+        &mut self,
+        design_map: &DesignMap,
+        spread: &Spread,
+        story_options: StoryParseOptions,
+        mut include: P,
+        mut visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+        P: FnMut(&crate::model::spread::TextFrame) -> bool,
+    {
+        let mut story_texts = IndexMap::new();
+
+        for frame in &spread.text_frames {
+            if !include(frame) {
+                continue;
+            }
+            let Some(story_id) = frame.parent_story.as_deref() else {
+                continue;
+            };
+            if !story_texts.contains_key(story_id) {
+                let path = design_map
+                    .story_srcs
+                    .get(story_id)
+                    .ok_or_else(|| IdmlError::MissingReference {
+                        kind: "text frame parent story",
+                        id: story_id.to_owned(),
+                    })
+                    .map_err(E::from)?;
+                let story = self
+                    .read_story_with_options(path, story_options)
+                    .map_err(E::from)?;
+                story_texts.insert(story_id.to_owned(), story.text);
+            }
+            let text = story_texts
+                .get(story_id)
+                .ok_or_else(|| IdmlError::MissingReference {
+                    kind: "text frame parent story",
+                    id: story_id.to_owned(),
+                })
+                .map_err(E::from)?;
+            visit(ResolvedTextFrame {
+                frame,
+                story_id,
+                text,
+            })?;
+        }
+
+        Ok(())
     }
 }
 
@@ -2220,6 +2439,84 @@ mod tests {
         assert_eq!(resolved[0].frame_id.as_deref(), Some("tf1"));
         assert_eq!(resolved[0].story_id, "u2");
         assert_eq!(resolved[0].text, "Hello layout");
+    }
+
+    #[test]
+    fn visits_spread_text_frames_without_collecting_all_stories() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+        let spread = br#"<Spread Self="u10">
+  <TextFrame Self="first" ParentStory="u1" GeometricBounds="0 0 72 72" />
+  <TextFrame Self="second" ParentStory="u2" GeometricBounds="100 100 200 200" />
+</Spread>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Spreads/Spread_u10.xml", spread),
+            (
+                "Stories/Story_u1.xml",
+                b"<Story><Content>First</Content></Story>",
+            ),
+            ("Stories/Story_u2.xml", b"<Story><Content>broken"),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let err = package
+            .try_for_each_spread_text_frame(&design_map, "u10", |frame| {
+                assert_eq!(frame.frame.id.as_deref(), Some("first"));
+                assert_eq!(frame.text, "First");
+                Err::<(), IdmlError>(IdmlError::InvalidPackage("visitor stopped"))
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, IdmlError::InvalidPackage("visitor stopped")));
+    }
+
+    #[test]
+    fn visiting_spread_text_in_rect_skips_nonmatching_story_reads() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+        let spread = br#"<Spread Self="u10">
+  <TextFrame Self="hit" ParentStory="u1" GeometricBounds="0 0 72 72" />
+  <TextFrame Self="miss" ParentStory="u2" GeometricBounds="200 200 300 300" />
+</Spread>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Spreads/Spread_u10.xml", spread),
+            (
+                "Stories/Story_u1.xml",
+                b"<Story><Content>Hit</Content></Story>",
+            ),
+            ("Stories/Story_u2.xml", b"<Story><Content>broken"),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let mut visited = Vec::new();
+        package
+            .try_for_each_spread_text_in_rect(
+                &design_map,
+                "u10",
+                Rect::new(
+                    crate::core::units::Points::new(10.0),
+                    crate::core::units::Points::new(10.0),
+                    crate::core::units::Points::new(80.0),
+                    crate::core::units::Points::new(80.0),
+                ),
+                |frame| {
+                    visited.push((frame.frame.id.clone(), frame.text.to_owned()));
+                    Ok::<(), IdmlError>(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(visited, vec![(Some("hit".to_owned()), "Hit".to_owned())]);
     }
 
     #[test]
