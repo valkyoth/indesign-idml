@@ -371,15 +371,26 @@ fn validate_resource_compression_ratio(
             reason: "compressed size is zero for non-empty deflated resource",
         });
     }
-    let ratio = metadata.uncompressed_size / metadata.compressed_size;
-    if ratio > options.max_compression_ratio {
+    let allowed_uncompressed = metadata
+        .compressed_size
+        .checked_mul(options.max_compression_ratio)
+        .ok_or(IdmlError::LimitExceeded {
+            what: "resource compression ratio limit product",
+            limit: u64::MAX,
+            actual: u64::MAX,
+        })?;
+    if metadata.uncompressed_size > allowed_uncompressed {
         return Err(IdmlError::LimitExceeded {
             what: "resource compression ratio",
             limit: options.max_compression_ratio,
-            actual: ratio,
+            actual: compression_ratio_ceil(metadata.uncompressed_size, metadata.compressed_size),
         });
     }
     Ok(())
+}
+
+fn compression_ratio_ceil(uncompressed_size: u64, compressed_size: u64) -> u64 {
+    uncompressed_size.saturating_add(compressed_size.saturating_sub(1)) / compressed_size
 }
 
 fn is_contents_element(event: &BytesStart<'_>) -> bool {
@@ -667,6 +678,36 @@ mod tests {
                 what: "resource compression ratio",
                 limit: 100,
                 actual: 200,
+            }
+        ));
+    }
+
+    #[test]
+    fn integrity_validation_rejects_fractional_compression_ratio_over_limit() {
+        let inventory = inventory_with_archive(
+            ResourceKind::Graphics,
+            "idPkg:Graphic",
+            "Resources/Graphic.xml",
+            ResourceArchiveMetadata {
+                compressed_size: 100,
+                uncompressed_size: 10_001,
+                compression: CompressionMethod::Deflated,
+            },
+        );
+
+        let err = inventory
+            .validate_integrity_with_options(ResourceIntegrityOptions {
+                max_compression_ratio: 100,
+                ..ResourceIntegrityOptions::default()
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource compression ratio",
+                limit: 100,
+                actual: 101,
             }
         ));
     }
