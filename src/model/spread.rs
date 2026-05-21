@@ -137,7 +137,9 @@ impl Spread {
                 }
                 Event::Empty(e) => {
                     xml_depth.visit_empty()?;
-                    if e.name().as_ref() == b"Page" {
+                    if e.name().as_ref() == b"Spread" && spread.id.is_none() {
+                        spread.id = optional_attr(&e, "Self", &reader)?;
+                    } else if e.name().as_ref() == b"Page" {
                         push_page_limited(
                             &mut spread.pages,
                             Page::from_xml_event(&e, &reader)?,
@@ -991,6 +993,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_empty_spread_root_id() {
+        let spread = Spread::from_xml(r#"<Spread Self="u10" />"#).unwrap();
+
+        assert_eq!(spread.id.as_deref(), Some("u10"));
+        assert!(spread.pages.is_empty());
+        assert!(spread.text_frames.is_empty());
+    }
+
+    #[test]
     fn parses_pages_with_bounds_in_order() {
         let xml = r#"<Spread Self="u10">
   <Page Self="p1" GeometricBounds="0 0 792 612" />
@@ -1191,6 +1202,20 @@ mod tests {
                 attribute: "ParentStory",
                 reason: "contains an XML-forbidden character",
             } if element == "TextFrame"
+        ));
+    }
+
+    #[test]
+    fn rejects_xml_forbidden_empty_spread_id_attribute_on_parse() {
+        let err = Spread::from_xml("<Spread Self=\"bad\0id\" />").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Self",
+                reason: "contains an XML-forbidden character",
+            } if element == "Spread"
         ));
     }
 

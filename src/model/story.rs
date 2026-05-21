@@ -107,7 +107,9 @@ impl Story {
                 }
                 Event::Empty(e) => {
                     xml_depth.visit_empty()?;
-                    if e.name().as_ref() == b"Br" {
+                    if e.name().as_ref() == b"Story" && id.is_none() {
+                        id = optional_attr(&e, "Self", &reader)?;
+                    } else if e.name().as_ref() == b"Br" {
                         push_limited(&mut text, "\n", options.max_text_bytes)?;
                     } else if e.name().as_ref() == b"Tab" {
                         push_limited(&mut text, "\t", options.max_text_bytes)?;
@@ -282,6 +284,14 @@ mod tests {
     }
 
     #[test]
+    fn parses_empty_story_root_id() {
+        let story = Story::from_xml(r#"<Story Self="u2" />"#).unwrap();
+
+        assert_eq!(story.id.as_deref(), Some("u2"));
+        assert_eq!(story.text, "");
+    }
+
+    #[test]
     fn enforces_story_text_limit() {
         let err = Story::from_xml_with_options(
             "<Story><Content>hello</Content></Story>",
@@ -337,6 +347,20 @@ mod tests {
     fn rejects_xml_forbidden_story_id_attribute_on_parse() {
         let err =
             Story::from_xml("<Story Self=\"bad\0id\"><Content>x</Content></Story>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Self",
+                reason: "contains an XML-forbidden character",
+            } if element == "Story"
+        ));
+    }
+
+    #[test]
+    fn rejects_xml_forbidden_empty_story_id_attribute_on_parse() {
+        let err = Story::from_xml("<Story Self=\"bad\0id\" />").unwrap_err();
 
         assert!(matches!(
             err,
