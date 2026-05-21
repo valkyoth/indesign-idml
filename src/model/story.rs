@@ -15,6 +15,9 @@ use quick_xml::events::{BytesStart, Event};
 /// Default maximum extracted text bytes for one story.
 pub const DEFAULT_MAX_STORY_TEXT_BYTES: usize = 64 * 1024 * 1024;
 
+/// Default maximum raw bytes accepted for one story XML attribute value.
+pub const DEFAULT_MAX_STORY_ATTRIBUTE_BYTES: usize = 256 * 1024;
+
 /// Story parser limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StoryParseOptions {
@@ -22,6 +25,8 @@ pub struct StoryParseOptions {
     pub max_xml_bytes: usize,
     /// Maximum UTF-8 bytes allowed in extracted story text.
     pub max_text_bytes: usize,
+    /// Maximum raw bytes accepted for one XML attribute value.
+    pub max_attribute_bytes: usize,
     /// Maximum XML element nesting depth accepted while parsing.
     pub max_xml_depth: usize,
 }
@@ -31,6 +36,7 @@ impl Default for StoryParseOptions {
         Self {
             max_xml_bytes: DEFAULT_MAX_XML_INPUT_BYTES,
             max_text_bytes: DEFAULT_MAX_STORY_TEXT_BYTES,
+            max_attribute_bytes: DEFAULT_MAX_STORY_ATTRIBUTE_BYTES,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
@@ -76,7 +82,7 @@ impl Story {
                         });
                     }
                     if e.name().as_ref() == b"Story" && id.is_none() {
-                        id = optional_attr(&e, "Self", &reader)?;
+                        id = optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?;
                     } else if e.name().as_ref() == b"Content" {
                         content_depth = 1;
                     }
@@ -137,7 +143,7 @@ impl Story {
                         });
                     }
                     if e.name().as_ref() == b"Story" && id.is_none() {
-                        id = optional_attr(&e, "Self", &reader)?;
+                        id = optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?;
                     } else if e.name().as_ref() == b"Br" {
                         push_limited(&mut text, "\n", options.max_text_bytes)?;
                     } else if e.name().as_ref() == b"Tab" {
@@ -177,6 +183,7 @@ fn optional_attr(
     event: &BytesStart<'_>,
     attribute: &'static str,
     reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
 ) -> Result<Option<String>> {
     let mut value = None;
     for attr in event.attributes() {
@@ -189,6 +196,7 @@ fn optional_attr(
                     reason: "duplicate attribute",
                 });
             }
+            enforce_story_attribute_bytes(attr.value.len(), max_attribute_bytes)?;
             let decoded = attr
                 .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
                 .into_owned();
@@ -201,6 +209,17 @@ fn optional_attr(
         }
     }
     Ok(value)
+}
+
+fn enforce_story_attribute_bytes(actual: usize, max_attribute_bytes: usize) -> Result<()> {
+    if actual > max_attribute_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what: "Story XML attribute bytes",
+            limit: max_attribute_bytes as u64,
+            actual: actual as u64,
+        });
+    }
+    Ok(())
 }
 
 fn push_limited(output: &mut String, text: &str, max_text_bytes: usize) -> Result<()> {
@@ -489,6 +508,27 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
+    }
+
+    #[test]
+    fn enforces_attribute_byte_limit_before_decoding() {
+        let err = Story::from_xml_with_options(
+            r#"<Story Self="u12345" />"#,
+            StoryParseOptions {
+                max_attribute_bytes: 5,
+                ..StoryParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "Story XML attribute bytes",
+                limit: 5,
+                actual: 6,
+            }
+        ));
     }
 
     #[test]

@@ -13,6 +13,7 @@ fuzz_target!(|data: &[u8]| {
         StoryParseOptions {
             max_xml_bytes: 1024 * 1024,
             max_text_bytes: 16 * 1024,
+            max_attribute_bytes: 4096,
             max_xml_depth: 256,
         },
     );

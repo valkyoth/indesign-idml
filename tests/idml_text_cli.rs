@@ -314,6 +314,24 @@ fn idml_text_enforces_story_xml_byte_limit() {
 }
 
 #[test]
+fn idml_text_enforces_story_attribute_byte_limit() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("sample.idml");
+    fs::write(&input, sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--max-story-attribute-bytes")
+        .arg("1")
+        .arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: limit exceeded for Story XML attribute bytes: limit 1, actual 2\n");
+}
+
+#[test]
 fn idml_text_enforces_story_xml_depth_limit() {
     let temp = tempdir().unwrap();
     let input = temp.path().join("sample.idml");
