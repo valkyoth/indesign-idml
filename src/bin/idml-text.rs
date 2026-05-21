@@ -296,103 +296,129 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     let file = File::open(input)?;
     let mut package = IdmlPackage::with_limits(file, archive_limits)?;
     let design_map = package.read_designmap_with_options(designmap_options)?;
-    let texts: Vec<String> = if all_spreads {
-        let mut texts = Vec::new();
-        for spread_id in design_map.spread_ids() {
-            texts.extend(
-                package
-                    .resolve_spread_text_frames_with_options(
+
+    with_output_writer(output, |output| {
+        let mut writer = TextWriter::new(output);
+        if all_spreads {
+            for spread_id in design_map.spread_ids() {
+                let frames = package.resolve_spread_text_frames_with_options(
+                    &design_map,
+                    spread_id,
+                    spread_options,
+                    story_options,
+                )?;
+                for frame in &frames {
+                    writer.write_text(&frame.text)?;
+                }
+            }
+        } else {
+            match (spread_id.as_deref(), page_id.as_deref(), rect_points) {
+                (Some(spread_id), Some(page_id), None) => {
+                    let frames = package.resolve_spread_text_on_page_with_options(
+                        &design_map,
+                        spread_id,
+                        page_id,
+                        spread_options,
+                        story_options,
+                    )?;
+                    for frame in &frames {
+                        writer.write_text(&frame.text)?;
+                    }
+                }
+                (Some(spread_id), None, Some(query)) => {
+                    let frames = package.resolve_spread_text_in_rect_with_options(
+                        &design_map,
+                        spread_id,
+                        query,
+                        spread_options,
+                        story_options,
+                    )?;
+                    for frame in &frames {
+                        writer.write_text(&frame.text)?;
+                    }
+                }
+                (Some(spread_id), None, None) => {
+                    let frames = package.resolve_spread_text_frames_with_options(
                         &design_map,
                         spread_id,
                         spread_options,
                         story_options,
-                    )?
-                    .into_iter()
-                    .map(|frame| frame.text),
-            );
-        }
-        texts
-    } else {
-        match (spread_id.as_deref(), page_id.as_deref(), rect_points) {
-            (Some(spread_id), Some(page_id), None) => package
-                .resolve_spread_text_on_page_with_options(
-                    &design_map,
-                    spread_id,
-                    page_id,
-                    spread_options,
-                    story_options,
-                )?
-                .into_iter()
-                .map(|frame| frame.text)
-                .collect(),
-            (Some(spread_id), None, Some(query)) => package
-                .resolve_spread_text_in_rect_with_options(
-                    &design_map,
-                    spread_id,
-                    query,
-                    spread_options,
-                    story_options,
-                )?
-                .into_iter()
-                .map(|frame| frame.text)
-                .collect(),
-            (Some(spread_id), None, None) => package
-                .resolve_spread_text_frames_with_options(
-                    &design_map,
-                    spread_id,
-                    spread_options,
-                    story_options,
-                )?
-                .into_iter()
-                .map(|frame| frame.text)
-                .collect(),
-            (None, None, None) => package
-                .extract_story_texts_with_options(&design_map, story_options)?
-                .into_values()
-                .collect(),
-            (None, Some(_), _) => return Err(CliError::Usage("--page-id requires --spread-id")),
-            (None, None, Some(_)) => {
-                return Err(CliError::Usage("--rect-points requires --spread-id"));
-            }
-            (Some(_), Some(_), Some(_)) => {
-                return Err(CliError::Usage(
-                    "--page-id and --rect-points cannot be combined",
-                ));
+                    )?;
+                    for frame in &frames {
+                        writer.write_text(&frame.text)?;
+                    }
+                }
+                (None, None, None) => {
+                    let texts =
+                        package.extract_story_texts_with_options(&design_map, story_options)?;
+                    for text in texts.values() {
+                        writer.write_text(text)?;
+                    }
+                }
+                (None, Some(_), _) => {
+                    return Err(CliError::Usage("--page-id requires --spread-id"));
+                }
+                (None, None, Some(_)) => {
+                    return Err(CliError::Usage("--rect-points requires --spread-id"));
+                }
+                (Some(_), Some(_), Some(_)) => {
+                    return Err(CliError::Usage(
+                        "--page-id and --rect-points cannot be combined",
+                    ));
+                }
             }
         }
-    };
-
-    match output {
-        OutputTarget::Stdout => {
-            let stdout = io::stdout();
-            write_texts(BufWriter::new(stdout.lock()), &texts)?;
-        }
-        OutputTarget::File(path) => {
-            let file = File::create(path)?;
-            write_texts(BufWriter::new(file), &texts)?;
-        }
-    }
+        Ok(())
+    })?;
 
     Ok(())
 }
 
-fn write_texts<'a>(
-    mut writer: impl Write,
-    texts: impl IntoIterator<Item = &'a String>,
+fn with_output_writer(
+    output: OutputTarget,
+    action: impl FnOnce(&mut dyn Write) -> Result<(), CliError>,
 ) -> Result<(), CliError> {
-    let mut first = true;
-    for text in texts {
-        if !first {
-            writer.write_all(b"\n")?;
+    match output {
+        OutputTarget::Stdout => {
+            let stdout = io::stdout();
+            let mut writer = BufWriter::new(stdout.lock());
+            action(&mut writer)?;
+            writer.flush()?;
         }
-        first = false;
-        writer.write_all(text.as_bytes())?;
-        if !text.ends_with('\n') {
-            writer.write_all(b"\n")?;
+        OutputTarget::File(path) => {
+            let file = File::create(path)?;
+            let mut writer = BufWriter::new(file);
+            action(&mut writer)?;
+            writer.flush()?;
         }
     }
-    writer.flush()?;
     Ok(())
+}
+
+struct TextWriter<'a, W: Write + ?Sized> {
+    writer: &'a mut W,
+    first: bool,
+}
+
+impl<'a, W: Write + ?Sized> TextWriter<'a, W> {
+    fn new(writer: &'a mut W) -> Self {
+        Self {
+            writer,
+            first: true,
+        }
+    }
+
+    fn write_text(&mut self, text: &str) -> Result<(), CliError> {
+        if !self.first {
+            self.writer.write_all(b"\n")?;
+        }
+        self.first = false;
+        self.writer.write_all(text.as_bytes())?;
+        if !text.ends_with('\n') {
+            self.writer.write_all(b"\n")?;
+        }
+        Ok(())
+    }
 }
 
 fn print_help() -> Result<(), CliError> {

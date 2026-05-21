@@ -45,6 +45,27 @@ fn idml_text_extracts_all_spread_text_to_stdout() {
 }
 
 #[test]
+fn idml_text_extracts_all_spread_text_to_file() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("layout.idml");
+    let output = temp.path().join("out.txt");
+    fs::write(&input, layout_sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command
+        .arg("--all-spreads")
+        .arg("--output")
+        .arg(&output)
+        .arg(&input);
+
+    command.assert().success();
+    assert_eq!(
+        fs::read_to_string(output).unwrap(),
+        "Page hit\n\nPage miss\n"
+    );
+}
+
+#[test]
 fn idml_text_extracts_page_text_to_stdout() {
     let temp = tempdir().unwrap();
     let input = temp.path().join("layout.idml");
