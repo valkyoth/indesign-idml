@@ -2,7 +2,8 @@
 
 use crate::archive::{ArchiveLimits, IdmlPackage, IdmlPackageWriter, IdmlPath};
 use crate::core::resolver::{
-    ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
+    ResolvedTextFrameData, page_by_id, resolve_text_frames, text_frames_intersecting,
+    text_frames_on_page, to_owned_records,
 };
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{
@@ -448,6 +449,19 @@ impl IdmlDocument {
         let story_texts = self.story_texts()?;
         let resolved = resolve_text_frames(spread, &story_texts)?;
         Ok(to_owned_records(text_frames_intersecting(resolved, query)))
+    }
+
+    /// Resolves text frames on a spread whose direct bounds intersect a page.
+    pub fn resolve_spread_text_on_page(
+        &self,
+        spread_id: &str,
+        page_id: &str,
+    ) -> Result<Vec<ResolvedTextFrameData>> {
+        let spread = self.spread(spread_id)?;
+        let story_texts = self.story_texts()?;
+        let resolved = resolve_text_frames(spread, &story_texts)?;
+        let page = page_by_id(spread, page_id)?;
+        Ok(to_owned_records(text_frames_on_page(resolved, page)?))
     }
 
     /// Validates and writes the aggregate as a complete IDML package.
@@ -1281,6 +1295,26 @@ mod tests {
 
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].frame_id.as_deref(), Some("tf1"));
+    }
+
+    #[test]
+    fn resolves_spread_text_frames_on_page_from_loaded_document() {
+        let mut document = make_document();
+        document.spreads.get_mut("u10").unwrap().pages.push(Page {
+            id: Some("p1".to_owned()),
+            geometric_bounds: Some(Rect::new(
+                Points::new(0.0),
+                Points::new(0.0),
+                Points::new(100.0),
+                Points::new(100.0),
+            )),
+        });
+
+        let resolved = document.resolve_spread_text_on_page("u10", "p1").unwrap();
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].frame_id.as_deref(), Some("tf1"));
+        assert_eq!(resolved[0].text, "Generated");
     }
 
     #[test]

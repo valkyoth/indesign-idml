@@ -1,7 +1,8 @@
 //! Secure ZIP archive inventory and bounded read support.
 
 use crate::core::resolver::{
-    ResolvedTextFrameData, resolve_text_frames, text_frames_intersecting, to_owned_records,
+    ResolvedTextFrameData, page_by_id, resolve_text_frames, text_frames_intersecting,
+    text_frames_on_page, to_owned_records,
 };
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{
@@ -543,6 +544,20 @@ where
         let story_texts = self.extract_required_story_texts(design_map, &spread)?;
         let resolved = resolve_text_frames(&spread, &story_texts)?;
         Ok(to_owned_records(text_frames_intersecting(resolved, query)))
+    }
+
+    /// Resolves text frames on a spread whose direct bounds intersect a page.
+    pub fn resolve_spread_text_on_page(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        page_id: &str,
+    ) -> Result<Vec<ResolvedTextFrameData>> {
+        let spread = self.resolve_spread(design_map, spread_id)?;
+        let story_texts = self.extract_required_story_texts(design_map, &spread)?;
+        let resolved = resolve_text_frames(&spread, &story_texts)?;
+        let page = page_by_id(&spread, page_id)?;
+        Ok(to_owned_records(text_frames_on_page(resolved, page)?))
     }
 
     fn from_archive(mut archive: ZipArchive<R>, limits: ArchiveLimits) -> Result<Self> {
@@ -1419,6 +1434,42 @@ mod tests {
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].frame_id.as_deref(), Some("hit"));
         assert_eq!(resolved[0].text, "Hit");
+    }
+
+    #[test]
+    fn resolves_spread_text_on_page() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+  <idPkg:Story src="Stories/Story_u2.xml" />
+</Document>"#;
+        let spread = br#"<Spread Self="u10">
+  <Page Self="p1" GeometricBounds="0 0 100 100" />
+  <TextFrame Self="hit" ParentStory="u1" GeometricBounds="10 10 20 20" />
+  <TextFrame Self="miss" ParentStory="u2" GeometricBounds="200 200 300 300" />
+</Spread>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Spreads/Spread_u10.xml", spread),
+            (
+                "Stories/Story_u1.xml",
+                b"<Story><Content>Page hit</Content></Story>",
+            ),
+            (
+                "Stories/Story_u2.xml",
+                b"<Story><Content>Page miss</Content></Story>",
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let design_map = package.read_designmap().unwrap();
+        let resolved = package
+            .resolve_spread_text_on_page(&design_map, "u10", "p1")
+            .unwrap();
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].frame_id.as_deref(), Some("hit"));
+        assert_eq!(resolved[0].text, "Page hit");
     }
 
     #[test]
