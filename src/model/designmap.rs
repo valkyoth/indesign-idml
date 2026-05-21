@@ -434,27 +434,11 @@ impl DesignMap {
     pub fn package_resource_pointers(
         &self,
     ) -> impl Iterator<Item = PackageResourcePointer<'_>> + '_ {
-        let pointers = if self.package_refs.is_empty() {
-            self.other_package_srcs
-                .iter()
-                .flat_map(|(element, paths)| {
-                    paths.iter().map(|path| PackageResourcePointer {
-                        element: element.as_str(),
-                        path,
-                    })
-                })
-                .collect::<Vec<_>>()
+        if self.package_refs.is_empty() {
+            PackageResourcePointerIter::from_maps(self.other_package_srcs.iter())
         } else {
-            self.package_refs
-                .iter()
-                .filter(|reference| is_untyped_package_element(&reference.element))
-                .map(|reference| PackageResourcePointer {
-                    element: reference.element.as_str(),
-                    path: &reference.path,
-                })
-                .collect::<Vec<_>>()
-        };
-        pointers.into_iter()
+            PackageResourcePointerIter::from_refs(self.package_refs.iter())
+        }
     }
 
     /// Serializes this design map into a standalone `designmap.xml` document.
@@ -491,6 +475,64 @@ impl DesignMap {
             });
         }
         Ok(())
+    }
+}
+
+enum PackageResourcePointerIter<'a> {
+    FromMaps {
+        outer: indexmap::map::Iter<'a, String, Vec<IdmlPath>>,
+        current_element: Option<&'a str>,
+        current_paths: Option<std::slice::Iter<'a, IdmlPath>>,
+    },
+    FromRefs(std::slice::Iter<'a, DesignMapPackageRef>),
+}
+
+impl<'a> PackageResourcePointerIter<'a> {
+    fn from_maps(outer: indexmap::map::Iter<'a, String, Vec<IdmlPath>>) -> Self {
+        Self::FromMaps {
+            outer,
+            current_element: None,
+            current_paths: None,
+        }
+    }
+
+    fn from_refs(references: std::slice::Iter<'a, DesignMapPackageRef>) -> Self {
+        Self::FromRefs(references)
+    }
+}
+
+impl<'a> Iterator for PackageResourcePointerIter<'a> {
+    type Item = PackageResourcePointer<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::FromMaps {
+                outer,
+                current_element,
+                current_paths,
+            } => loop {
+                if let (Some(element), Some(paths)) = (*current_element, current_paths.as_mut())
+                    && let Some(path) = paths.next()
+                {
+                    return Some(PackageResourcePointer { element, path });
+                }
+
+                let (element, paths) = outer.next()?;
+                *current_element = Some(element.as_str());
+                *current_paths = Some(paths.iter());
+            },
+            Self::FromRefs(references) => {
+                for reference in references {
+                    if is_untyped_package_element(&reference.element) {
+                        return Some(PackageResourcePointer {
+                            element: reference.element.as_str(),
+                            path: &reference.path,
+                        });
+                    }
+                }
+                None
+            }
+        }
     }
 }
 
@@ -1272,6 +1314,37 @@ mod tests {
                 ("idPkg:Fonts", "Resources/Fonts.xml"),
             ]
         );
+    }
+
+    #[test]
+    fn package_resource_pointers_iterate_manual_maps_lazily() {
+        let mut design_map = DesignMap::default();
+        design_map.other_package_srcs.insert(
+            "idPkg:Graphic".to_owned(),
+            vec![
+                IdmlPath::new("Resources/A.xml").unwrap(),
+                IdmlPath::new("Resources/B.xml").unwrap(),
+            ],
+        );
+        design_map.other_package_srcs.insert(
+            "idPkg:Fonts".to_owned(),
+            vec![IdmlPath::new("Resources/Fonts.xml").unwrap()],
+        );
+
+        let pointers = design_map
+            .package_resource_pointers()
+            .map(|pointer| (pointer.element(), pointer.path().as_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            pointers,
+            [
+                ("idPkg:Graphic", "Resources/A.xml"),
+                ("idPkg:Graphic", "Resources/B.xml"),
+                ("idPkg:Fonts", "Resources/Fonts.xml"),
+            ]
+        );
+        assert!(design_map.package_refs.is_empty());
     }
 
     #[test]

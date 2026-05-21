@@ -74,6 +74,8 @@ Hard rules:
   enforces the default package-reference ceiling before allocation.
 - Document generator APIs check package-reference capacity before mutating
   DesignMap maps, ordered package references, or model storage.
+- DesignMap resource pointer iteration is lazy and does not allocate a temporary
+  vector proportional to resource package-reference count.
 - Duplicate XML attributes are rejected instead of being silently overwritten or
   interpreted by first-match behavior.
 - Decoded XML attribute values captured into the model are validated against the
