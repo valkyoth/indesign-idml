@@ -240,6 +240,8 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_optional_self_id("story", &id, story.id.as_deref())?;
 
+        self.design_map
+            .ensure_package_ref_capacity_for_additional(1)?;
         self.design_map.ensure_package_refs_initialized()?;
         self.design_map.story_srcs.insert(id.clone(), path.clone());
         self.design_map
@@ -264,6 +266,8 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_optional_self_id("spread", &id, spread.id.as_deref())?;
 
+        self.design_map
+            .ensure_package_ref_capacity_for_additional(1)?;
         self.design_map.ensure_package_refs_initialized()?;
         self.design_map.spread_srcs.insert(id.clone(), path.clone());
         self.design_map
@@ -307,6 +311,8 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_supported_preserved_compression(entry.compression)?;
 
+        self.design_map
+            .ensure_package_ref_capacity_for_additional(1)?;
         self.design_map.ensure_package_refs_initialized()?;
         self.design_map
             .master_spread_srcs
@@ -333,6 +339,8 @@ impl IdmlDocument {
         ensure_new_package_path(&self.design_map, &path)?;
         validate_supported_preserved_compression(entry.compression)?;
 
+        self.design_map
+            .ensure_package_ref_capacity_for_additional(1)?;
         self.design_map.ensure_package_refs_initialized()?;
         self.design_map
             .other_package_srcs
@@ -941,7 +949,9 @@ mod tests {
     use crate::IdmlError;
     use crate::archive::{ArchiveLimits, IdmlPackage, IdmlPackageWriter, IdmlPath};
     use crate::core::units::Points;
-    use crate::model::designmap::{DesignMap, DesignMapParseOptions, Layer};
+    use crate::model::designmap::{
+        DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS, DesignMap, DesignMapParseOptions, Layer,
+    };
     use crate::model::resources::ResourceIntegrityOptions;
     use crate::model::spread::{
         Group, Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame,
@@ -1067,6 +1077,40 @@ mod tests {
                 id,
             } if id == "u10"
         ));
+    }
+
+    #[test]
+    fn add_story_rejects_package_ref_limit_without_mutating_document() {
+        let mut document = IdmlDocument::new(DesignMap::default());
+        document.design_map.other_package_srcs.insert(
+            "idPkg:Graphic".to_owned(),
+            (0..DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS)
+                .map(|index| IdmlPath::new(format!("Resources/Graphic_{index}.xml")).unwrap())
+                .collect(),
+        );
+
+        let err = document
+            .add_story(
+                "u1",
+                IdmlPath::new("Stories/Story_u1.xml").unwrap(),
+                Story {
+                    id: Some("u1".to_owned()),
+                    text: "not inserted".to_owned(),
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "DesignMap package reference count",
+                limit: 20_000,
+                actual: 20_001,
+            }
+        ));
+        assert!(document.design_map.package_refs.is_empty());
+        assert!(!document.design_map.story_srcs.contains_key("u1"));
+        assert!(!document.stories.contains_key("u1"));
     }
 
     #[test]

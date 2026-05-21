@@ -469,6 +469,29 @@ impl DesignMap {
         self.package_refs = package_refs_from_maps(self)?;
         Ok(())
     }
+
+    pub(crate) fn ensure_package_ref_capacity_for_additional(
+        &self,
+        additional: usize,
+    ) -> Result<()> {
+        let existing = serialized_package_ref_count(self)?;
+        let actual = existing
+            .checked_add(additional)
+            .ok_or(IdmlError::LimitExceeded {
+                what: "DesignMap package reference count",
+                limit: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS as u64,
+                actual: u64::MAX,
+            })?;
+
+        if actual > DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS {
+            return Err(IdmlError::LimitExceeded {
+                what: "DesignMap package reference count",
+                limit: DEFAULT_MAX_DESIGNMAP_PACKAGE_REFS as u64,
+                actual: actual as u64,
+            });
+        }
+        Ok(())
+    }
 }
 
 fn increment_package_refs(package_refs: &mut usize, max_package_refs: usize) -> Result<()> {
