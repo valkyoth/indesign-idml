@@ -29,6 +29,12 @@ pub const DEFAULT_MAX_EMBEDDED_ASSETS: usize = 10_000;
 /// Default maximum typed resource items accepted in one resource XML entry.
 pub const DEFAULT_MAX_RESOURCE_ITEMS: usize = 100_000;
 
+/// Default maximum attributes captured for one typed resource item.
+pub const DEFAULT_MAX_RESOURCE_ITEM_ATTRIBUTES: usize = 128;
+
+/// Default maximum total UTF-8 bytes captured from one resource item's attributes.
+pub const DEFAULT_MAX_RESOURCE_ITEM_ATTRIBUTE_BYTES: usize = 256 * 1024;
+
 /// Broad resource category inferred from a `designmap.xml` package reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResourceKind {
@@ -113,6 +119,10 @@ pub struct EmbeddedAssetParseOptions {
 pub struct ResourceItemParseOptions {
     /// Maximum resource items collected from one XML entry.
     pub max_items: usize,
+    /// Maximum attributes captured for one item.
+    pub max_item_attributes: usize,
+    /// Maximum total UTF-8 bytes captured from one item's attribute names and values.
+    pub max_item_attribute_bytes: usize,
     /// Maximum XML element nesting depth accepted while parsing.
     pub max_xml_depth: usize,
 }
@@ -134,6 +144,8 @@ impl Default for ResourceItemParseOptions {
     fn default() -> Self {
         Self {
             max_items: DEFAULT_MAX_RESOURCE_ITEMS,
+            max_item_attributes: DEFAULT_MAX_RESOURCE_ITEM_ATTRIBUTES,
+            max_item_attribute_bytes: DEFAULT_MAX_RESOURCE_ITEM_ATTRIBUTE_BYTES,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
@@ -159,6 +171,8 @@ pub struct ResourceItem {
     pub id: Option<String>,
     /// Human-readable name, when present.
     pub name: Option<String>,
+    /// Captured XML attributes in source order.
+    pub attributes: IndexMap<String, String>,
 }
 
 /// Typed item inventory for one manifest-referenced resource entry.
@@ -436,11 +450,11 @@ pub fn extract_resource_items_with_options(
         match reader.read_event()? {
             Event::Start(e) => {
                 xml_depth.enter()?;
-                maybe_push_resource_item(&mut items, &e, &reader, &kind, options.max_items)?;
+                maybe_push_resource_item(&mut items, &e, &reader, &kind, options)?;
             }
             Event::Empty(e) => {
                 xml_depth.visit_empty()?;
-                maybe_push_resource_item(&mut items, &e, &reader, &kind, options.max_items)?;
+                maybe_push_resource_item(&mut items, &e, &reader, &kind, options)?;
             }
             Event::End(_) => {
                 xml_depth.exit();
@@ -582,26 +596,25 @@ fn maybe_push_resource_item(
     event: &BytesStart<'_>,
     reader: &Reader<&[u8]>,
     kind: &ResourceKind,
-    max_items: usize,
+    options: ResourceItemParseOptions,
 ) -> Result<()> {
     if !resource_kind_matches_element(kind, event.name().as_ref()) {
         return Ok(());
     }
 
-    let id = optional_resource_attr(event, reader, &[b"Self", b"Id", b"ID"])?;
-    let name = optional_resource_attr(
-        event,
-        reader,
-        &[b"Name", b"FullName", b"AppliedFont", b"Label"],
-    )?;
+    let attributes = collect_resource_attrs_limited(event, reader, options)?;
+    let id = first_attr_value(&attributes, &["Self", "Id", "ID"]).map(str::to_owned);
+    let name = first_attr_value(&attributes, &["Name", "FullName", "AppliedFont", "Label"])
+        .map(str::to_owned);
     push_resource_item_limited(
         items,
-        max_items,
+        options.max_items,
         ResourceItem {
             kind: kind.clone(),
             element: String::from_utf8_lossy(event.name().as_ref()).into_owned(),
             id,
             name,
+            attributes,
         },
     )
 }
@@ -642,21 +655,62 @@ fn resource_kind_matches_element(kind: &ResourceKind, name: &[u8]) -> bool {
     }
 }
 
-fn optional_resource_attr(
+fn collect_resource_attrs_limited(
     event: &BytesStart<'_>,
     reader: &Reader<&[u8]>,
-    names: &[&[u8]],
-) -> Result<Option<String>> {
+    options: ResourceItemParseOptions,
+) -> Result<IndexMap<String, String>> {
+    let mut attributes = IndexMap::new();
+    let mut total_bytes = 0usize;
+
     for attr in event.attributes() {
         let attr = attr?;
-        if names.contains(&attr.key.as_ref()) {
-            return Ok(Some(
-                attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
-                    .into_owned(),
-            ));
+        let name = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let value = attr
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
+            .into_owned();
+        let next_count = attributes
+            .len()
+            .checked_add(1)
+            .ok_or(IdmlError::LimitExceeded {
+                what: "resource item attribute count",
+                limit: options.max_item_attributes as u64,
+                actual: u64::MAX,
+            })?;
+        if next_count > options.max_item_attributes {
+            return Err(IdmlError::LimitExceeded {
+                what: "resource item attribute count",
+                limit: options.max_item_attributes as u64,
+                actual: next_count as u64,
+            });
         }
+        total_bytes = total_bytes
+            .checked_add(name.len())
+            .and_then(|total| total.checked_add(value.len()))
+            .ok_or(IdmlError::LimitExceeded {
+                what: "resource item attribute bytes",
+                limit: options.max_item_attribute_bytes as u64,
+                actual: u64::MAX,
+            })?;
+        if total_bytes > options.max_item_attribute_bytes {
+            return Err(IdmlError::LimitExceeded {
+                what: "resource item attribute bytes",
+                limit: options.max_item_attribute_bytes as u64,
+                actual: total_bytes as u64,
+            });
+        }
+        attributes.insert(name, value);
     }
-    Ok(None)
+    Ok(attributes)
+}
+
+fn first_attr_value<'a>(
+    attributes: &'a IndexMap<String, String>,
+    names: &[&str],
+) -> Option<&'a str> {
+    names
+        .iter()
+        .find_map(|name| attributes.get(*name).map(String::as_str))
 }
 
 fn push_resource_item_limited(
@@ -929,6 +983,8 @@ mod tests {
         assert_eq!(items[0].element, "ParagraphStyle");
         assert_eq!(items[0].id.as_deref(), Some("p1"));
         assert_eq!(items[0].name.as_deref(), Some("Body"));
+        assert_eq!(items[0].attributes["Self"], "p1");
+        assert_eq!(items[0].attributes["Name"], "Body");
         assert_eq!(items[1].element, "CharacterStyle");
     }
 
@@ -955,10 +1011,8 @@ mod tests {
             1
         );
         assert_eq!(
-            extract_resource_items(xml, ResourceKind::Links)
-                .unwrap()
-                .len(),
-            1
+            extract_resource_items(xml, ResourceKind::Links).unwrap()[0].attributes["LinkResourceURI"],
+            "file:///image.tif"
         );
         assert_eq!(
             extract_resource_items(xml, ResourceKind::Graphics)
@@ -972,6 +1026,50 @@ mod tests {
                 .as_deref(),
             Some("Headline")
         );
+    }
+
+    #[test]
+    fn resource_item_parser_enforces_attribute_count_limit() {
+        let err = extract_resource_items_with_options(
+            r#"<Styles><ParagraphStyle Self="p1" Name="Body" BasedOn="Base" /></Styles>"#,
+            ResourceKind::Styles,
+            ResourceItemParseOptions {
+                max_item_attributes: 2,
+                ..ResourceItemParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item attribute count",
+                limit: 2,
+                actual: 3,
+            }
+        ));
+    }
+
+    #[test]
+    fn resource_item_parser_enforces_attribute_byte_limit() {
+        let err = extract_resource_items_with_options(
+            r#"<Styles><ParagraphStyle Self="p1" Name="Body" /></Styles>"#,
+            ResourceKind::Styles,
+            ResourceItemParseOptions {
+                max_item_attribute_bytes: 10,
+                ..ResourceItemParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "resource item attribute bytes",
+                limit: 10,
+                ..
+            }
+        ));
     }
 
     #[test]
