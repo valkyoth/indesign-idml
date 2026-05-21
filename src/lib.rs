@@ -56,5 +56,6 @@ mod tests {
         let _: Option<crate::prelude::ResourceKind> = None;
         let _: Option<crate::prelude::EmbeddedAsset> = None;
         let _: Option<crate::prelude::EmbeddedAssetParseOptions> = None;
+        let _: Option<crate::prelude::SpreadParseOptions> = None;
     }
 }

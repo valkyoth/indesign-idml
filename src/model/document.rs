@@ -7,7 +7,7 @@ use crate::core::resolver::{
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, validate_package_element_name};
 use crate::model::resources::{ResourceIntegrityOptions, ResourceInventory};
-use crate::model::spread::{Rect, Spread};
+use crate::model::spread::{Rect, Spread, SpreadParseOptions};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::{IndexMap, IndexSet};
 use std::io::{Read, Seek, Write};
@@ -31,6 +31,8 @@ pub struct IdmlDocument {
 pub struct IdmlDocumentReadOptions {
     /// Story parser limits.
     pub story: StoryParseOptions,
+    /// Spread parser limits.
+    pub spread: SpreadParseOptions,
     /// Resource metadata integrity limits applied before preserved entries are read.
     pub resources: ResourceIntegrityOptions,
 }
@@ -371,7 +373,7 @@ impl IdmlDocument {
             document.insert_story(id, package.read_story_with_options(&path, options.story)?);
         }
         for (id, path) in spread_refs {
-            document.insert_spread(id, package.read_spread(&path)?);
+            document.insert_spread(id, package.read_spread_with_options(&path, options.spread)?);
         }
         for path in preserved_refs {
             let compression = package
@@ -718,7 +720,7 @@ mod tests {
     use crate::core::units::Points;
     use crate::model::designmap::DesignMap;
     use crate::model::resources::ResourceIntegrityOptions;
-    use crate::model::spread::{Rect, Spread, TextFrame};
+    use crate::model::spread::{Rect, Spread, SpreadParseOptions, TextFrame};
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::Cursor;
     use zip::CompressionMethod;
@@ -1322,6 +1324,29 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
+    }
+
+    #[test]
+    fn read_from_package_with_options_enforces_spread_text_frame_limit() {
+        let document = make_document();
+        let zip = document
+            .write_to(Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = IdmlDocument::read_from_package_with_options(
+            &mut package,
+            IdmlDocumentReadOptions {
+                spread: SpreadParseOptions { max_text_frames: 0 },
+                ..IdmlDocumentReadOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, IdmlError::LimitExceeded { what, .. } if what == "spread text frame count")
+        );
     }
 
     #[test]

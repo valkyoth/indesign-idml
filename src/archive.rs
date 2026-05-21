@@ -11,7 +11,7 @@ use crate::model::resources::{
     EmbeddedAsset, EmbeddedAssetParseOptions, ResourceIntegrityOptions, ResourceInventory,
     extract_embedded_assets_with_options,
 };
-use crate::model::spread::{Rect, Spread};
+use crate::model::spread::{Rect, Spread, SpreadParseOptions};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::IndexMap;
 use std::fmt;
@@ -316,9 +316,18 @@ where
 
     /// Reads and parses a spread XML entry.
     pub fn read_spread(&mut self, path: &IdmlPath) -> Result<Spread> {
+        self.read_spread_with_options(path, SpreadParseOptions::default())
+    }
+
+    /// Reads and parses a spread XML entry with explicit parser limits.
+    pub fn read_spread_with_options(
+        &mut self,
+        path: &IdmlPath,
+        options: SpreadParseOptions,
+    ) -> Result<Spread> {
         let bytes = self.read_entry(path)?;
         let xml = std::str::from_utf8(&bytes)?;
-        Spread::from_xml(xml)
+        Spread::from_xml_with_options(xml, options)
     }
 
     /// Reads an XML entry and extracts embedded Base64 assets with secure defaults.
@@ -354,6 +363,15 @@ where
     /// Resolves a lazy spread pointer and parses that spread.
     pub fn resolve_spread_pointer(&mut self, pointer: SpreadPointer<'_>) -> Result<Spread> {
         self.read_spread(pointer.path())
+    }
+
+    /// Resolves a lazy spread pointer with explicit parser limits.
+    pub fn resolve_spread_pointer_with_options(
+        &mut self,
+        pointer: SpreadPointer<'_>,
+        options: SpreadParseOptions,
+    ) -> Result<Spread> {
+        self.read_spread_with_options(pointer.path(), options)
     }
 
     /// Resolves a lazy master spread pointer and returns its raw XML bytes.
@@ -421,6 +439,16 @@ where
 
     /// Resolves a spread ID through a parsed design map and parses that spread.
     pub fn resolve_spread(&mut self, design_map: &DesignMap, spread_id: &str) -> Result<Spread> {
+        self.resolve_spread_with_options(design_map, spread_id, SpreadParseOptions::default())
+    }
+
+    /// Resolves a spread ID through a parsed design map with explicit parser limits.
+    pub fn resolve_spread_with_options(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        options: SpreadParseOptions,
+    ) -> Result<Spread> {
         let path =
             design_map
                 .spread_srcs
@@ -429,7 +457,7 @@ where
                     kind: "spread",
                     id: spread_id.to_owned(),
                 })?;
-        self.read_spread(path)
+        self.read_spread_with_options(path, options)
     }
 
     /// Resolves a story ID and returns only its extracted text.
@@ -717,7 +745,7 @@ mod tests {
     use crate::encoding::Base64Mode;
     use crate::model::designmap::DesignMap;
     use crate::model::resources::{EmbeddedAssetParseOptions, ResourceIntegrityOptions};
-    use crate::model::spread::{Rect, Spread, TextFrame};
+    use crate::model::spread::{Rect, Spread, SpreadParseOptions, TextFrame};
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::{Cursor, Write};
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
@@ -967,6 +995,24 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
+    }
+
+    #[test]
+    fn read_spread_with_options_enforces_text_frame_limit() {
+        let zip = make_zip(&[(
+            "Spreads/Spread_u10.xml",
+            br#"<Spread><TextFrame Self="tf1" /><TextFrame Self="tf2" /></Spread>"#,
+        )]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let path = IdmlPath::new("Spreads/Spread_u10.xml").unwrap();
+
+        let err = package
+            .read_spread_with_options(&path, SpreadParseOptions { max_text_frames: 1 })
+            .unwrap_err();
+
+        assert!(
+            matches!(err, IdmlError::LimitExceeded { what, .. } if what == "spread text frame count")
+        );
     }
 
     #[test]

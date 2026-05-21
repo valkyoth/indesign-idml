@@ -18,9 +18,32 @@ pub struct Spread {
     pub text_frames: Vec<TextFrame>,
 }
 
+/// Default maximum text frames accepted in one spread.
+pub const DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD: usize = 100_000;
+
+/// Spread parser limits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpreadParseOptions {
+    /// Maximum `TextFrame` elements collected from one spread.
+    pub max_text_frames: usize,
+}
+
+impl Default for SpreadParseOptions {
+    fn default() -> Self {
+        Self {
+            max_text_frames: DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD,
+        }
+    }
+}
+
 impl Spread {
     /// Parses a spread XML document.
     pub fn from_xml(xml_content: &str) -> Result<Self> {
+        Self::from_xml_with_options(xml_content, SpreadParseOptions::default())
+    }
+
+    /// Parses a spread XML document with explicit limits.
+    pub fn from_xml_with_options(xml_content: &str, options: SpreadParseOptions) -> Result<Self> {
         let mut reader = Reader::from_str(xml_content);
         reader.config_mut().trim_text(true);
 
@@ -32,9 +55,11 @@ impl Spread {
                     spread.id = optional_attr(&e, "Self", &reader)?;
                 }
                 Event::Start(e) | Event::Empty(e) if e.name().as_ref() == b"TextFrame" => {
-                    spread
-                        .text_frames
-                        .push(TextFrame::from_xml_event(&e, &reader)?);
+                    push_text_frame_limited(
+                        &mut spread.text_frames,
+                        TextFrame::from_xml_event(&e, &reader)?,
+                        options.max_text_frames,
+                    )?;
                 }
                 Event::Eof => break,
                 _ => {}
@@ -219,6 +244,32 @@ fn parse_geometric_bounds(value: &str) -> Result<Rect> {
     Ok(rect)
 }
 
+fn push_text_frame_limited(
+    text_frames: &mut Vec<TextFrame>,
+    text_frame: TextFrame,
+    max_text_frames: usize,
+) -> Result<()> {
+    let next_len = text_frames
+        .len()
+        .checked_add(1)
+        .ok_or(IdmlError::LimitExceeded {
+            what: "spread text frame count",
+            limit: max_text_frames as u64,
+            actual: u64::MAX,
+        })?;
+
+    if next_len > max_text_frames {
+        return Err(IdmlError::LimitExceeded {
+            what: "spread text frame count",
+            limit: max_text_frames as u64,
+            actual: next_len as u64,
+        });
+    }
+
+    text_frames.push(text_frame);
+    Ok(())
+}
+
 fn serialize_spread(spread: &Spread) -> Result<String> {
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Spread");
@@ -304,7 +355,7 @@ fn push_attr(
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, Spread, TextFrame};
+    use super::{Rect, Spread, SpreadParseOptions, TextFrame};
     use crate::IdmlError;
     use crate::core::units::Points;
 
@@ -371,6 +422,24 @@ mod tests {
                 attribute: "GeometricBounds",
                 reason: "coordinate must be finite",
                 ..
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_text_frame_count_limit() {
+        let err = Spread::from_xml_with_options(
+            r#"<Spread><TextFrame Self="tf1" /><TextFrame Self="tf2" /></Spread>"#,
+            SpreadParseOptions { max_text_frames: 1 },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread text frame count",
+                limit: 1,
+                actual: 2,
             }
         ));
     }

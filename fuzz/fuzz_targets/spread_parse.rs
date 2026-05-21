@@ -1,6 +1,6 @@
 #![no_main]
 
-use indesign_idml::model::spread::Spread;
+use indesign_idml::model::spread::{Spread, SpreadParseOptions};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -8,5 +8,10 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    let _ = Spread::from_xml(xml);
+    let _ = Spread::from_xml_with_options(
+        xml,
+        SpreadParseOptions {
+            max_text_frames: 1024,
+        },
+    );
 });
