@@ -5,7 +5,8 @@ use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
     DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
-    configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype, validate_xml_attribute,
+    configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype,
+    reject_xml_entity_reference, validate_xml_attribute,
 };
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -185,6 +186,7 @@ impl Spread {
                 }
                 Event::GeneralRef(_) => {
                     root.visit_reference()?;
+                    reject_xml_entity_reference()?;
                 }
                 Event::DocType(_) => reject_xml_doctype()?,
                 Event::Eof => break,
@@ -663,6 +665,7 @@ fn parse_group_contents(
             }
             Event::GeneralRef(_) => {
                 root.visit_reference()?;
+                reject_xml_entity_reference()?;
             }
             Event::DocType(_) => reject_xml_doctype()?,
             Event::Eof => {
@@ -1074,6 +1077,32 @@ mod tests {
                 element,
                 reason: "non-whitespace character data outside root element",
             } if element == "#text"
+        ));
+    }
+
+    #[test]
+    fn rejects_entity_references_inside_spread_body() {
+        let err = Spread::from_xml("<Spread>&amp;</Spread>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "entity references are not supported here",
+            } if element == "#reference"
+        ));
+    }
+
+    #[test]
+    fn rejects_entity_references_inside_group_body() {
+        let err = Spread::from_xml("<Spread><Group>&amp;</Group></Spread>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "entity references are not supported here",
+            } if element == "#reference"
         ));
     }
 

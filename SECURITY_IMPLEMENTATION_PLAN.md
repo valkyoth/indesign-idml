@@ -68,6 +68,8 @@ Hard rules:
   markup and entity references are rejected before Base64 decoding.
 - Non-whitespace character data, CDATA, and entity references outside the root
   element are rejected instead of being ignored.
+- XML entity references are accepted only in explicit story text `Content` or
+  decoded attribute values; structural element bodies reject them.
 - EOF before closing the root or a nested Group is rejected as malformed XML
   state instead of producing a partial model.
 - Resource XML extractors finalize depth tracking and reject EOF inside open

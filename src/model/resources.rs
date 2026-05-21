@@ -6,7 +6,8 @@ use crate::error::{IdmlError, Result};
 use crate::model::designmap::{DesignMap, PackageResourcePointer, validate_package_element_name};
 use crate::xml::{
     AnyRootTracker, DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker,
-    configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype, validate_xml_attribute,
+    configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype,
+    reject_xml_entity_reference, validate_xml_attribute,
 };
 use indexmap::IndexMap;
 use quick_xml::Reader;
@@ -472,6 +473,7 @@ pub fn extract_embedded_assets_with_options(
                         reason: "entity reference inside embedded asset contents",
                     });
                 }
+                reject_xml_entity_reference()?;
             }
             Event::DocType(_) => reject_xml_doctype()?,
             Event::Eof => break,
@@ -538,6 +540,7 @@ pub fn extract_resource_items_with_options(
             }
             Event::GeneralRef(_) => {
                 root.visit_reference()?;
+                reject_xml_entity_reference()?;
             }
             Event::DocType(_) => reject_xml_doctype()?,
             Event::Eof => break,
@@ -1353,6 +1356,23 @@ mod tests {
     }
 
     #[test]
+    fn resource_item_parser_rejects_entity_references_inside_root() {
+        let err = extract_resource_items(
+            r#"<Styles>&amp;<ParagraphStyle Self="p1" /></Styles>"#,
+            ResourceKind::Styles,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "entity references are not supported here",
+            } if element == "#reference"
+        ));
+    }
+
+    #[test]
     fn resource_item_parser_rejects_malformed_comments() {
         let err = extract_resource_items(
             r#"<Styles><!-- invalid -- comment --><ParagraphStyle Self="p1" /></Styles>"#,
@@ -1942,6 +1962,20 @@ mod tests {
             IdmlError::InvalidElement {
                 element,
                 reason: "entity reference inside embedded asset contents",
+            } if element == "#reference"
+        ));
+    }
+
+    #[test]
+    fn embedded_asset_parser_rejects_entity_references_inside_root() {
+        let err =
+            extract_embedded_assets("<Image>&amp;<Contents>aGk=</Contents></Image>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "entity references are not supported here",
             } if element == "#reference"
         ));
     }

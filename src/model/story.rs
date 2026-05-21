@@ -4,8 +4,8 @@ use crate::error::{IdmlError, Result};
 use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
     DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, RootElementTracker, XmlDepthTracker,
-    configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype, validate_xml_attribute,
-    validate_xml_text,
+    configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype,
+    reject_xml_entity_reference, validate_xml_attribute, validate_xml_text,
 };
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -123,6 +123,8 @@ impl Story {
                                 })?;
                             push_limited(&mut text, replacement, options.max_text_bytes)?;
                         }
+                    } else {
+                        reject_xml_entity_reference()?;
                     }
                 }
                 Event::Empty(e) => {
@@ -393,6 +395,19 @@ mod tests {
                 element,
                 reason: "DOCTYPE declarations are not supported",
             } if element == "!DOCTYPE"
+        ));
+    }
+
+    #[test]
+    fn rejects_entity_references_outside_content() {
+        let err = Story::from_xml("<Story>&amp;<Content>x</Content></Story>").unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidElement {
+                element,
+                reason: "entity references are not supported here",
+            } if element == "#reference"
         ));
     }
 

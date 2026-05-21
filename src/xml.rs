@@ -20,6 +20,13 @@ pub(crate) fn reject_xml_doctype() -> Result<()> {
     })
 }
 
+pub(crate) fn reject_xml_entity_reference() -> Result<()> {
+    Err(IdmlError::InvalidElement {
+        element: "#reference".to_owned(),
+        reason: "entity references are not supported here",
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RootElementTracker {
     expected_name: &'static [u8],
