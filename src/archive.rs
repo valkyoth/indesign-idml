@@ -927,7 +927,15 @@ fn enforce_entry_compression_ratio(
 }
 
 fn compression_ratio_ceil(uncompressed_size: u64, compressed_size: u64) -> u64 {
-    uncompressed_size.saturating_add(compressed_size.saturating_sub(1)) / compressed_size
+    if compressed_size == 0 {
+        return u64::MAX;
+    }
+    let quotient = uncompressed_size / compressed_size;
+    if uncompressed_size.is_multiple_of(compressed_size) {
+        quotient
+    } else {
+        quotient.saturating_add(1)
+    }
 }
 
 fn deterministic_file_options(compression: CompressionMethod) -> SimpleFileOptions {
@@ -1214,6 +1222,12 @@ mod tests {
                 actual,
             } if actual > 1
         ));
+    }
+
+    #[test]
+    fn archive_compression_ratio_ceil_handles_overflow_boundary() {
+        assert_eq!(super::compression_ratio_ceil(u64::MAX, 2), 1 << 63);
+        assert_eq!(super::compression_ratio_ceil(u64::MAX, 0), u64::MAX);
     }
 
     #[test]

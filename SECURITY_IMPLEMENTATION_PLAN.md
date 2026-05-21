@@ -48,6 +48,8 @@ Hard rules:
   path validation or writer emission.
 - Archive inventory rejects encrypted entries and non-regular file metadata
   such as symlinks.
+- Compression-ratio diagnostics use division/remainder ceiling arithmetic
+  instead of addition-based formulas that can overflow at ZIP metadata limits.
 - Direct XML parser entry points enforce configured XML byte limits before event
   parsing.
 - Duplicate XML attributes are rejected instead of being silently overwritten or
