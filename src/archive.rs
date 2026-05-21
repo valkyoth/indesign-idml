@@ -525,8 +525,25 @@ where
         design_map: &DesignMap,
         spread_id: &str,
     ) -> Result<Vec<ResolvedTextFrameData>> {
-        let spread = self.resolve_spread(design_map, spread_id)?;
-        let story_texts = self.extract_required_story_texts(design_map, &spread)?;
+        self.resolve_spread_text_frames_with_options(
+            design_map,
+            spread_id,
+            SpreadParseOptions::default(),
+            StoryParseOptions::default(),
+        )
+    }
+
+    /// Resolves all text frames on a spread with explicit parser limits.
+    pub fn resolve_spread_text_frames_with_options(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        spread_options: SpreadParseOptions,
+        story_options: StoryParseOptions,
+    ) -> Result<Vec<ResolvedTextFrameData>> {
+        let spread = self.resolve_spread_with_options(design_map, spread_id, spread_options)?;
+        let story_texts =
+            self.extract_required_story_texts_with_options(design_map, &spread, story_options)?;
         Ok(to_owned_records(resolve_text_frames(
             &spread,
             &story_texts,
@@ -540,8 +557,27 @@ where
         spread_id: &str,
         query: Rect,
     ) -> Result<Vec<ResolvedTextFrameData>> {
-        let spread = self.resolve_spread(design_map, spread_id)?;
-        let story_texts = self.extract_required_story_texts(design_map, &spread)?;
+        self.resolve_spread_text_in_rect_with_options(
+            design_map,
+            spread_id,
+            query,
+            SpreadParseOptions::default(),
+            StoryParseOptions::default(),
+        )
+    }
+
+    /// Resolves text frames on a spread intersecting `query` with explicit parser limits.
+    pub fn resolve_spread_text_in_rect_with_options(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        query: Rect,
+        spread_options: SpreadParseOptions,
+        story_options: StoryParseOptions,
+    ) -> Result<Vec<ResolvedTextFrameData>> {
+        let spread = self.resolve_spread_with_options(design_map, spread_id, spread_options)?;
+        let story_texts =
+            self.extract_required_story_texts_with_options(design_map, &spread, story_options)?;
         let resolved = resolve_text_frames(&spread, &story_texts)?;
         Ok(to_owned_records(text_frames_intersecting(resolved, query)))
     }
@@ -553,8 +589,27 @@ where
         spread_id: &str,
         page_id: &str,
     ) -> Result<Vec<ResolvedTextFrameData>> {
-        let spread = self.resolve_spread(design_map, spread_id)?;
-        let story_texts = self.extract_required_story_texts(design_map, &spread)?;
+        self.resolve_spread_text_on_page_with_options(
+            design_map,
+            spread_id,
+            page_id,
+            SpreadParseOptions::default(),
+            StoryParseOptions::default(),
+        )
+    }
+
+    /// Resolves text frames on a page with explicit parser limits.
+    pub fn resolve_spread_text_on_page_with_options(
+        &mut self,
+        design_map: &DesignMap,
+        spread_id: &str,
+        page_id: &str,
+        spread_options: SpreadParseOptions,
+        story_options: StoryParseOptions,
+    ) -> Result<Vec<ResolvedTextFrameData>> {
+        let spread = self.resolve_spread_with_options(design_map, spread_id, spread_options)?;
+        let story_texts =
+            self.extract_required_story_texts_with_options(design_map, &spread, story_options)?;
         let resolved = resolve_text_frames(&spread, &story_texts)?;
         let page = page_by_id(&spread, page_id)?;
         Ok(to_owned_records(text_frames_on_page(resolved, page)?))
@@ -630,10 +685,11 @@ where
         Ok(())
     }
 
-    fn extract_required_story_texts(
+    fn extract_required_story_texts_with_options(
         &mut self,
         design_map: &DesignMap,
         spread: &Spread,
+        options: StoryParseOptions,
     ) -> Result<IndexMap<String, String>> {
         let mut texts = IndexMap::new();
 
@@ -652,7 +708,7 @@ where
                         kind: "text frame parent story",
                         id: story_id.to_owned(),
                     })?;
-            let story = self.read_story(path)?;
+            let story = self.read_story_with_options(path, options)?;
             texts.insert(story_id.to_owned(), story.text);
         }
 
@@ -1470,6 +1526,90 @@ mod tests {
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].frame_id.as_deref(), Some("hit"));
         assert_eq!(resolved[0].text, "Page hit");
+    }
+
+    #[test]
+    fn resolve_spread_text_with_options_enforces_spread_limits() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+        let spread = br#"<Spread Self="u10">
+  <TextFrame Self="tf1" ParentStory="u1" GeometricBounds="10 10 20 20" />
+</Spread>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Spreads/Spread_u10.xml", spread),
+            (
+                "Stories/Story_u1.xml",
+                b"<Story><Content>Text</Content></Story>",
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let design_map = package.read_designmap().unwrap();
+
+        let err = package
+            .resolve_spread_text_frames_with_options(
+                &design_map,
+                "u10",
+                SpreadParseOptions {
+                    max_text_frames: 0,
+                    ..SpreadParseOptions::default()
+                },
+                StoryParseOptions::default(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread text frame count",
+                limit: 0,
+                actual: 1,
+            }
+        ));
+    }
+
+    #[test]
+    fn resolve_spread_text_with_options_enforces_story_limits() {
+        let designmap = br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#;
+        let spread = br#"<Spread Self="u10">
+  <TextFrame Self="tf1" ParentStory="u1" GeometricBounds="10 10 20 20" />
+</Spread>"#;
+        let zip = make_zip(&[
+            ("designmap.xml", designmap),
+            ("Spreads/Spread_u10.xml", spread),
+            (
+                "Stories/Story_u1.xml",
+                b"<Story><Content>Text</Content></Story>",
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+        let design_map = package.read_designmap().unwrap();
+
+        let err = package
+            .resolve_spread_text_frames_with_options(
+                &design_map,
+                "u10",
+                SpreadParseOptions::default(),
+                StoryParseOptions {
+                    max_text_bytes: 3,
+                    ..StoryParseOptions::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "story text bytes",
+                limit: 3,
+                actual: 4,
+            }
+        ));
     }
 
     #[test]
