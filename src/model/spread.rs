@@ -532,8 +532,71 @@ pub struct TextFrame {
     pub parent_story: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Common page item metadata.
+    pub metadata: PageItemMetadata,
     /// Vector path geometry in local point coordinates, when present.
     pub path_geometry: Option<PathGeometry>,
+}
+
+/// Common page item metadata shared by frames, shapes, and groups.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PageItemMetadata {
+    /// Item content type, such as `TextType`, `GraphicType`, or `Unassigned`.
+    pub content_type: Option<String>,
+    /// Page item name, when present.
+    pub name: Option<String>,
+    /// Item transform matrix, preserved as an IDML string.
+    pub item_transform: Option<String>,
+    /// Applied object style reference, when present.
+    pub applied_object_style: Option<String>,
+    /// Fill color reference, when present.
+    pub fill_color: Option<String>,
+    /// Stroke color reference, when present.
+    pub stroke_color: Option<String>,
+    /// Stroke weight value, preserved as an IDML string.
+    pub stroke_weight: Option<String>,
+    /// Visibility flag, when present.
+    pub visible: Option<bool>,
+    /// Lock flag, when present.
+    pub locked: Option<bool>,
+}
+
+impl PageItemMetadata {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let element = String::from_utf8_lossy(event.name().as_ref()).into_owned();
+        Ok(Self {
+            content_type: optional_attr(event, "ContentType", reader, max_attribute_bytes)?,
+            name: optional_attr(event, "Name", reader, max_attribute_bytes)?,
+            item_transform: optional_attr(event, "ItemTransform", reader, max_attribute_bytes)?,
+            applied_object_style: optional_attr(
+                event,
+                "AppliedObjectStyle",
+                reader,
+                max_attribute_bytes,
+            )?,
+            fill_color: optional_attr(event, "FillColor", reader, max_attribute_bytes)?,
+            stroke_color: optional_attr(event, "StrokeColor", reader, max_attribute_bytes)?,
+            stroke_weight: optional_attr(event, "StrokeWeight", reader, max_attribute_bytes)?,
+            visible: optional_bool_attr(
+                event,
+                element.as_str(),
+                "Visible",
+                reader,
+                max_attribute_bytes,
+            )?,
+            locked: optional_bool_attr(
+                event,
+                element.as_str(),
+                "Locked",
+                reader,
+                max_attribute_bytes,
+            )?,
+        })
+    }
 }
 
 /// Rectangle geometry.
@@ -545,6 +608,8 @@ pub struct Rectangle {
     pub layer_id: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Common page item metadata.
+    pub metadata: PageItemMetadata,
     /// Vector path geometry in local point coordinates, when present.
     pub path_geometry: Option<PathGeometry>,
     /// Nested image graphics in XML order.
@@ -568,6 +633,7 @@ impl Rectangle {
             id,
             layer_id,
             geometric_bounds,
+            metadata: PageItemMetadata::from_xml_event(event, reader, max_attribute_bytes)?,
             path_geometry: None,
             images: Vec::new(),
         })
@@ -741,6 +807,8 @@ pub struct Oval {
     pub layer_id: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Common page item metadata.
+    pub metadata: PageItemMetadata,
     /// Vector path geometry in local point coordinates, when present.
     pub path_geometry: Option<PathGeometry>,
 }
@@ -762,6 +830,7 @@ impl Oval {
             id,
             layer_id,
             geometric_bounds,
+            metadata: PageItemMetadata::from_xml_event(event, reader, max_attribute_bytes)?,
             path_geometry: None,
         })
     }
@@ -776,6 +845,8 @@ pub struct GraphicLine {
     pub layer_id: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Common page item metadata.
+    pub metadata: PageItemMetadata,
     /// Vector path geometry in local point coordinates, when present.
     pub path_geometry: Option<PathGeometry>,
 }
@@ -797,6 +868,7 @@ impl GraphicLine {
             id,
             layer_id,
             geometric_bounds,
+            metadata: PageItemMetadata::from_xml_event(event, reader, max_attribute_bytes)?,
             path_geometry: None,
         })
     }
@@ -811,6 +883,8 @@ pub struct Polygon {
     pub layer_id: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Common page item metadata.
+    pub metadata: PageItemMetadata,
     /// Vector path geometry in local point coordinates, when present.
     pub path_geometry: Option<PathGeometry>,
 }
@@ -832,6 +906,7 @@ impl Polygon {
             id,
             layer_id,
             geometric_bounds,
+            metadata: PageItemMetadata::from_xml_event(event, reader, max_attribute_bytes)?,
             path_geometry: None,
         })
     }
@@ -846,6 +921,8 @@ pub struct Group {
     pub layer_id: Option<String>,
     /// Group geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Common page item metadata.
+    pub metadata: PageItemMetadata,
     /// Child page items in XML order.
     pub page_items: Vec<PageItem>,
 }
@@ -867,6 +944,7 @@ impl Group {
             id,
             layer_id,
             geometric_bounds,
+            metadata: PageItemMetadata::from_xml_event(event, reader, max_attribute_bytes)?,
             page_items: Vec::new(),
         })
     }
@@ -925,6 +1003,7 @@ impl TextFrame {
             layer_id,
             parent_story,
             geometric_bounds,
+            metadata: PageItemMetadata::from_xml_event(event, reader, max_attribute_bytes)?,
             path_geometry: None,
         })
     }
@@ -1039,6 +1118,18 @@ fn optional_attr(
         }
     }
     Ok(value)
+}
+
+fn optional_bool_attr(
+    event: &BytesStart<'_>,
+    element: &str,
+    attribute: &'static str,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<Option<bool>> {
+    optional_attr(event, attribute, reader, max_attribute_bytes)?
+        .map(|value| parse_bool_attribute(element, attribute, &value))
+        .transpose()
 }
 
 fn enforce_spread_attribute_bytes(actual: usize, max_attribute_bytes: usize) -> Result<()> {
@@ -1209,11 +1300,7 @@ fn parse_point_attribute(
     Ok(point)
 }
 
-fn parse_bool_attribute(
-    element: &'static str,
-    attribute: &'static str,
-    value: &str,
-) -> Result<bool> {
+fn parse_bool_attribute(element: &str, attribute: &'static str, value: &str) -> Result<bool> {
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
@@ -2374,6 +2461,7 @@ fn validate_text_frame(frame: &TextFrame) -> Result<()> {
     validate_optional_attr("TextFrame", "Self", frame.id.as_deref())?;
     validate_optional_attr("TextFrame", "ItemLayer", frame.layer_id.as_deref())?;
     validate_optional_attr("TextFrame", "ParentStory", frame.parent_story.as_deref())?;
+    validate_page_item_metadata("TextFrame", &frame.metadata)?;
     if let Some(bounds) = frame.geometric_bounds {
         validate_finite_bounds("TextFrame", bounds)?;
     }
@@ -2397,6 +2485,7 @@ fn validate_page_item(page_item: &PageItem) -> Result<()> {
 fn validate_rectangle(rectangle: &Rectangle) -> Result<()> {
     validate_optional_attr("Rectangle", "Self", rectangle.id.as_deref())?;
     validate_optional_attr("Rectangle", "ItemLayer", rectangle.layer_id.as_deref())?;
+    validate_page_item_metadata("Rectangle", &rectangle.metadata)?;
     if let Some(bounds) = rectangle.geometric_bounds {
         validate_finite_bounds("Rectangle", bounds)?;
     }
@@ -2436,6 +2525,7 @@ fn validate_image_link(link: &ImageLink) -> Result<()> {
 fn validate_oval(oval: &Oval) -> Result<()> {
     validate_optional_attr("Oval", "Self", oval.id.as_deref())?;
     validate_optional_attr("Oval", "ItemLayer", oval.layer_id.as_deref())?;
+    validate_page_item_metadata("Oval", &oval.metadata)?;
     if let Some(bounds) = oval.geometric_bounds {
         validate_finite_bounds("Oval", bounds)?;
     }
@@ -2448,6 +2538,7 @@ fn validate_oval(oval: &Oval) -> Result<()> {
 fn validate_graphic_line(line: &GraphicLine) -> Result<()> {
     validate_optional_attr("GraphicLine", "Self", line.id.as_deref())?;
     validate_optional_attr("GraphicLine", "ItemLayer", line.layer_id.as_deref())?;
+    validate_page_item_metadata("GraphicLine", &line.metadata)?;
     if let Some(bounds) = line.geometric_bounds {
         validate_finite_bounds("GraphicLine", bounds)?;
     }
@@ -2460,6 +2551,7 @@ fn validate_graphic_line(line: &GraphicLine) -> Result<()> {
 fn validate_polygon(polygon: &Polygon) -> Result<()> {
     validate_optional_attr("Polygon", "Self", polygon.id.as_deref())?;
     validate_optional_attr("Polygon", "ItemLayer", polygon.layer_id.as_deref())?;
+    validate_page_item_metadata("Polygon", &polygon.metadata)?;
     if let Some(bounds) = polygon.geometric_bounds {
         validate_finite_bounds("Polygon", bounds)?;
     }
@@ -2472,6 +2564,7 @@ fn validate_polygon(polygon: &Polygon) -> Result<()> {
 fn validate_group(group: &Group) -> Result<()> {
     validate_optional_attr("Group", "Self", group.id.as_deref())?;
     validate_optional_attr("Group", "ItemLayer", group.layer_id.as_deref())?;
+    validate_page_item_metadata("Group", &group.metadata)?;
     if let Some(bounds) = group.geometric_bounds {
         validate_finite_bounds("Group", bounds)?;
     }
@@ -2479,6 +2572,20 @@ fn validate_group(group: &Group) -> Result<()> {
         validate_page_item(child)?;
     }
     Ok(())
+}
+
+fn validate_page_item_metadata(element: &'static str, metadata: &PageItemMetadata) -> Result<()> {
+    validate_optional_attr(element, "ContentType", metadata.content_type.as_deref())?;
+    validate_optional_attr(element, "Name", metadata.name.as_deref())?;
+    validate_optional_attr(element, "ItemTransform", metadata.item_transform.as_deref())?;
+    validate_optional_attr(
+        element,
+        "AppliedObjectStyle",
+        metadata.applied_object_style.as_deref(),
+    )?;
+    validate_optional_attr(element, "FillColor", metadata.fill_color.as_deref())?;
+    validate_optional_attr(element, "StrokeColor", metadata.stroke_color.as_deref())?;
+    validate_optional_attr(element, "StrokeWeight", metadata.stroke_weight.as_deref())
 }
 
 fn validate_path_geometry(path_geometry: &PathGeometry) -> Result<()> {
@@ -2578,6 +2685,7 @@ fn serialize_text_frame_with_indent(
     if let Some(parent_story) = &frame.parent_story {
         push_attr(xml, "TextFrame", "ParentStory", parent_story)?;
     }
+    push_page_item_metadata(xml, "TextFrame", &frame.metadata)?;
     if let Some(bounds) = frame.geometric_bounds {
         let bounds = format_geometric_bounds("TextFrame", bounds)?;
         push_attr(xml, "TextFrame", "GeometricBounds", &bounds)?;
@@ -2590,6 +2698,41 @@ fn serialize_text_frame_with_indent(
         return Ok(());
     }
     xml.push_str(" />\n");
+    Ok(())
+}
+
+fn push_page_item_metadata(
+    xml: &mut String,
+    element: &'static str,
+    metadata: &PageItemMetadata,
+) -> Result<()> {
+    if let Some(content_type) = &metadata.content_type {
+        push_attr(xml, element, "ContentType", content_type)?;
+    }
+    if let Some(name) = &metadata.name {
+        push_attr(xml, element, "Name", name)?;
+    }
+    if let Some(item_transform) = &metadata.item_transform {
+        push_attr(xml, element, "ItemTransform", item_transform)?;
+    }
+    if let Some(applied_object_style) = &metadata.applied_object_style {
+        push_attr(xml, element, "AppliedObjectStyle", applied_object_style)?;
+    }
+    if let Some(fill_color) = &metadata.fill_color {
+        push_attr(xml, element, "FillColor", fill_color)?;
+    }
+    if let Some(stroke_color) = &metadata.stroke_color {
+        push_attr(xml, element, "StrokeColor", stroke_color)?;
+    }
+    if let Some(stroke_weight) = &metadata.stroke_weight {
+        push_attr(xml, element, "StrokeWeight", stroke_weight)?;
+    }
+    if let Some(visible) = metadata.visible {
+        push_attr(xml, element, "Visible", bool_str(visible))?;
+    }
+    if let Some(locked) = metadata.locked {
+        push_attr(xml, element, "Locked", bool_str(locked))?;
+    }
     Ok(())
 }
 
@@ -2606,6 +2749,7 @@ fn serialize_rectangle_with_indent(
     if let Some(layer_id) = &rectangle.layer_id {
         push_attr(xml, "Rectangle", "ItemLayer", layer_id)?;
     }
+    push_page_item_metadata(xml, "Rectangle", &rectangle.metadata)?;
     if let Some(bounds) = rectangle.geometric_bounds {
         let bounds = format_geometric_bounds("Rectangle", bounds)?;
         push_attr(xml, "Rectangle", "GeometricBounds", &bounds)?;
@@ -2785,6 +2929,7 @@ fn serialize_oval_with_indent(xml: &mut String, oval: &Oval, indent: usize) -> R
     if let Some(layer_id) = &oval.layer_id {
         push_attr(xml, "Oval", "ItemLayer", layer_id)?;
     }
+    push_page_item_metadata(xml, "Oval", &oval.metadata)?;
     if let Some(bounds) = oval.geometric_bounds {
         let bounds = format_geometric_bounds("Oval", bounds)?;
         push_attr(xml, "Oval", "GeometricBounds", &bounds)?;
@@ -2813,6 +2958,7 @@ fn serialize_graphic_line_with_indent(
     if let Some(layer_id) = &line.layer_id {
         push_attr(xml, "GraphicLine", "ItemLayer", layer_id)?;
     }
+    push_page_item_metadata(xml, "GraphicLine", &line.metadata)?;
     if let Some(bounds) = line.geometric_bounds {
         let bounds = format_geometric_bounds("GraphicLine", bounds)?;
         push_attr(xml, "GraphicLine", "GeometricBounds", &bounds)?;
@@ -2837,6 +2983,7 @@ fn serialize_polygon_with_indent(xml: &mut String, polygon: &Polygon, indent: us
     if let Some(layer_id) = &polygon.layer_id {
         push_attr(xml, "Polygon", "ItemLayer", layer_id)?;
     }
+    push_page_item_metadata(xml, "Polygon", &polygon.metadata)?;
     if let Some(bounds) = polygon.geometric_bounds {
         let bounds = format_geometric_bounds("Polygon", bounds)?;
         push_attr(xml, "Polygon", "GeometricBounds", &bounds)?;
@@ -2861,6 +3008,7 @@ fn serialize_group(xml: &mut String, group: &Group, indent: usize) -> Result<()>
     if let Some(layer_id) = &group.layer_id {
         push_attr(xml, "Group", "ItemLayer", layer_id)?;
     }
+    push_page_item_metadata(xml, "Group", &group.metadata)?;
     if let Some(bounds) = group.geometric_bounds {
         let bounds = format_geometric_bounds("Group", bounds)?;
         push_attr(xml, "Group", "GeometricBounds", &bounds)?;
@@ -2933,6 +3081,10 @@ fn format_point(point: Points) -> String {
 
 fn format_point_pair(point: Point) -> String {
     format!("{} {}", format_point(point.x), format_point(point.y))
+}
+
+fn bool_str(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
 }
 
 fn format_point_attr(
@@ -3259,6 +3411,58 @@ mod tests {
                 ..
             }) if id.as_deref() == Some("r2")
         ));
+    }
+
+    #[test]
+    fn parses_and_serializes_common_page_item_metadata() {
+        let xml = r#"<Spread Self="u10">
+  <TextFrame Self="tf1" ParentStory="u2" ContentType="TextType" Name="Headline" ItemTransform="1 0 0 1 10 20" AppliedObjectStyle="ObjectStyle/body" FillColor="Color/Black" StrokeColor="Swatch/None" StrokeWeight="0.5" Visible="true" Locked="false" />
+  <Rectangle Self="r1" ContentType="GraphicType" Name="Logo" ItemTransform="1 0 0 1 30 40" AppliedObjectStyle="ObjectStyle/image" FillColor="Color/Paper" StrokeColor="Color/Black" StrokeWeight="1" Visible="false" Locked="true" />
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(
+            spread.text_frames[0].metadata.content_type.as_deref(),
+            Some("TextType")
+        );
+        assert_eq!(
+            spread.text_frames[0].metadata.name.as_deref(),
+            Some("Headline")
+        );
+        assert_eq!(
+            spread.text_frames[0].metadata.item_transform.as_deref(),
+            Some("1 0 0 1 10 20")
+        );
+        assert_eq!(spread.text_frames[0].metadata.visible, Some(true));
+        assert_eq!(spread.text_frames[0].metadata.locked, Some(false));
+
+        let PageItem::Rectangle(rectangle) = &spread.page_items[1] else {
+            panic!("expected rectangle page item");
+        };
+        assert_eq!(rectangle.metadata.name.as_deref(), Some("Logo"));
+        assert_eq!(
+            rectangle.metadata.applied_object_style.as_deref(),
+            Some("ObjectStyle/image")
+        );
+        assert_eq!(
+            rectangle.metadata.fill_color.as_deref(),
+            Some("Color/Paper")
+        );
+        assert_eq!(
+            rectangle.metadata.stroke_color.as_deref(),
+            Some("Color/Black")
+        );
+        assert_eq!(rectangle.metadata.stroke_weight.as_deref(), Some("1"));
+        assert_eq!(rectangle.metadata.visible, Some(false));
+        assert_eq!(rectangle.metadata.locked, Some(true));
+
+        let serialized = spread.to_xml().unwrap();
+        assert!(serialized.contains("ContentType=\"TextType\""));
+        assert!(serialized.contains("AppliedObjectStyle=\"ObjectStyle/image\""));
+        assert!(serialized.contains("Visible=\"false\""));
+        assert!(serialized.contains("Locked=\"true\""));
+        assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
     }
 
     #[test]
@@ -3680,6 +3884,21 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_page_item_metadata_boolean() {
+        let err =
+            Spread::from_xml(r#"<Spread><TextFrame Visible="maybe" /></Spread>"#).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Visible",
+                reason: "expected boolean",
+            } if element == "TextFrame"
+        ));
+    }
+
+    #[test]
     fn rejects_duplicate_text_frame_parent_story_attributes() {
         let err =
             Spread::from_xml(r#"<Spread><TextFrame ParentStory="u1" ParentStory="u2" /></Spread>"#)
@@ -3977,6 +4196,7 @@ mod tests {
                     Points::new(144.0),
                     Points::new(216.25),
                 )),
+                metadata: Default::default(),
                 path_geometry: None,
             }],
             page_items: Vec::new(),
@@ -3998,6 +4218,7 @@ mod tests {
             layer_id: None,
             parent_story: Some("u2".to_owned()),
             geometric_bounds: None,
+            metadata: Default::default(),
             path_geometry: None,
         };
         let spread = Spread {
@@ -4038,6 +4259,7 @@ mod tests {
                 Points::new(144.0),
                 Points::new(72.0),
             )),
+            metadata: Default::default(),
             path_geometry: None,
         };
         let spread = Spread {
@@ -4055,6 +4277,7 @@ mod tests {
                         Points::new(72.0),
                         Points::new(72.0),
                     )),
+                    metadata: Default::default(),
                     path_geometry: None,
                     images: Vec::new(),
                 }),
@@ -4079,6 +4302,7 @@ mod tests {
             layer_id: None,
             parent_story: Some("u2".to_owned()),
             geometric_bounds: None,
+            metadata: Default::default(),
             path_geometry: None,
         };
         let spread = Spread {
@@ -4095,11 +4319,13 @@ mod tests {
                     Points::new(200.0),
                     Points::new(200.0),
                 )),
+                metadata: Default::default(),
                 page_items: vec![
                     PageItem::Rectangle(Rectangle {
                         id: Some("r1".to_owned()),
                         layer_id: None,
                         geometric_bounds: None,
+                        metadata: Default::default(),
                         path_geometry: None,
                         images: Vec::new(),
                     }),
@@ -4126,6 +4352,7 @@ mod tests {
             layer_id: Some("layer1".to_owned()),
             parent_story: Some("u2".to_owned()),
             geometric_bounds: None,
+            metadata: Default::default(),
             path_geometry: None,
         };
         let spread = Spread {
@@ -4139,6 +4366,7 @@ mod tests {
                     id: Some("r1".to_owned()),
                     layer_id: Some("layer2".to_owned()),
                     geometric_bounds: None,
+                    metadata: Default::default(),
                     path_geometry: None,
                     images: Vec::new(),
                 }),
@@ -4151,6 +4379,7 @@ mod tests {
                         Points::new(20.0),
                         Points::new(20.0),
                     )),
+                    metadata: Default::default(),
                     path_geometry: None,
                 }),
                 PageItem::GraphicLine(GraphicLine {
@@ -4162,6 +4391,7 @@ mod tests {
                         Points::new(40.0),
                         Points::new(40.0),
                     )),
+                    metadata: Default::default(),
                     path_geometry: None,
                 }),
                 PageItem::Polygon(Polygon {
@@ -4173,12 +4403,14 @@ mod tests {
                         Points::new(60.0),
                         Points::new(60.0),
                     )),
+                    metadata: Default::default(),
                     path_geometry: None,
                 }),
                 PageItem::Group(Group {
                     id: Some("g1".to_owned()),
                     layer_id: Some("layer3".to_owned()),
                     geometric_bounds: None,
+                    metadata: Default::default(),
                     page_items: Vec::new(),
                 }),
             ],
@@ -4257,6 +4489,7 @@ mod tests {
                 id: Some("r1".to_owned()),
                 layer_id: None,
                 geometric_bounds: None,
+                metadata: Default::default(),
                 path_geometry: None,
                 images: (0..=super::DEFAULT_MAX_IMAGES_PER_SPREAD)
                     .map(|index| Image {
@@ -4295,6 +4528,7 @@ mod tests {
                 id: Some("poly1".to_owned()),
                 layer_id: None,
                 geometric_bounds: None,
+                metadata: Default::default(),
                 path_geometry: Some(PathGeometry {
                     paths: vec![GeometryPath {
                         path_open: Some(false),
@@ -4326,6 +4560,7 @@ mod tests {
                     layer_id: None,
                     parent_story: None,
                     geometric_bounds: None,
+                    metadata: Default::default(),
                     path_geometry: None,
                 })
                 .collect(),
@@ -4351,12 +4586,14 @@ mod tests {
                 id: Some("g1".to_owned()),
                 layer_id: None,
                 geometric_bounds: None,
+                metadata: Default::default(),
                 page_items: (0..super::DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD)
                     .map(|index| {
                         PageItem::Rectangle(Rectangle {
                             id: Some(format!("r{index}")),
                             layer_id: None,
                             geometric_bounds: None,
+                            metadata: Default::default(),
                             path_geometry: None,
                             images: Vec::new(),
                         })
@@ -4389,6 +4626,7 @@ mod tests {
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
+                metadata: Default::default(),
                 path_geometry: None,
             }],
             page_items: vec![PageItem::TextFrame(TextFrame {
@@ -4396,6 +4634,7 @@ mod tests {
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
+                metadata: Default::default(),
                 path_geometry: None,
             })],
         };
@@ -4423,6 +4662,7 @@ mod tests {
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
+                metadata: Default::default(),
                 path_geometry: None,
             }],
             page_items: vec![PageItem::TextFrame(TextFrame {
@@ -4430,6 +4670,7 @@ mod tests {
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
+                metadata: Default::default(),
                 path_geometry: None,
             })],
         };
@@ -4462,6 +4703,7 @@ mod tests {
                     Points::new(144.0),
                     Points::new(216.0),
                 )),
+                metadata: Default::default(),
                 page_items: Vec::new(),
             })],
         };
@@ -4489,6 +4731,7 @@ mod tests {
                 id: Some("g\u{0}".to_owned()),
                 layer_id: None,
                 geometric_bounds: None,
+                metadata: Default::default(),
                 page_items: Vec::new(),
             })],
         };
@@ -4521,6 +4764,7 @@ mod tests {
                     Points::new(144.0),
                     Points::new(216.0),
                 )),
+                metadata: Default::default(),
                 path_geometry: None,
             }],
             page_items: Vec::new(),
@@ -4549,6 +4793,7 @@ mod tests {
                 layer_id: None,
                 parent_story: Some("u1".to_owned()),
                 geometric_bounds: None,
+                metadata: Default::default(),
                 path_geometry: None,
             }],
             page_items: Vec::new(),

@@ -101,6 +101,7 @@ struct TextFrameSummary {
     layer_id: Option<String>,
     parent_story: Option<String>,
     bounds: Option<[u64; 4]>,
+    metadata: MetadataSummary,
     path_geometry: Option<PathGeometrySummary>,
 }
 
@@ -110,6 +111,7 @@ enum PageItemSummary {
         id: Option<String>,
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
+        metadata: MetadataSummary,
         path_geometry: Option<PathGeometrySummary>,
         images: Vec<ImageSummary>,
     },
@@ -117,26 +119,43 @@ enum PageItemSummary {
         id: Option<String>,
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
+        metadata: MetadataSummary,
         path_geometry: Option<PathGeometrySummary>,
     },
     GraphicLine {
         id: Option<String>,
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
+        metadata: MetadataSummary,
         path_geometry: Option<PathGeometrySummary>,
     },
     Polygon {
         id: Option<String>,
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
+        metadata: MetadataSummary,
         path_geometry: Option<PathGeometrySummary>,
     },
     Group {
         id: Option<String>,
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
+        metadata: MetadataSummary,
         page_items: Vec<PageItemSummary>,
     },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct MetadataSummary {
+    content_type: Option<String>,
+    name: Option<String>,
+    item_transform: Option<String>,
+    applied_object_style: Option<String>,
+    fill_color: Option<String>,
+    stroke_color: Option<String>,
+    stroke_weight: Option<String>,
+    visible: Option<bool>,
+    locked: Option<bool>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -251,6 +270,7 @@ impl Snapshot {
                                 layer_id: frame.layer_id.clone(),
                                 parent_story: frame.parent_story.clone(),
                                 bounds: frame.geometric_bounds.map(rect_bits),
+                                metadata: summarize_metadata(&frame.metadata),
                                 path_geometry: frame
                                     .path_geometry
                                     .as_ref()
@@ -285,6 +305,7 @@ fn summarize_page_items(page_items: &[PageItem]) -> Vec<PageItemSummary> {
                 id: rectangle.id.clone(),
                 layer_id: rectangle.layer_id.clone(),
                 bounds: rectangle.geometric_bounds.map(rect_bits),
+                metadata: summarize_metadata(&rectangle.metadata),
                 path_geometry: rectangle
                     .path_geometry
                     .as_ref()
@@ -313,28 +334,46 @@ fn summarize_page_items(page_items: &[PageItem]) -> Vec<PageItemSummary> {
                 id: oval.id.clone(),
                 layer_id: oval.layer_id.clone(),
                 bounds: oval.geometric_bounds.map(rect_bits),
+                metadata: summarize_metadata(&oval.metadata),
                 path_geometry: oval.path_geometry.as_ref().map(summarize_path_geometry),
             }),
             PageItem::GraphicLine(line) => Some(PageItemSummary::GraphicLine {
                 id: line.id.clone(),
                 layer_id: line.layer_id.clone(),
                 bounds: line.geometric_bounds.map(rect_bits),
+                metadata: summarize_metadata(&line.metadata),
                 path_geometry: line.path_geometry.as_ref().map(summarize_path_geometry),
             }),
             PageItem::Polygon(polygon) => Some(PageItemSummary::Polygon {
                 id: polygon.id.clone(),
                 layer_id: polygon.layer_id.clone(),
                 bounds: polygon.geometric_bounds.map(rect_bits),
+                metadata: summarize_metadata(&polygon.metadata),
                 path_geometry: polygon.path_geometry.as_ref().map(summarize_path_geometry),
             }),
             PageItem::Group(group) => Some(PageItemSummary::Group {
                 id: group.id.clone(),
                 layer_id: group.layer_id.clone(),
                 bounds: group.geometric_bounds.map(rect_bits),
+                metadata: summarize_metadata(&group.metadata),
                 page_items: summarize_page_items(&group.page_items),
             }),
         })
         .collect()
+}
+
+fn summarize_metadata(metadata: &PageItemMetadata) -> MetadataSummary {
+    MetadataSummary {
+        content_type: metadata.content_type.clone(),
+        name: metadata.name.clone(),
+        item_transform: metadata.item_transform.clone(),
+        applied_object_style: metadata.applied_object_style.clone(),
+        fill_color: metadata.fill_color.clone(),
+        stroke_color: metadata.stroke_color.clone(),
+        stroke_weight: metadata.stroke_weight.clone(),
+        visible: metadata.visible,
+        locked: metadata.locked,
+    }
 }
 
 fn summarize_path_geometry(path_geometry: &PathGeometry) -> PathGeometrySummary {
