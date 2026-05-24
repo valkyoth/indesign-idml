@@ -563,6 +563,40 @@ pub struct PageItemMetadata {
     pub visible: Option<bool>,
     /// Lock flag, when present.
     pub locked: Option<bool>,
+    /// Adobe parent interface change counter, preserved as an IDML string.
+    pub parent_interface_change_count: Option<String>,
+    /// Adobe target interface change counter, preserved as an IDML string.
+    pub target_interface_change_count: Option<String>,
+    /// Adobe last-updated interface change counter, preserved as an IDML string.
+    pub last_updated_interface_change_count: Option<String>,
+    /// Overridden page item property list, preserved as an IDML string.
+    pub overridden_page_item_props: Option<String>,
+    /// Horizontal layout constraint triplet, preserved as an IDML string.
+    pub horizontal_layout_constraints: Option<String>,
+    /// Vertical layout constraint triplet, preserved as an IDML string.
+    pub vertical_layout_constraints: Option<String>,
+    /// Gradient fill start point, preserved as an IDML string.
+    pub gradient_fill_start: Option<String>,
+    /// Gradient fill length, preserved as an IDML string.
+    pub gradient_fill_length: Option<String>,
+    /// Gradient fill angle, preserved as an IDML string.
+    pub gradient_fill_angle: Option<String>,
+    /// Gradient stroke start point, preserved as an IDML string.
+    pub gradient_stroke_start: Option<String>,
+    /// Gradient stroke length, preserved as an IDML string.
+    pub gradient_stroke_length: Option<String>,
+    /// Gradient stroke angle, preserved as an IDML string.
+    pub gradient_stroke_angle: Option<String>,
+    /// Local display setting, preserved as an IDML string.
+    pub local_display_setting: Option<String>,
+    /// Gradient fill hilite length, preserved as an IDML string.
+    pub gradient_fill_hilite_length: Option<String>,
+    /// Gradient fill hilite angle, preserved as an IDML string.
+    pub gradient_fill_hilite_angle: Option<String>,
+    /// Gradient stroke hilite length, preserved as an IDML string.
+    pub gradient_stroke_hilite_length: Option<String>,
+    /// Gradient stroke hilite angle, preserved as an IDML string.
+    pub gradient_stroke_hilite_angle: Option<String>,
 }
 
 impl PageItemMetadata {
@@ -596,6 +630,108 @@ impl PageItemMetadata {
                 event,
                 element.as_str(),
                 "Locked",
+                reader,
+                max_attribute_bytes,
+            )?,
+            parent_interface_change_count: optional_attr(
+                event,
+                "ParentInterfaceChangeCount",
+                reader,
+                max_attribute_bytes,
+            )?,
+            target_interface_change_count: optional_attr(
+                event,
+                "TargetInterfaceChangeCount",
+                reader,
+                max_attribute_bytes,
+            )?,
+            last_updated_interface_change_count: optional_attr(
+                event,
+                "LastUpdatedInterfaceChangeCount",
+                reader,
+                max_attribute_bytes,
+            )?,
+            overridden_page_item_props: optional_attr(
+                event,
+                "OverriddenPageItemProps",
+                reader,
+                max_attribute_bytes,
+            )?,
+            horizontal_layout_constraints: optional_attr(
+                event,
+                "HorizontalLayoutConstraints",
+                reader,
+                max_attribute_bytes,
+            )?,
+            vertical_layout_constraints: optional_attr(
+                event,
+                "VerticalLayoutConstraints",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gradient_fill_start: optional_attr(
+                event,
+                "GradientFillStart",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gradient_fill_length: optional_attr(
+                event,
+                "GradientFillLength",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gradient_fill_angle: optional_attr(
+                event,
+                "GradientFillAngle",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gradient_stroke_start: optional_attr(
+                event,
+                "GradientStrokeStart",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gradient_stroke_length: optional_attr(
+                event,
+                "GradientStrokeLength",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gradient_stroke_angle: optional_attr(
+                event,
+                "GradientStrokeAngle",
+                reader,
+                max_attribute_bytes,
+            )?,
+            local_display_setting: optional_attr(
+                event,
+                "LocalDisplaySetting",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gradient_fill_hilite_length: optional_attr(
+                event,
+                "GradientFillHiliteLength",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gradient_fill_hilite_angle: optional_attr(
+                event,
+                "GradientFillHiliteAngle",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gradient_stroke_hilite_length: optional_attr(
+                event,
+                "GradientStrokeHiliteLength",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gradient_stroke_hilite_angle: optional_attr(
+                event,
+                "GradientStrokeHiliteAngle",
                 reader,
                 max_attribute_bytes,
             )?,
@@ -2604,7 +2740,92 @@ fn validate_page_item_metadata(element: &'static str, metadata: &PageItemMetadat
     )?;
     validate_optional_attr(element, "FillColor", metadata.fill_color.as_deref())?;
     validate_optional_attr(element, "StrokeColor", metadata.stroke_color.as_deref())?;
-    validate_optional_attr(element, "StrokeWeight", metadata.stroke_weight.as_deref())
+    validate_optional_attr(element, "StrokeWeight", metadata.stroke_weight.as_deref())?;
+    validate_optional_attr(
+        element,
+        "ParentInterfaceChangeCount",
+        metadata.parent_interface_change_count.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "TargetInterfaceChangeCount",
+        metadata.target_interface_change_count.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "LastUpdatedInterfaceChangeCount",
+        metadata.last_updated_interface_change_count.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "OverriddenPageItemProps",
+        metadata.overridden_page_item_props.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "HorizontalLayoutConstraints",
+        metadata.horizontal_layout_constraints.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "VerticalLayoutConstraints",
+        metadata.vertical_layout_constraints.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "GradientFillStart",
+        metadata.gradient_fill_start.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "GradientFillLength",
+        metadata.gradient_fill_length.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "GradientFillAngle",
+        metadata.gradient_fill_angle.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "GradientStrokeStart",
+        metadata.gradient_stroke_start.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "GradientStrokeLength",
+        metadata.gradient_stroke_length.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "GradientStrokeAngle",
+        metadata.gradient_stroke_angle.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "LocalDisplaySetting",
+        metadata.local_display_setting.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "GradientFillHiliteLength",
+        metadata.gradient_fill_hilite_length.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "GradientFillHiliteAngle",
+        metadata.gradient_fill_hilite_angle.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "GradientStrokeHiliteLength",
+        metadata.gradient_stroke_hilite_length.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "GradientStrokeHiliteAngle",
+        metadata.gradient_stroke_hilite_angle.as_deref(),
+    )
 }
 
 fn validate_path_geometry(path_geometry: &PathGeometry) -> Result<()> {
@@ -2757,6 +2978,108 @@ fn push_page_item_metadata(
     }
     if let Some(locked) = metadata.locked {
         push_attr(xml, element, "Locked", bool_str(locked))?;
+    }
+    if let Some(parent_interface_change_count) = &metadata.parent_interface_change_count {
+        push_attr(
+            xml,
+            element,
+            "ParentInterfaceChangeCount",
+            parent_interface_change_count,
+        )?;
+    }
+    if let Some(target_interface_change_count) = &metadata.target_interface_change_count {
+        push_attr(
+            xml,
+            element,
+            "TargetInterfaceChangeCount",
+            target_interface_change_count,
+        )?;
+    }
+    if let Some(last_updated_interface_change_count) = &metadata.last_updated_interface_change_count
+    {
+        push_attr(
+            xml,
+            element,
+            "LastUpdatedInterfaceChangeCount",
+            last_updated_interface_change_count,
+        )?;
+    }
+    if let Some(overridden_page_item_props) = &metadata.overridden_page_item_props {
+        push_attr(
+            xml,
+            element,
+            "OverriddenPageItemProps",
+            overridden_page_item_props,
+        )?;
+    }
+    if let Some(horizontal_layout_constraints) = &metadata.horizontal_layout_constraints {
+        push_attr(
+            xml,
+            element,
+            "HorizontalLayoutConstraints",
+            horizontal_layout_constraints,
+        )?;
+    }
+    if let Some(vertical_layout_constraints) = &metadata.vertical_layout_constraints {
+        push_attr(
+            xml,
+            element,
+            "VerticalLayoutConstraints",
+            vertical_layout_constraints,
+        )?;
+    }
+    if let Some(gradient_fill_start) = &metadata.gradient_fill_start {
+        push_attr(xml, element, "GradientFillStart", gradient_fill_start)?;
+    }
+    if let Some(gradient_fill_length) = &metadata.gradient_fill_length {
+        push_attr(xml, element, "GradientFillLength", gradient_fill_length)?;
+    }
+    if let Some(gradient_fill_angle) = &metadata.gradient_fill_angle {
+        push_attr(xml, element, "GradientFillAngle", gradient_fill_angle)?;
+    }
+    if let Some(gradient_stroke_start) = &metadata.gradient_stroke_start {
+        push_attr(xml, element, "GradientStrokeStart", gradient_stroke_start)?;
+    }
+    if let Some(gradient_stroke_length) = &metadata.gradient_stroke_length {
+        push_attr(xml, element, "GradientStrokeLength", gradient_stroke_length)?;
+    }
+    if let Some(gradient_stroke_angle) = &metadata.gradient_stroke_angle {
+        push_attr(xml, element, "GradientStrokeAngle", gradient_stroke_angle)?;
+    }
+    if let Some(local_display_setting) = &metadata.local_display_setting {
+        push_attr(xml, element, "LocalDisplaySetting", local_display_setting)?;
+    }
+    if let Some(gradient_fill_hilite_length) = &metadata.gradient_fill_hilite_length {
+        push_attr(
+            xml,
+            element,
+            "GradientFillHiliteLength",
+            gradient_fill_hilite_length,
+        )?;
+    }
+    if let Some(gradient_fill_hilite_angle) = &metadata.gradient_fill_hilite_angle {
+        push_attr(
+            xml,
+            element,
+            "GradientFillHiliteAngle",
+            gradient_fill_hilite_angle,
+        )?;
+    }
+    if let Some(gradient_stroke_hilite_length) = &metadata.gradient_stroke_hilite_length {
+        push_attr(
+            xml,
+            element,
+            "GradientStrokeHiliteLength",
+            gradient_stroke_hilite_length,
+        )?;
+    }
+    if let Some(gradient_stroke_hilite_angle) = &metadata.gradient_stroke_hilite_angle {
+        push_attr(
+            xml,
+            element,
+            "GradientStrokeHiliteAngle",
+            gradient_stroke_hilite_angle,
+        )?;
     }
     Ok(())
 }
@@ -3449,7 +3772,7 @@ mod tests {
     #[test]
     fn parses_and_serializes_common_page_item_metadata() {
         let xml = r#"<Spread Self="u10">
-  <TextFrame Self="tf1" ParentStory="u2" ContentType="TextType" Name="Headline" ItemTransform="1 0 0 1 10 20" AppliedObjectStyle="ObjectStyle/body" FillColor="Color/Black" StrokeColor="Swatch/None" StrokeWeight="0.5" Visible="true" Locked="false" />
+  <TextFrame Self="tf1" ParentStory="u2" ContentType="TextType" Name="Headline" ItemTransform="1 0 0 1 10 20" AppliedObjectStyle="ObjectStyle/body" FillColor="Color/Black" StrokeColor="Swatch/None" StrokeWeight="0.5" Visible="true" Locked="false" ParentInterfaceChangeCount="1 2" TargetInterfaceChangeCount="" LastUpdatedInterfaceChangeCount="" OverriddenPageItemProps="" HorizontalLayoutConstraints="FlexibleDimension FixedDimension FlexibleDimension" VerticalLayoutConstraints="FlexibleDimension FixedDimension FlexibleDimension" GradientFillStart="0 0" GradientFillLength="0" GradientFillAngle="0" GradientStrokeStart="0 0" GradientStrokeLength="0" GradientStrokeAngle="0" LocalDisplaySetting="Default" GradientFillHiliteLength="0" GradientFillHiliteAngle="0" GradientStrokeHiliteLength="0" GradientStrokeHiliteAngle="0" />
   <Rectangle Self="r1" ContentType="GraphicType" Name="Logo" ItemTransform="1 0 0 1 30 40" AppliedObjectStyle="ObjectStyle/image" FillColor="Color/Paper" StrokeColor="Color/Black" StrokeWeight="1" Visible="false" Locked="true" />
 </Spread>"#;
 
@@ -3469,6 +3792,34 @@ mod tests {
         );
         assert_eq!(spread.text_frames[0].metadata.visible, Some(true));
         assert_eq!(spread.text_frames[0].metadata.locked, Some(false));
+        assert_eq!(
+            spread.text_frames[0]
+                .metadata
+                .horizontal_layout_constraints
+                .as_deref(),
+            Some("FlexibleDimension FixedDimension FlexibleDimension")
+        );
+        assert_eq!(
+            spread.text_frames[0]
+                .metadata
+                .gradient_fill_start
+                .as_deref(),
+            Some("0 0")
+        );
+        assert_eq!(
+            spread.text_frames[0]
+                .metadata
+                .local_display_setting
+                .as_deref(),
+            Some("Default")
+        );
+        assert_eq!(
+            spread.text_frames[0]
+                .metadata
+                .gradient_stroke_hilite_angle
+                .as_deref(),
+            Some("0")
+        );
 
         let PageItem::Rectangle(rectangle) = &spread.page_items[1] else {
             panic!("expected rectangle page item");
@@ -3495,6 +3846,12 @@ mod tests {
         assert!(serialized.contains("AppliedObjectStyle=\"ObjectStyle/image\""));
         assert!(serialized.contains("Visible=\"false\""));
         assert!(serialized.contains("Locked=\"true\""));
+        assert!(serialized.contains(
+            "HorizontalLayoutConstraints=\"FlexibleDimension FixedDimension FlexibleDimension\""
+        ));
+        assert!(serialized.contains("GradientFillStart=\"0 0\""));
+        assert!(serialized.contains("LocalDisplaySetting=\"Default\""));
+        assert!(serialized.contains("GradientStrokeHiliteAngle=\"0\""));
         assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
     }
 
