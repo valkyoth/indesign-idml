@@ -651,6 +651,8 @@ pub struct TextWrapPreference {
     pub text_wrap_mode: Option<String>,
     /// Wrap offsets, when present.
     pub text_wrap_offset: Option<TextWrapOffset>,
+    /// Wrap contour option, when present.
+    pub contour_option: Option<ContourOption>,
 }
 
 /// Text wrap offset values.
@@ -664,6 +666,17 @@ pub struct TextWrapOffset {
     pub bottom: Option<String>,
     /// Right offset, preserved as an IDML string.
     pub right: Option<String>,
+}
+
+/// Contour behavior for text wrapping around a page item.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ContourOption {
+    /// Contour type, when present.
+    pub contour_type: Option<String>,
+    /// Include inside edges flag, when present.
+    pub include_inside_edges: Option<bool>,
+    /// Named contour path, when present.
+    pub contour_path_name: Option<String>,
 }
 
 /// Frame fitting behavior for a page item.
@@ -1153,6 +1166,7 @@ impl TextWrapPreference {
             text_wrap_side: optional_attr(event, "TextWrapSide", reader, max_attribute_bytes)?,
             text_wrap_mode: optional_attr(event, "TextWrapMode", reader, max_attribute_bytes)?,
             text_wrap_offset: None,
+            contour_option: None,
         })
     }
 }
@@ -1168,6 +1182,31 @@ impl TextWrapOffset {
             left: optional_attr(event, "Left", reader, max_attribute_bytes)?,
             bottom: optional_attr(event, "Bottom", reader, max_attribute_bytes)?,
             right: optional_attr(event, "Right", reader, max_attribute_bytes)?,
+        })
+    }
+}
+
+impl ContourOption {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            contour_type: optional_attr(event, "ContourType", reader, max_attribute_bytes)?,
+            include_inside_edges: optional_bool_attr(
+                event,
+                "ContourOption",
+                "IncludeInsideEdges",
+                reader,
+                max_attribute_bytes,
+            )?,
+            contour_path_name: optional_attr(
+                event,
+                "ContourPathName",
+                reader,
+                max_attribute_bytes,
+            )?,
         })
     }
 }
@@ -2738,6 +2777,13 @@ fn parse_text_wrap_preference_contents(
                         reader,
                         state.options.max_attribute_bytes,
                     )?);
+                } else if e.name().as_ref() == b"ContourOption" {
+                    preference.contour_option = Some(ContourOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                    parse_contour_option_contents(reader, state)?;
                 }
             }
             Event::Empty(e) => {
@@ -2745,6 +2791,12 @@ fn parse_text_wrap_preference_contents(
                 state.xml_depth.visit_empty()?;
                 if e.name().as_ref() == b"TextWrapOffset" {
                     preference.text_wrap_offset = Some(TextWrapOffset::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"ContourOption" {
+                    preference.contour_option = Some(ContourOption::from_xml_event(
                         &e,
                         reader,
                         state.options.max_attribute_bytes,
@@ -2779,6 +2831,50 @@ fn parse_text_wrap_preference_contents(
         }
     }
     Ok(preference)
+}
+
+fn parse_contour_option_contents(
+    reader: &mut Reader<&[u8]>,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<()> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"ContourOption" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "ContourOption".to_owned(),
+                    reason: "unclosed ContourOption element",
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn parse_frame_fitting_option_contents(
@@ -4712,6 +4808,9 @@ fn validate_text_wrap_preference(preference: &TextWrapPreference) -> Result<()> 
     if let Some(offset) = &preference.text_wrap_offset {
         validate_text_wrap_offset(offset)?;
     }
+    if let Some(option) = &preference.contour_option {
+        validate_contour_option(option)?;
+    }
     Ok(())
 }
 
@@ -4720,6 +4819,20 @@ fn validate_text_wrap_offset(offset: &TextWrapOffset) -> Result<()> {
     validate_optional_attr("TextWrapOffset", "Left", offset.left.as_deref())?;
     validate_optional_attr("TextWrapOffset", "Bottom", offset.bottom.as_deref())?;
     validate_optional_attr("TextWrapOffset", "Right", offset.right.as_deref())?;
+    Ok(())
+}
+
+fn validate_contour_option(option: &ContourOption) -> Result<()> {
+    validate_optional_attr(
+        "ContourOption",
+        "ContourType",
+        option.contour_type.as_deref(),
+    )?;
+    validate_optional_attr(
+        "ContourOption",
+        "ContourPathName",
+        option.contour_path_name.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -5271,17 +5384,22 @@ fn serialize_text_wrap_preference(
         preference.text_wrap_mode.as_deref(),
     )?;
 
-    let Some(offset) = &preference.text_wrap_offset else {
+    if preference.text_wrap_offset.is_none() && preference.contour_option.is_none() {
         xml.push_str(" />\n");
         return Ok(());
-    };
+    }
 
     xml.push_str(">\n");
-    push_indent(xml, indent + 2);
-    xml.push_str("<Properties>\n");
-    serialize_text_wrap_offset(xml, offset, indent + 4)?;
-    push_indent(xml, indent + 2);
-    xml.push_str("</Properties>\n");
+    if let Some(offset) = &preference.text_wrap_offset {
+        push_indent(xml, indent + 2);
+        xml.push_str("<Properties>\n");
+        serialize_text_wrap_offset(xml, offset, indent + 4)?;
+        push_indent(xml, indent + 2);
+        xml.push_str("</Properties>\n");
+    }
+    if let Some(option) = &preference.contour_option {
+        serialize_contour_option(xml, option, indent + 2)?;
+    }
     push_indent(xml, indent);
     xml.push_str("</TextWrapPreference>\n");
     Ok(())
@@ -5299,6 +5417,34 @@ fn serialize_text_wrap_offset(
     push_optional_serialized_attr(xml, "TextWrapOffset", "Left", offset.left.as_deref())?;
     push_optional_serialized_attr(xml, "TextWrapOffset", "Bottom", offset.bottom.as_deref())?;
     push_optional_serialized_attr(xml, "TextWrapOffset", "Right", offset.right.as_deref())?;
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn serialize_contour_option(xml: &mut String, option: &ContourOption, indent: usize) -> Result<()> {
+    validate_contour_option(option)?;
+    push_indent(xml, indent);
+    xml.push_str("<ContourOption");
+    push_optional_serialized_attr(
+        xml,
+        "ContourOption",
+        "ContourType",
+        option.contour_type.as_deref(),
+    )?;
+    if let Some(include_inside_edges) = option.include_inside_edges {
+        push_attr(
+            xml,
+            "ContourOption",
+            "IncludeInsideEdges",
+            bool_str(include_inside_edges),
+        )?;
+    }
+    push_optional_serialized_attr(
+        xml,
+        "ContourOption",
+        "ContourPathName",
+        option.contour_path_name.as_deref(),
+    )?;
     xml.push_str(" />\n");
     Ok(())
 }
@@ -7541,6 +7687,7 @@ mod tests {
       <Properties>
         <TextWrapOffset Top="1" Left="2" Bottom="3" Right="4" />
       </Properties>
+      <ContourOption ContourType="SameAsClipping" IncludeInsideEdges="false" ContourPathName="$ID/" />
     </TextWrapPreference>
   </Rectangle>
   <TextFrame Self="tf1" ParentStory="u1">
@@ -7554,6 +7701,7 @@ mod tests {
         };
         let rectangle_wrap = rectangle.metadata.text_wrap_preference.as_ref().unwrap();
         let rectangle_offset = rectangle_wrap.text_wrap_offset.as_ref().unwrap();
+        let rectangle_contour = rectangle_wrap.contour_option.as_ref().unwrap();
         let frame_wrap = spread.text_frames[0]
             .metadata
             .text_wrap_preference
@@ -7570,6 +7718,12 @@ mod tests {
         assert_eq!(rectangle_offset.left.as_deref(), Some("2"));
         assert_eq!(rectangle_offset.bottom.as_deref(), Some("3"));
         assert_eq!(rectangle_offset.right.as_deref(), Some("4"));
+        assert_eq!(
+            rectangle_contour.contour_type.as_deref(),
+            Some("SameAsClipping")
+        );
+        assert_eq!(rectangle_contour.include_inside_edges, Some(false));
+        assert_eq!(rectangle_contour.contour_path_name.as_deref(), Some("$ID/"));
         assert_eq!(frame_wrap.inverse, Some(true));
         assert_eq!(frame_wrap.text_wrap_side.as_deref(), Some("LeftSide"));
 
@@ -7578,6 +7732,7 @@ mod tests {
         assert!(
             serialized.contains("<TextWrapOffset Top=\"1\" Left=\"2\" Bottom=\"3\" Right=\"4\" />")
         );
+        assert!(serialized.contains("<ContourOption ContourType=\"SameAsClipping\""));
         assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
     }
 

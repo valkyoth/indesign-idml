@@ -434,6 +434,7 @@ struct TextWrapPreferenceSummary {
     text_wrap_side: Option<String>,
     text_wrap_mode: Option<String>,
     text_wrap_offset: Option<TextWrapOffsetSummary>,
+    contour_option: Option<ContourOptionSummary>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -442,6 +443,13 @@ struct TextWrapOffsetSummary {
     left: Option<String>,
     bottom: Option<String>,
     right: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ContourOptionSummary {
+    contour_type: Option<String>,
+    include_inside_edges: Option<bool>,
+    contour_path_name: Option<String>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1092,6 +1100,18 @@ fn summarize_text_wrap_preference(preference: &TextWrapPreference) -> TextWrapPr
                 right: offset.right.clone(),
             }
         }),
+        contour_option: preference
+            .contour_option
+            .as_ref()
+            .map(summarize_contour_option),
+    }
+}
+
+fn summarize_contour_option(option: &ContourOption) -> ContourOptionSummary {
+    ContourOptionSummary {
+        contour_type: option.contour_type.clone(),
+        include_inside_edges: option.include_inside_edges,
+        contour_path_name: option.contour_path_name.clone(),
     }
 }
 
