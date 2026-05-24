@@ -19,7 +19,8 @@ pub use crate::model::resources::{
     extract_resource_items, extract_resource_items_with_options,
 };
 pub use crate::model::spread::{
-    Group, Page, PageItem, Rect, RectMm, Rectangle, Spread, SpreadParseOptions, TextFrame,
+    GraphicLine, Group, Guide, Oval, Page, PageItem, Polygon, Rect, RectMm, Rectangle, Spread,
+    SpreadParseOptions, TextFrame,
 };
 pub use crate::model::story::{Story, StoryParseOptions};
 pub use crate::traits::{XmlLoadable, XmlSaveable};

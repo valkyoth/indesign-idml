@@ -44,7 +44,11 @@ mod tests {
         let _: Option<crate::prelude::Page> = None;
         let _: Option<crate::prelude::PageItem> = None;
         let _: Option<crate::prelude::Group> = None;
+        let _: Option<crate::prelude::Guide> = None;
         let _: Option<crate::prelude::Rectangle> = None;
+        let _: Option<crate::prelude::Oval> = None;
+        let _: Option<crate::prelude::GraphicLine> = None;
+        let _: Option<crate::prelude::Polygon> = None;
         let _: Option<crate::prelude::IdmlError> = None;
         let _: Option<crate::prelude::ResolvedTextFrameData> = None;
         let _: Option<crate::prelude::IdmlIdAllocator> = None;
