@@ -36,6 +36,8 @@ fn main() -> Result<()> {
                 id: Some("tf1".to_owned()),
                 layer_id: None,
                 parent_story: Some("u1".to_owned()),
+                previous_text_frame: None,
+                next_text_frame: None,
                 geometric_bounds: Some(Rect::new(
                     Points::new(72.0),
                     Points::new(72.0),

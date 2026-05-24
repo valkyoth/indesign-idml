@@ -100,6 +100,8 @@ struct TextFrameSummary {
     id: Option<String>,
     layer_id: Option<String>,
     parent_story: Option<String>,
+    previous_text_frame: Option<String>,
+    next_text_frame: Option<String>,
     bounds: Option<[u64; 4]>,
     metadata: MetadataSummary,
     path_geometry: Option<PathGeometrySummary>,
@@ -269,6 +271,8 @@ impl Snapshot {
                                 id: frame.id.clone(),
                                 layer_id: frame.layer_id.clone(),
                                 parent_story: frame.parent_story.clone(),
+                                previous_text_frame: frame.previous_text_frame.clone(),
+                                next_text_frame: frame.next_text_frame.clone(),
                                 bounds: frame.geometric_bounds.map(rect_bits),
                                 metadata: summarize_metadata(&frame.metadata),
                                 path_geometry: frame

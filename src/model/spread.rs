@@ -530,6 +530,10 @@ pub struct TextFrame {
     pub layer_id: Option<String>,
     /// Linked story ID from `ParentStory`, when present.
     pub parent_story: Option<String>,
+    /// Previous threaded text frame ID from `PreviousTextFrame`, when present.
+    pub previous_text_frame: Option<String>,
+    /// Next threaded text frame ID from `NextTextFrame`, when present.
+    pub next_text_frame: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
     /// Common page item metadata.
@@ -993,6 +997,9 @@ impl TextFrame {
         let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
         let layer_id = optional_attr(event, "ItemLayer", reader, max_attribute_bytes)?;
         let parent_story = optional_attr(event, "ParentStory", reader, max_attribute_bytes)?;
+        let previous_text_frame =
+            optional_attr(event, "PreviousTextFrame", reader, max_attribute_bytes)?;
+        let next_text_frame = optional_attr(event, "NextTextFrame", reader, max_attribute_bytes)?;
         let geometric_bounds =
             optional_attr(event, "GeometricBounds", reader, max_attribute_bytes)?
                 .map(|value| parse_geometric_bounds(element, &value))
@@ -1002,6 +1009,8 @@ impl TextFrame {
             id,
             layer_id,
             parent_story,
+            previous_text_frame,
+            next_text_frame,
             geometric_bounds,
             metadata: PageItemMetadata::from_xml_event(event, reader, max_attribute_bytes)?,
             path_geometry: None,
@@ -2461,6 +2470,16 @@ fn validate_text_frame(frame: &TextFrame) -> Result<()> {
     validate_optional_attr("TextFrame", "Self", frame.id.as_deref())?;
     validate_optional_attr("TextFrame", "ItemLayer", frame.layer_id.as_deref())?;
     validate_optional_attr("TextFrame", "ParentStory", frame.parent_story.as_deref())?;
+    validate_optional_attr(
+        "TextFrame",
+        "PreviousTextFrame",
+        frame.previous_text_frame.as_deref(),
+    )?;
+    validate_optional_attr(
+        "TextFrame",
+        "NextTextFrame",
+        frame.next_text_frame.as_deref(),
+    )?;
     validate_page_item_metadata("TextFrame", &frame.metadata)?;
     if let Some(bounds) = frame.geometric_bounds {
         validate_finite_bounds("TextFrame", bounds)?;
@@ -2684,6 +2703,12 @@ fn serialize_text_frame_with_indent(
     }
     if let Some(parent_story) = &frame.parent_story {
         push_attr(xml, "TextFrame", "ParentStory", parent_story)?;
+    }
+    if let Some(previous_text_frame) = &frame.previous_text_frame {
+        push_attr(xml, "TextFrame", "PreviousTextFrame", previous_text_frame)?;
+    }
+    if let Some(next_text_frame) = &frame.next_text_frame {
+        push_attr(xml, "TextFrame", "NextTextFrame", next_text_frame)?;
     }
     push_page_item_metadata(xml, "TextFrame", &frame.metadata)?;
     if let Some(bounds) = frame.geometric_bounds {
@@ -3143,8 +3168,8 @@ mod tests {
     #[test]
     fn parses_text_frames_with_bounds_and_parent_story() {
         let xml = r#"<Spread Self="u10">
-  <TextFrame Self="tf1" ParentStory="u2" GeometricBounds="0 72 144 216" />
-  <TextFrame Self="tf2" ParentStory="u3" />
+  <TextFrame Self="tf1" ParentStory="u2" NextTextFrame="tf2" GeometricBounds="0 72 144 216" />
+  <TextFrame Self="tf2" ParentStory="u3" PreviousTextFrame="tf1" />
 </Spread>"#;
 
         let spread = Spread::from_xml(xml).unwrap();
@@ -3155,10 +3180,18 @@ mod tests {
         assert!(matches!(spread.page_items[0], PageItem::TextFrame(_)));
         assert_eq!(spread.text_frames[0].id.as_deref(), Some("tf1"));
         assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
+        assert_eq!(
+            spread.text_frames[0].next_text_frame.as_deref(),
+            Some("tf2")
+        );
         let bounds = spread.text_frames[0].geometric_bounds.unwrap();
         assert_eq!(bounds.width().as_f64(), 144.0);
         assert_eq!(bounds.height().as_f64(), 144.0);
         assert_eq!(bounds.to_millimeters().left.as_f64(), 25.4);
+        assert_eq!(
+            spread.text_frames[1].previous_text_frame.as_deref(),
+            Some("tf1")
+        );
         assert!(spread.text_frames[1].geometric_bounds.is_none());
     }
 
@@ -3932,6 +3965,21 @@ mod tests {
     }
 
     #[test]
+    fn rejects_xml_forbidden_text_frame_thread_attributes_on_parse() {
+        let err = Spread::from_xml("<Spread><TextFrame NextTextFrame=\"bad\0id\" /></Spread>")
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "NextTextFrame",
+                reason: "contains an XML-forbidden character",
+            } if element == "TextFrame"
+        ));
+    }
+
+    #[test]
     fn rejects_xml_forbidden_empty_spread_id_attribute_on_parse() {
         let err = Spread::from_xml("<Spread Self=\"bad\0id\" />").unwrap_err();
 
@@ -4190,6 +4238,8 @@ mod tests {
                 id: Some("tf&1".to_owned()),
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
+                previous_text_frame: Some("tf0".to_owned()),
+                next_text_frame: Some("tf2".to_owned()),
                 geometric_bounds: Some(Rect::new(
                     Points::new(0.0),
                     Points::new(72.5),
@@ -4207,6 +4257,8 @@ mod tests {
 
         assert!(xml.contains("Self=\"u&amp;&quot;10\""));
         assert!(xml.contains("Self=\"tf&amp;1\""));
+        assert!(xml.contains("PreviousTextFrame=\"tf0\""));
+        assert!(xml.contains("NextTextFrame=\"tf2\""));
         assert!(xml.contains("GeometricBounds=\"0 72.5 144 216.25\""));
         assert_eq!(parsed, spread);
     }
@@ -4217,6 +4269,8 @@ mod tests {
             id: Some("tf1".to_owned()),
             layer_id: None,
             parent_story: Some("u2".to_owned()),
+            previous_text_frame: None,
+            next_text_frame: None,
             geometric_bounds: None,
             metadata: Default::default(),
             path_geometry: None,
@@ -4253,6 +4307,8 @@ mod tests {
             id: Some("tf1".to_owned()),
             layer_id: None,
             parent_story: Some("u2".to_owned()),
+            previous_text_frame: None,
+            next_text_frame: None,
             geometric_bounds: Some(Rect::new(
                 Points::new(72.0),
                 Points::new(0.0),
@@ -4301,6 +4357,8 @@ mod tests {
             id: Some("tf1".to_owned()),
             layer_id: None,
             parent_story: Some("u2".to_owned()),
+            previous_text_frame: None,
+            next_text_frame: None,
             geometric_bounds: None,
             metadata: Default::default(),
             path_geometry: None,
@@ -4351,6 +4409,8 @@ mod tests {
             id: Some("tf1".to_owned()),
             layer_id: Some("layer1".to_owned()),
             parent_story: Some("u2".to_owned()),
+            previous_text_frame: None,
+            next_text_frame: None,
             geometric_bounds: None,
             metadata: Default::default(),
             path_geometry: None,
@@ -4559,6 +4619,8 @@ mod tests {
                     id: Some(format!("tf{index}")),
                     layer_id: None,
                     parent_story: None,
+                    previous_text_frame: None,
+                    next_text_frame: None,
                     geometric_bounds: None,
                     metadata: Default::default(),
                     path_geometry: None,
@@ -4625,6 +4687,8 @@ mod tests {
                 id: Some("tf1".to_owned()),
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
+                previous_text_frame: None,
+                next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
                 path_geometry: None,
@@ -4633,6 +4697,8 @@ mod tests {
                 id: Some("tf2".to_owned()),
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
+                previous_text_frame: None,
+                next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
                 path_geometry: None,
@@ -4661,6 +4727,8 @@ mod tests {
                 id: Some("tf1".to_owned()),
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
+                previous_text_frame: None,
+                next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
                 path_geometry: None,
@@ -4669,6 +4737,8 @@ mod tests {
                 id: Some("tf2".to_owned()),
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
+                previous_text_frame: None,
+                next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
                 path_geometry: None,
@@ -4758,6 +4828,8 @@ mod tests {
                 id: Some("tf1".to_owned()),
                 layer_id: None,
                 parent_story: Some("u1".to_owned()),
+                previous_text_frame: None,
+                next_text_frame: None,
                 geometric_bounds: Some(Rect::new(
                     Points::new(0.0),
                     Points::new(f64::NAN),
@@ -4792,6 +4864,8 @@ mod tests {
                 id: Some("tf\u{0}".to_owned()),
                 layer_id: None,
                 parent_story: Some("u1".to_owned()),
+                previous_text_frame: None,
+                next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
                 path_geometry: None,
