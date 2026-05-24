@@ -2925,6 +2925,7 @@ mod tests {
                 )),
                 metadata: Default::default(),
                 preference: None,
+                footnote_options: None,
                 path_geometry: None,
             }],
             page_items: Vec::new(),

@@ -23,7 +23,7 @@ pub use crate::model::spread::{
     ObjectExportMetadataProperty, ObjectExportOption, Oval, Page, PageItem,
     PageItemInCopyExportOption, PageItemMetadata, PathGeometry, PathPoint, Point, Polygon, Rect,
     RectMm, Rectangle, Spread, SpreadListItem, SpreadListProperty, SpreadParseOptions, TextFrame,
-    TextFramePreference, TextWrapOffset, TextWrapPreference,
+    TextFrameFootnoteOptions, TextFramePreference, TextWrapOffset, TextWrapPreference,
 };
 pub use crate::model::story::{
     CharacterStyleProperties, CharacterStyleRange, InCopyExportOption, ParagraphStyleProperties,

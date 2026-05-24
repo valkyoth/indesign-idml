@@ -543,8 +543,23 @@ pub struct TextFrame {
     pub metadata: PageItemMetadata,
     /// Text frame layout preferences, when present.
     pub preference: Option<TextFramePreference>,
+    /// Text frame footnote options, when present.
+    pub footnote_options: Option<TextFrameFootnoteOptions>,
     /// Vector path geometry in local point coordinates, when present.
     pub path_geometry: Option<PathGeometry>,
+}
+
+/// Footnote layout options for a text frame.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TextFrameFootnoteOptions {
+    /// Override flag, when present.
+    pub enable_overrides: Option<bool>,
+    /// Span footnotes across columns flag, when present.
+    pub span_footnotes_across: Option<bool>,
+    /// Minimum footnote spacing, preserved as an IDML string.
+    pub minimum_spacing_option: Option<String>,
+    /// Space between footnotes, preserved as an IDML string.
+    pub space_between_footnotes: Option<String>,
 }
 
 /// Text frame layout preference metadata.
@@ -1662,6 +1677,43 @@ impl Oval {
     }
 }
 
+impl TextFrameFootnoteOptions {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            enable_overrides: optional_bool_attr(
+                event,
+                "TextFrameFootnoteOptionsObject",
+                "EnableOverrides",
+                reader,
+                max_attribute_bytes,
+            )?,
+            span_footnotes_across: optional_bool_attr(
+                event,
+                "TextFrameFootnoteOptionsObject",
+                "SpanFootnotesAcross",
+                reader,
+                max_attribute_bytes,
+            )?,
+            minimum_spacing_option: optional_attr(
+                event,
+                "MinimumSpacingOption",
+                reader,
+                max_attribute_bytes,
+            )?,
+            space_between_footnotes: optional_attr(
+                event,
+                "SpaceBetweenFootnotes",
+                reader,
+                max_attribute_bytes,
+            )?,
+        })
+    }
+}
+
 impl TextFramePreference {
     fn from_xml_event(
         event: &BytesStart<'_>,
@@ -2080,6 +2132,7 @@ impl TextFrame {
             geometric_bounds,
             metadata: PageItemMetadata::from_xml_event(event, reader, max_attribute_bytes)?,
             preference: None,
+            footnote_options: None,
             path_geometry: None,
         })
     }
@@ -2582,6 +2635,13 @@ fn parse_text_frame_contents(
                     frame.preference = Some(parse_text_frame_preference_contents(
                         reader, preference, state,
                     )?);
+                } else if e.name().as_ref() == b"TextFrameFootnoteOptionsObject" {
+                    frame.footnote_options = Some(TextFrameFootnoteOptions::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                    parse_text_frame_footnote_options_contents(reader, state)?;
                 } else if e.name().as_ref() == b"TextWrapPreference" {
                     let preference = TextWrapPreference::from_xml_event(
                         &e,
@@ -2636,6 +2696,12 @@ fn parse_text_frame_contents(
                     )?;
                 } else if e.name().as_ref() == b"TextFramePreference" {
                     frame.preference = Some(TextFramePreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"TextFrameFootnoteOptionsObject" {
+                    frame.footnote_options = Some(TextFrameFootnoteOptions::from_xml_event(
                         &e,
                         reader,
                         state.options.max_attribute_bytes,
@@ -2759,6 +2825,50 @@ fn parse_text_frame_preference_contents(
         }
     }
     Ok(preference)
+}
+
+fn parse_text_frame_footnote_options_contents(
+    reader: &mut Reader<&[u8]>,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<()> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"TextFrameFootnoteOptionsObject" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "TextFrameFootnoteOptionsObject".to_owned(),
+                    reason: "unclosed TextFrameFootnoteOptionsObject element",
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn parse_text_wrap_preference_contents(
@@ -4404,6 +4514,23 @@ fn validate_text_frame(frame: &TextFrame) -> Result<()> {
     if let Some(preference) = &frame.preference {
         validate_text_frame_preference(preference)?;
     }
+    if let Some(options) = &frame.footnote_options {
+        validate_text_frame_footnote_options(options)?;
+    }
+    Ok(())
+}
+
+fn validate_text_frame_footnote_options(options: &TextFrameFootnoteOptions) -> Result<()> {
+    validate_optional_attr(
+        "TextFrameFootnoteOptionsObject",
+        "MinimumSpacingOption",
+        options.minimum_spacing_option.as_deref(),
+    )?;
+    validate_optional_attr(
+        "TextFrameFootnoteOptionsObject",
+        "SpaceBetweenFootnotes",
+        options.space_between_footnotes.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -5040,6 +5167,7 @@ fn serialize_text_frame_with_indent(
     }
     if frame.path_geometry.is_some()
         || frame.preference.is_some()
+        || frame.footnote_options.is_some()
         || frame.metadata.text_wrap_preference.is_some()
         || frame.metadata.frame_fitting_option.is_some()
         || frame.metadata.incopy_export_option.is_some()
@@ -5052,11 +5180,54 @@ fn serialize_text_frame_with_indent(
         if let Some(preference) = &frame.preference {
             serialize_text_frame_preference(xml, preference, indent + 2)?;
         }
+        if let Some(options) = &frame.footnote_options {
+            serialize_text_frame_footnote_options(xml, options, indent + 2)?;
+        }
         serialize_page_item_metadata_children(xml, &frame.metadata, indent + 2)?;
         push_indent(xml, indent);
         xml.push_str("</TextFrame>\n");
         return Ok(());
     }
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn serialize_text_frame_footnote_options(
+    xml: &mut String,
+    options: &TextFrameFootnoteOptions,
+    indent: usize,
+) -> Result<()> {
+    validate_text_frame_footnote_options(options)?;
+    push_indent(xml, indent);
+    xml.push_str("<TextFrameFootnoteOptionsObject");
+    if let Some(enable_overrides) = options.enable_overrides {
+        push_attr(
+            xml,
+            "TextFrameFootnoteOptionsObject",
+            "EnableOverrides",
+            bool_str(enable_overrides),
+        )?;
+    }
+    if let Some(span_footnotes_across) = options.span_footnotes_across {
+        push_attr(
+            xml,
+            "TextFrameFootnoteOptionsObject",
+            "SpanFootnotesAcross",
+            bool_str(span_footnotes_across),
+        )?;
+    }
+    push_optional_serialized_attr(
+        xml,
+        "TextFrameFootnoteOptionsObject",
+        "MinimumSpacingOption",
+        options.minimum_spacing_option.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFrameFootnoteOptionsObject",
+        "SpaceBetweenFootnotes",
+        options.space_between_footnotes.as_deref(),
+    )?;
     xml.push_str(" />\n");
     Ok(())
 }
@@ -7603,6 +7774,7 @@ mod tests {
                 )),
                 metadata: Default::default(),
                 preference: None,
+                footnote_options: None,
                 path_geometry: None,
             }],
             page_items: Vec::new(),
@@ -7633,12 +7805,14 @@ mod tests {
         </InsetSpacing>
       </Properties>
     </TextFramePreference>
+    <TextFrameFootnoteOptionsObject EnableOverrides="true" SpanFootnotesAcross="false" MinimumSpacingOption="12" SpaceBetweenFootnotes="6" />
   </TextFrame>
 </Spread>"#;
 
         let spread = Spread::from_xml(xml).unwrap();
         let frame = &spread.text_frames[0];
         let preference = frame.preference.as_ref().unwrap();
+        let footnote_options = frame.footnote_options.as_ref().unwrap();
         let inset_spacing = preference.inset_spacing.as_ref().unwrap();
 
         assert_eq!(preference.text_column_count.as_deref(), Some("2"));
@@ -7671,9 +7845,20 @@ mod tests {
                 ],
             }
         );
+        assert_eq!(footnote_options.enable_overrides, Some(true));
+        assert_eq!(footnote_options.span_footnotes_across, Some(false));
+        assert_eq!(
+            footnote_options.minimum_spacing_option.as_deref(),
+            Some("12")
+        );
+        assert_eq!(
+            footnote_options.space_between_footnotes.as_deref(),
+            Some("6")
+        );
 
         let serialized = spread.to_xml().unwrap();
         assert!(serialized.contains("<TextFramePreference"));
+        assert!(serialized.contains("<TextFrameFootnoteOptionsObject"));
         assert!(serialized.contains("<InsetSpacing type=\"list\">"));
         assert!(serialized.contains("<ListItem type=\"unit\">1</ListItem>"));
         assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
@@ -7896,6 +8081,7 @@ mod tests {
             geometric_bounds: None,
             metadata: Default::default(),
             preference: None,
+            footnote_options: None,
             path_geometry: None,
         };
         let spread = Spread {
@@ -7940,6 +8126,7 @@ mod tests {
             )),
             metadata: Default::default(),
             preference: None,
+            footnote_options: None,
             path_geometry: None,
         };
         let spread = Spread {
@@ -7986,6 +8173,7 @@ mod tests {
             geometric_bounds: None,
             metadata: Default::default(),
             preference: None,
+            footnote_options: None,
             path_geometry: None,
         };
         let spread = Spread {
@@ -8039,6 +8227,7 @@ mod tests {
             geometric_bounds: None,
             metadata: Default::default(),
             preference: None,
+            footnote_options: None,
             path_geometry: None,
         };
         let spread = Spread {
@@ -8250,6 +8439,7 @@ mod tests {
                     geometric_bounds: None,
                     metadata: Default::default(),
                     preference: None,
+                    footnote_options: None,
                     path_geometry: None,
                 })
                 .collect(),
@@ -8319,6 +8509,7 @@ mod tests {
                 geometric_bounds: None,
                 metadata: Default::default(),
                 preference: None,
+                footnote_options: None,
                 path_geometry: None,
             }],
             page_items: vec![PageItem::TextFrame(TextFrame {
@@ -8330,6 +8521,7 @@ mod tests {
                 geometric_bounds: None,
                 metadata: Default::default(),
                 preference: None,
+                footnote_options: None,
                 path_geometry: None,
             })],
         };
@@ -8361,6 +8553,7 @@ mod tests {
                 geometric_bounds: None,
                 metadata: Default::default(),
                 preference: None,
+                footnote_options: None,
                 path_geometry: None,
             }],
             page_items: vec![PageItem::TextFrame(TextFrame {
@@ -8372,6 +8565,7 @@ mod tests {
                 geometric_bounds: None,
                 metadata: Default::default(),
                 preference: None,
+                footnote_options: None,
                 path_geometry: None,
             })],
         };
@@ -8469,6 +8663,7 @@ mod tests {
                 )),
                 metadata: Default::default(),
                 preference: None,
+                footnote_options: None,
                 path_geometry: None,
             }],
             page_items: Vec::new(),
@@ -8501,6 +8696,7 @@ mod tests {
                 geometric_bounds: None,
                 metadata: Default::default(),
                 preference: None,
+                footnote_options: None,
                 path_geometry: None,
             }],
             page_items: Vec::new(),

@@ -272,7 +272,16 @@ struct TextFrameSummary {
     bounds: Option<[u64; 4]>,
     metadata: MetadataSummary,
     preference: Option<TextFramePreferenceSummary>,
+    footnote_options: Option<TextFrameFootnoteOptionsSummary>,
     path_geometry: Option<PathGeometrySummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct TextFrameFootnoteOptionsSummary {
+    enable_overrides: Option<bool>,
+    span_footnotes_across: Option<bool>,
+    minimum_spacing_option: Option<String>,
+    space_between_footnotes: Option<String>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -654,6 +663,10 @@ impl Snapshot {
                                     .preference
                                     .as_ref()
                                     .map(summarize_text_frame_preference),
+                                footnote_options: frame
+                                    .footnote_options
+                                    .as_ref()
+                                    .map(summarize_text_frame_footnote_options),
                                 path_geometry: frame
                                     .path_geometry
                                     .as_ref()
@@ -928,6 +941,17 @@ fn summarize_text_frame_preference(preference: &TextFramePreference) -> TextFram
             .inset_spacing
             .as_ref()
             .map(summarize_spread_list_property),
+    }
+}
+
+fn summarize_text_frame_footnote_options(
+    options: &TextFrameFootnoteOptions,
+) -> TextFrameFootnoteOptionsSummary {
+    TextFrameFootnoteOptionsSummary {
+        enable_overrides: options.enable_overrides,
+        span_footnotes_across: options.span_footnotes_across,
+        minimum_spacing_option: options.minimum_spacing_option.clone(),
+        space_between_footnotes: options.space_between_footnotes.clone(),
     }
 }
 
