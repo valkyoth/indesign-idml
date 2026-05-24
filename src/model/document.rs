@@ -2,15 +2,15 @@
 
 use crate::archive::{ArchiveLimits, IdmlPackage, IdmlPackageWriter, IdmlPath};
 use crate::core::resolver::{
-    ResolvedTextFrameData, page_by_id, resolve_text_frames, text_frames_intersecting,
-    text_frames_on_page, to_owned_records,
+    ResolvedTextFrame, ResolvedTextFrameData, page_by_id, resolve_text_frames,
+    text_frames_intersecting, text_frames_on_page, to_owned_records,
 };
 use crate::error::{IdmlError, Result};
 use crate::model::designmap::{
     DesignMap, DesignMapPackageRef, DesignMapParseOptions, validate_package_element_name,
 };
 use crate::model::resources::{ResourceIntegrityOptions, ResourceInventory};
-use crate::model::spread::{Rect, Spread, SpreadParseOptions};
+use crate::model::spread::{Rect, Spread, SpreadParseOptions, TextFrame};
 use crate::model::story::{Story, StoryParseOptions};
 use indexmap::{IndexMap, IndexSet};
 use std::io::{Read, Seek, Write};
@@ -536,6 +536,24 @@ impl IdmlDocument {
         Ok(to_owned_records(resolve_text_frames(spread, &story_texts)?))
     }
 
+    /// Visits resolved text frames on a loaded spread without collecting owned records.
+    ///
+    /// The visitor receives borrowed frame and story text references from this
+    /// document. Returning an error from the visitor stops iteration
+    /// immediately.
+    pub fn try_for_each_spread_text_frame<E, F>(
+        &self,
+        spread_id: &str,
+        visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+    {
+        let spread = self.spread(spread_id).map_err(E::from)?;
+        self.try_for_each_spread_text_frame_filtered(spread, |_| true, visit)
+    }
+
     /// Resolves text frames on a spread whose direct bounds intersect `query`.
     pub fn resolve_spread_text_in_rect(
         &self,
@@ -546,6 +564,29 @@ impl IdmlDocument {
         let story_texts = self.story_texts_for_spread(spread)?;
         let resolved = resolve_text_frames(spread, &story_texts)?;
         Ok(to_owned_records(text_frames_intersecting(resolved, query)))
+    }
+
+    /// Visits resolved text frames on a spread whose direct bounds intersect `query`.
+    pub fn try_for_each_spread_text_in_rect<E, F>(
+        &self,
+        spread_id: &str,
+        query: Rect,
+        visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+    {
+        let spread = self.spread(spread_id).map_err(E::from)?;
+        self.try_for_each_spread_text_frame_filtered(
+            spread,
+            |frame| {
+                frame
+                    .geometric_bounds
+                    .is_some_and(|bounds| bounds.intersects(query))
+            },
+            visit,
+        )
     }
 
     /// Resolves text frames on a spread whose direct bounds intersect a page.
@@ -559,6 +600,41 @@ impl IdmlDocument {
         let resolved = resolve_text_frames(spread, &story_texts)?;
         let page = page_by_id(spread, page_id)?;
         Ok(to_owned_records(text_frames_on_page(resolved, page)?))
+    }
+
+    /// Visits resolved text frames on a spread whose direct bounds intersect a page.
+    pub fn try_for_each_spread_text_on_page<E, F>(
+        &self,
+        spread_id: &str,
+        page_id: &str,
+        visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+    {
+        let spread = self.spread(spread_id).map_err(E::from)?;
+        let page = page_by_id(spread, page_id).map_err(E::from)?;
+        let page_bounds = page
+            .geometric_bounds
+            .ok_or_else(|| IdmlError::InvalidReference {
+                kind: "spread page",
+                id: page
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| "<unidentified>".to_owned()),
+                reason: "page has no geometric bounds",
+            })
+            .map_err(E::from)?;
+        self.try_for_each_spread_text_frame_filtered(
+            spread,
+            |frame| {
+                frame
+                    .geometric_bounds
+                    .is_some_and(|bounds| bounds.intersects(page_bounds))
+            },
+            visit,
+        )
     }
 
     /// Validates and writes the aggregate as a complete IDML package.
@@ -708,6 +784,48 @@ impl IdmlDocument {
             path,
             entry,
         })
+    }
+
+    fn try_for_each_spread_text_frame_filtered<E, F, P>(
+        &self,
+        spread: &Spread,
+        mut include: P,
+        mut visit: F,
+    ) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: for<'a> FnMut(ResolvedTextFrame<'a>) -> std::result::Result<(), E>,
+        P: FnMut(&TextFrame) -> bool,
+    {
+        for frame in &spread.text_frames {
+            if !include(frame) {
+                continue;
+            }
+            let Some(story_id) = frame.parent_story.as_deref() else {
+                continue;
+            };
+            if !self.design_map.story_srcs.contains_key(story_id) {
+                return Err(E::from(IdmlError::MissingReference {
+                    kind: "text frame parent story",
+                    id: story_id.to_owned(),
+                }));
+            }
+            let story = self
+                .stories
+                .get(story_id)
+                .ok_or_else(|| IdmlError::MissingReference {
+                    kind: "story model",
+                    id: story_id.to_owned(),
+                })
+                .map_err(E::from)?;
+            visit(ResolvedTextFrame {
+                frame,
+                story_id,
+                text: &story.text,
+            })?;
+        }
+
+        Ok(())
     }
 
     fn story_texts_for_spread(&self, spread: &Spread) -> Result<IndexMap<String, String>> {
@@ -2074,6 +2192,162 @@ mod tests {
         assert_eq!(resolved[0].frame_id.as_deref(), Some("tf1"));
         assert_eq!(resolved[0].story_id, "u1");
         assert_eq!(resolved[0].text, "Generated");
+    }
+
+    #[test]
+    fn visits_spread_text_frames_from_loaded_document_without_collecting() {
+        let mut document = make_document();
+        document
+            .add_story(
+                "u2",
+                IdmlPath::new("Stories/Story_u2.xml").unwrap(),
+                Story {
+                    id: Some("u2".to_owned()),
+                    text: "Second".to_owned(),
+                },
+            )
+            .unwrap();
+        document
+            .spreads
+            .get_mut("u10")
+            .unwrap()
+            .text_frames
+            .push(TextFrame {
+                id: Some("tf2".to_owned()),
+                layer_id: None,
+                parent_story: Some("u2".to_owned()),
+                geometric_bounds: Some(Rect::new(
+                    Points::new(110.0),
+                    Points::new(110.0),
+                    Points::new(180.0),
+                    Points::new(180.0),
+                )),
+            });
+
+        let mut visited = Vec::new();
+        document
+            .try_for_each_spread_text_frame("u10", |frame| {
+                visited.push((
+                    frame.frame.id.clone().unwrap(),
+                    frame.story_id.to_owned(),
+                    frame.text.to_owned(),
+                ));
+                Ok::<(), IdmlError>(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            visited,
+            [
+                ("tf1".to_owned(), "u1".to_owned(), "Generated".to_owned()),
+                ("tf2".to_owned(), "u2".to_owned(), "Second".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn spread_text_frame_visitor_can_stop_iteration() {
+        let mut document = make_document();
+        document
+            .add_story(
+                "u2",
+                IdmlPath::new("Stories/Story_u2.xml").unwrap(),
+                Story {
+                    id: Some("u2".to_owned()),
+                    text: "Second".to_owned(),
+                },
+            )
+            .unwrap();
+        document
+            .spreads
+            .get_mut("u10")
+            .unwrap()
+            .text_frames
+            .push(TextFrame {
+                id: Some("tf2".to_owned()),
+                layer_id: None,
+                parent_story: Some("u2".to_owned()),
+                geometric_bounds: None,
+            });
+
+        let mut visited = Vec::new();
+        let err = document
+            .try_for_each_spread_text_frame("u10", |frame| {
+                visited.push(frame.frame.id.clone().unwrap());
+                Err::<(), IdmlError>(IdmlError::InvalidPackage("stop"))
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, IdmlError::InvalidPackage("stop")));
+        assert_eq!(visited, ["tf1".to_owned()]);
+    }
+
+    #[test]
+    fn visits_spread_text_frames_in_rect_from_loaded_document() {
+        let mut document = make_document();
+        document.design_map.story_srcs.insert(
+            "missing".to_owned(),
+            IdmlPath::new("Stories/Missing.xml").unwrap(),
+        );
+        document
+            .spreads
+            .get_mut("u10")
+            .unwrap()
+            .text_frames
+            .push(TextFrame {
+                id: Some("outside".to_owned()),
+                layer_id: None,
+                parent_story: Some("missing".to_owned()),
+                geometric_bounds: Some(Rect::new(
+                    Points::new(200.0),
+                    Points::new(200.0),
+                    Points::new(240.0),
+                    Points::new(240.0),
+                )),
+            });
+
+        let mut visited = Vec::new();
+        document
+            .try_for_each_spread_text_in_rect(
+                "u10",
+                Rect::new(
+                    Points::new(10.0),
+                    Points::new(10.0),
+                    Points::new(80.0),
+                    Points::new(80.0),
+                ),
+                |frame| {
+                    visited.push(frame.frame.id.clone().unwrap());
+                    Ok::<(), IdmlError>(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(visited, ["tf1".to_owned()]);
+    }
+
+    #[test]
+    fn visits_spread_text_frames_on_page_from_loaded_document() {
+        let mut document = make_document();
+        document.spreads.get_mut("u10").unwrap().pages.push(Page {
+            id: Some("p1".to_owned()),
+            geometric_bounds: Some(Rect::new(
+                Points::new(0.0),
+                Points::new(0.0),
+                Points::new(100.0),
+                Points::new(100.0),
+            )),
+        });
+
+        let mut visited = Vec::new();
+        document
+            .try_for_each_spread_text_on_page("u10", "p1", |frame| {
+                visited.push((frame.story_id.to_owned(), frame.text.to_owned()));
+                Ok::<(), IdmlError>(())
+            })
+            .unwrap();
+
+        assert_eq!(visited, [("u1".to_owned(), "Generated".to_owned())]);
     }
 
     #[test]
