@@ -175,6 +175,7 @@ struct StoryTableCellSummary {
     right_inset: Option<String>,
     bottom_inset: Option<String>,
     fill_color: Option<String>,
+    paragraph_style_ranges: Vec<ParagraphStyleRangeSummary>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -617,6 +618,9 @@ fn summarize_story_tables(tables: &[StoryTable]) -> Vec<StoryTableSummary> {
                     right_inset: cell.right_inset.clone(),
                     bottom_inset: cell.bottom_inset.clone(),
                     fill_color: cell.fill_color.clone(),
+                    paragraph_style_ranges: summarize_paragraph_style_ranges(
+                        &cell.paragraph_style_ranges,
+                    ),
                 })
                 .collect(),
         })

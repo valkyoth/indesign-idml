@@ -276,6 +276,8 @@ pub struct StoryTableCell {
     pub bottom_inset: Option<String>,
     /// Fill color reference, when present.
     pub fill_color: Option<String>,
+    /// Paragraph and character style ranges contained by this cell.
+    pub paragraph_style_ranges: Vec<ParagraphStyleRange>,
 }
 
 /// Typed child properties from a character style range.
@@ -338,6 +340,8 @@ impl Story {
         let mut current_character_range = None;
         let mut current_property = None;
         let mut current_table = None;
+        let mut current_cell = None;
+        let mut saved_outer_style_range = None;
         let mut metadata = StoryMetadata::default();
         let mut preference = None;
         let mut incopy_export_option = None;
@@ -390,18 +394,26 @@ impl Story {
                             options.max_attribute_bytes,
                         )?);
                     } else if story_depth > 0 && e.name().as_ref() == b"ParagraphStyleRange" {
-                        paragraph_style_ranges.push(ParagraphStyleRange::from_xml_event(
+                        let ranges = active_paragraph_style_ranges_mut(
+                            &mut paragraph_style_ranges,
+                            current_table,
+                            current_cell,
+                        )?;
+                        ranges.push(ParagraphStyleRange::from_xml_event(
                             &e,
                             &reader,
                             options.max_attribute_bytes,
                         )?);
-                        current_paragraph_range = Some(paragraph_style_ranges.len() - 1);
+                        current_paragraph_range = Some(ranges.len() - 1);
                     } else if story_depth > 0 && e.name().as_ref() == b"CharacterStyleRange" {
-                        let paragraph_index = ensure_current_paragraph_range(
+                        let ranges = active_paragraph_style_ranges_mut(
                             &mut paragraph_style_ranges,
-                            &mut current_paragraph_range,
-                        );
-                        let paragraph = &mut paragraph_style_ranges[paragraph_index];
+                            current_table,
+                            current_cell,
+                        )?;
+                        let paragraph_index =
+                            ensure_current_paragraph_range(ranges, &mut current_paragraph_range);
+                        let paragraph = &mut ranges[paragraph_index];
                         paragraph
                             .character_style_ranges
                             .push(CharacterStyleRange::from_xml_event(
@@ -436,13 +448,17 @@ impl Story {
                             options.max_attribute_bytes,
                         )?;
                     } else if story_depth > 0 && e.name().as_ref() == b"Cell" {
-                        push_story_table_cell(
+                        current_cell = Some(push_story_table_cell(
                             &mut paragraph_style_ranges,
                             current_table,
                             &e,
                             &reader,
                             options.max_attribute_bytes,
-                        )?;
+                        )?);
+                        saved_outer_style_range =
+                            Some((current_paragraph_range, current_character_range));
+                        current_paragraph_range = None;
+                        current_character_range = None;
                     } else if story_depth > 0 {
                         maybe_start_story_property(
                             &mut current_property,
@@ -465,7 +481,18 @@ impl Story {
                 }
                 Event::End(e) => {
                     if property_end_matches(&current_property, e.name().as_ref()) {
-                        finish_story_property(&mut paragraph_style_ranges, &mut current_property)?;
+                        let ranges = active_paragraph_style_ranges_mut(
+                            &mut paragraph_style_ranges,
+                            current_table,
+                            current_cell,
+                        )?;
+                        finish_story_property(ranges, &mut current_property)?;
+                    } else if e.name().as_ref() == b"Cell" {
+                        current_cell = None;
+                        if let Some((paragraph, character)) = saved_outer_style_range.take() {
+                            current_paragraph_range = paragraph;
+                            current_character_range = character;
+                        }
                     } else if e.name().as_ref() == b"Table" {
                         current_table = None;
                     } else if e.name().as_ref() == b"CharacterStyleRange" {
@@ -483,8 +510,13 @@ impl Story {
                     if content_depth > 0 {
                         let decoded = e.decode()?;
                         push_limited(&mut text, decoded.as_ref(), options.max_text_bytes)?;
-                        push_range_limited(
+                        let ranges = active_paragraph_style_ranges_mut(
                             &mut paragraph_style_ranges,
+                            current_table,
+                            current_cell,
+                        )?;
+                        push_range_limited(
+                            ranges,
                             current_paragraph_range,
                             current_character_range,
                             decoded.as_ref(),
@@ -504,8 +536,13 @@ impl Story {
                     if content_depth > 0 {
                         let decoded = e.xml_content(XmlVersion::Implicit1_0)?;
                         push_limited(&mut text, decoded.as_ref(), options.max_text_bytes)?;
-                        push_range_limited(
+                        let ranges = active_paragraph_style_ranges_mut(
                             &mut paragraph_style_ranges,
+                            current_table,
+                            current_cell,
+                        )?;
+                        push_range_limited(
+                            ranges,
                             current_paragraph_range,
                             current_character_range,
                             decoded.as_ref(),
@@ -525,8 +562,13 @@ impl Story {
                     if content_depth > 0 {
                         if let Some(ch) = e.resolve_char_ref()? {
                             push_char_limited(&mut text, ch, options.max_text_bytes)?;
-                            push_range_char_limited(
+                            let ranges = active_paragraph_style_ranges_mut(
                                 &mut paragraph_style_ranges,
+                                current_table,
+                                current_cell,
+                            )?;
+                            push_range_char_limited(
+                                ranges,
                                 current_paragraph_range,
                                 current_character_range,
                                 ch,
@@ -542,8 +584,13 @@ impl Story {
                                     ))
                                 })?;
                             push_limited(&mut text, replacement, options.max_text_bytes)?;
-                            push_range_limited(
+                            let ranges = active_paragraph_style_ranges_mut(
                                 &mut paragraph_style_ranges,
+                                current_table,
+                                current_cell,
+                            )?;
+                            push_range_limited(
+                                ranges,
                                 current_paragraph_range,
                                 current_character_range,
                                 replacement,
@@ -613,23 +660,31 @@ impl Story {
                             options.max_attribute_bytes,
                         )?);
                     } else if story_depth > 0 && e.name().as_ref() == b"ParagraphStyleRange" {
-                        paragraph_style_ranges.push(ParagraphStyleRange::from_xml_event(
+                        let ranges = active_paragraph_style_ranges_mut(
+                            &mut paragraph_style_ranges,
+                            current_table,
+                            current_cell,
+                        )?;
+                        ranges.push(ParagraphStyleRange::from_xml_event(
                             &e,
                             &reader,
                             options.max_attribute_bytes,
                         )?);
                     } else if story_depth > 0 && e.name().as_ref() == b"CharacterStyleRange" {
-                        let paragraph_index = ensure_current_paragraph_range(
+                        let ranges = active_paragraph_style_ranges_mut(
                             &mut paragraph_style_ranges,
-                            &mut current_paragraph_range,
-                        );
-                        paragraph_style_ranges[paragraph_index]
-                            .character_style_ranges
-                            .push(CharacterStyleRange::from_xml_event(
+                            current_table,
+                            current_cell,
+                        )?;
+                        let paragraph_index =
+                            ensure_current_paragraph_range(ranges, &mut current_paragraph_range);
+                        ranges[paragraph_index].character_style_ranges.push(
+                            CharacterStyleRange::from_xml_event(
                                 &e,
                                 &reader,
                                 options.max_attribute_bytes,
-                            )?);
+                            )?,
+                        );
                     } else if story_depth > 0 && e.name().as_ref() == b"Table" {
                         start_story_table(
                             &mut paragraph_style_ranges,
@@ -665,7 +720,11 @@ impl Story {
                         )?;
                     } else if story_depth > 0
                         && maybe_insert_empty_story_property(
-                            &mut paragraph_style_ranges,
+                            active_paragraph_style_ranges_mut(
+                                &mut paragraph_style_ranges,
+                                current_table,
+                                current_cell,
+                            )?,
                             &e,
                             &reader,
                             options.max_attribute_bytes,
@@ -675,8 +734,13 @@ impl Story {
                     {
                     } else if story_depth > 0 && e.name().as_ref() == b"Br" {
                         push_limited(&mut text, "\n", options.max_text_bytes)?;
-                        push_range_limited(
+                        let ranges = active_paragraph_style_ranges_mut(
                             &mut paragraph_style_ranges,
+                            current_table,
+                            current_cell,
+                        )?;
+                        push_range_limited(
+                            ranges,
                             current_paragraph_range,
                             current_character_range,
                             "\n",
@@ -684,8 +748,13 @@ impl Story {
                         )?;
                     } else if story_depth > 0 && e.name().as_ref() == b"Tab" {
                         push_limited(&mut text, "\t", options.max_text_bytes)?;
-                        push_range_limited(
+                        let ranges = active_paragraph_style_ranges_mut(
                             &mut paragraph_style_ranges,
+                            current_table,
+                            current_cell,
+                        )?;
+                        push_range_limited(
+                            ranges,
                             current_paragraph_range,
                             current_character_range,
                             "\t",
@@ -1023,6 +1092,7 @@ impl StoryTableCell {
             right_inset: optional_attr(event, "RightInset", reader, max_attribute_bytes)?,
             bottom_inset: optional_attr(event, "BottomInset", reader, max_attribute_bytes)?,
             fill_color: optional_attr(event, "FillColor", reader, max_attribute_bytes)?,
+            paragraph_style_ranges: Vec::new(),
         })
     }
 }
@@ -1364,14 +1434,14 @@ fn push_story_table_cell(
     event: &BytesStart<'_>,
     reader: &Reader<&[u8]>,
     max_attribute_bytes: usize,
-) -> Result<()> {
+) -> Result<usize> {
     let table = current_story_table_mut(paragraph_style_ranges, current_table, "Cell")?;
     table.cells.push(StoryTableCell::from_xml_event(
         event,
         reader,
         max_attribute_bytes,
     )?);
-    Ok(())
+    Ok(table.cells.len() - 1)
 }
 
 fn current_story_table_mut<'a>(
@@ -1392,6 +1462,24 @@ fn current_story_table_mut<'a>(
         .ok_or_else(|| IdmlError::InvalidElement {
             element: element.to_owned(),
             reason: "table parser state is inconsistent",
+        })
+}
+
+fn active_paragraph_style_ranges_mut(
+    paragraph_style_ranges: &mut Vec<ParagraphStyleRange>,
+    current_table: Option<(usize, usize, usize)>,
+    current_cell: Option<usize>,
+) -> Result<&mut Vec<ParagraphStyleRange>> {
+    let Some(cell_index) = current_cell else {
+        return Ok(paragraph_style_ranges);
+    };
+    current_story_table_mut(paragraph_style_ranges, current_table, "Cell")?
+        .cells
+        .get_mut(cell_index)
+        .map(|cell| &mut cell.paragraph_style_ranges)
+        .ok_or_else(|| IdmlError::InvalidElement {
+            element: "Cell".to_owned(),
+            reason: "cell parser state is inconsistent",
         })
 }
 
@@ -1796,7 +1884,22 @@ fn validate_story_style_ranges(story: &Story) -> Result<()> {
     }
 
     let mut range_text = String::new();
-    for paragraph in &story.paragraph_style_ranges {
+    validate_paragraph_style_ranges_for_text(&story.paragraph_style_ranges, &mut range_text)?;
+
+    if range_text != story.text {
+        return Err(IdmlError::InvalidText {
+            what: "story style range text",
+            reason: "does not match story text",
+        });
+    }
+    Ok(())
+}
+
+fn validate_paragraph_style_ranges_for_text(
+    ranges: &[ParagraphStyleRange],
+    range_text: &mut String,
+) -> Result<()> {
+    for paragraph in ranges {
         validate_optional_story_attr(
             "ParagraphStyleRange",
             "AppliedParagraphStyle",
@@ -1906,21 +2009,10 @@ fn validate_story_style_ranges(story: &Story) -> Result<()> {
                 character.vertical_scale.as_deref(),
             )?;
             validate_character_style_properties(&character.properties)?;
-            validate_story_tables(&character.tables)?;
             validate_xml_text("story style range text", &character.text)?;
-            push_limited(
-                &mut range_text,
-                &character.text,
-                DEFAULT_MAX_STORY_TEXT_BYTES,
-            )?;
+            push_limited(range_text, &character.text, DEFAULT_MAX_STORY_TEXT_BYTES)?;
+            validate_story_tables(&character.tables, range_text)?;
         }
-    }
-
-    if range_text != story.text {
-        return Err(IdmlError::InvalidText {
-            what: "story style range text",
-            reason: "does not match story text",
-        });
     }
     Ok(())
 }
@@ -1959,7 +2051,7 @@ fn validate_story_property(element: &'static str, property: Option<&StoryPropert
     validate_xml_text("story property value", &property.value)
 }
 
-fn validate_story_tables(tables: &[StoryTable]) -> Result<()> {
+fn validate_story_tables(tables: &[StoryTable], range_text: &mut String) -> Result<()> {
     for table in tables {
         validate_optional_story_attr("Table", "Self", table.id.as_deref())?;
         validate_optional_story_attr("Table", "HeaderRowCount", table.header_row_count.as_deref())?;
@@ -2017,6 +2109,7 @@ fn validate_story_tables(tables: &[StoryTable]) -> Result<()> {
             validate_optional_story_attr("Cell", "RightInset", cell.right_inset.as_deref())?;
             validate_optional_story_attr("Cell", "BottomInset", cell.bottom_inset.as_deref())?;
             validate_optional_story_attr("Cell", "FillColor", cell.fill_color.as_deref())?;
+            validate_paragraph_style_ranges_for_text(&cell.paragraph_style_ranges, range_text)?;
         }
     }
     Ok(())
@@ -2282,7 +2375,13 @@ fn serialize_story_tables(xml: &mut String, tables: &[StoryTable]) -> Result<()>
         for cell in &table.cells {
             xml.push_str("        <Cell");
             push_story_table_cell_attrs(xml, cell)?;
-            xml.push_str(" />\n");
+            if cell.paragraph_style_ranges.is_empty() {
+                xml.push_str(" />\n");
+            } else {
+                xml.push_str(">\n");
+                serialize_paragraph_style_ranges(xml, &cell.paragraph_style_ranges)?;
+                xml.push_str("        </Cell>\n");
+            }
         }
         xml.push_str("      </Table>\n      ");
     }
@@ -3186,7 +3285,7 @@ mod tests {
         let story = Story::from_xml(xml).unwrap();
 
         assert_eq!(story.text, "Cell text");
-        assert_eq!(story.paragraph_style_ranges.len(), 2);
+        assert_eq!(story.paragraph_style_ranges.len(), 1);
         let table = &story.paragraph_style_ranges[0].character_style_ranges[0].tables[0];
         assert_eq!(table.id.as_deref(), Some("t1"));
         assert_eq!(table.header_row_count.as_deref(), Some("1"));
@@ -3206,12 +3305,24 @@ mod tests {
         assert_eq!(table.cells.len(), 1);
         assert_eq!(table.cells[0].name.as_deref(), Some("0:0"));
         assert_eq!(table.cells[0].fill_color.as_deref(), Some("Swatch/None"));
+        assert_eq!(table.cells[0].paragraph_style_ranges.len(), 1);
+        assert_eq!(
+            table.cells[0].paragraph_style_ranges[0]
+                .applied_paragraph_style
+                .as_deref(),
+            Some("ParagraphStyle/Cell")
+        );
+        assert_eq!(
+            table.cells[0].paragraph_style_ranges[0].character_style_ranges[0].text,
+            "Cell text"
+        );
 
         let serialized = story.to_xml().unwrap();
         assert!(serialized.contains("<Table Self=\"t1\""));
         assert!(serialized.contains("<Row Self=\"r1\""));
         assert!(serialized.contains("<Column Self=\"c1\""));
         assert!(serialized.contains("<Cell Self=\"cell1\""));
+        assert!(serialized.contains("</Cell>"));
         assert_eq!(Story::from_xml(&serialized).unwrap(), story);
     }
 
