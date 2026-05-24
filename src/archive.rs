@@ -9,6 +9,7 @@ use crate::model::designmap::{
     DesignMap, DesignMapParseOptions, MasterSpreadPointer, PackageResourcePointer, SpreadPointer,
     StoryPointer,
 };
+use crate::model::document::{IdmlDocument, IdmlDocumentReadOptions};
 use crate::model::resources::{
     EmbeddedAsset, EmbeddedAssetParseOptions, ResourceIntegrityOptions, ResourceInventory,
     ResourceItem, ResourceItemGroup, ResourceItemParseOptions, ResourceKind,
@@ -322,6 +323,23 @@ where
         let design_map = DesignMap::from_xml_with_options(xml, options)?;
         self.validate_designmap_entries(&design_map)?;
         Ok(design_map)
+    }
+
+    /// Reads all manifest-referenced typed entries into a validated document model.
+    ///
+    /// This eagerly loads stories, spreads, and preserved entries. For large
+    /// packages where only text extraction is needed, prefer visitor APIs such
+    /// as [`IdmlPackage::try_for_each_story_text`].
+    pub fn read_document(&mut self) -> Result<IdmlDocument> {
+        self.read_document_with_options(IdmlDocumentReadOptions::default())
+    }
+
+    /// Reads all manifest-referenced typed entries into a document model with explicit limits.
+    pub fn read_document_with_options(
+        &mut self,
+        options: IdmlDocumentReadOptions,
+    ) -> Result<IdmlDocument> {
+        IdmlDocument::read_from_package_with_options(self, options)
     }
 
     /// Reads `designmap.xml` and returns an inventory of non-story/spread resources.
@@ -1369,6 +1387,7 @@ mod tests {
     use crate::core::units::Points;
     use crate::encoding::Base64Mode;
     use crate::model::designmap::{DesignMap, DesignMapParseOptions};
+    use crate::model::document::IdmlDocumentReadOptions;
     use crate::model::resources::{
         EmbeddedAssetParseOptions, ResourceIntegrityOptions, ResourceItemParseOptions, ResourceKind,
     };
@@ -1453,6 +1472,68 @@ mod tests {
         assert_eq!(design_map.id, "d1");
         assert!(design_map.spread_srcs.contains_key("u1"));
         assert!(design_map.story_srcs.contains_key("u2"));
+    }
+
+    #[test]
+    fn reads_validated_document_from_package() {
+        let zip = make_zip(&[
+            (
+                "designmap.xml",
+                br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#,
+            ),
+            (
+                "Spreads/Spread_u10.xml",
+                br#"<Spread Self="u10"><TextFrame Self="tf1" ParentStory="u1" /></Spread>"#,
+            ),
+            (
+                "Stories/Story_u1.xml",
+                br#"<Story Self="u1"><Content>Loaded</Content></Story>"#,
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let document = package.read_document().unwrap();
+
+        assert_eq!(document.design_map.id, "d1");
+        assert_eq!(document.stories["u1"].text, "Loaded");
+        assert_eq!(
+            document.spreads["u10"].text_frames[0]
+                .parent_story
+                .as_deref(),
+            Some("u1")
+        );
+    }
+
+    #[test]
+    fn read_document_with_options_enforces_story_limits() {
+        let zip = make_zip(&[
+            (
+                "designmap.xml",
+                br#"<Document Self="d1">
+  <idPkg:Story src="Stories/Story_u1.xml" />
+</Document>"#,
+            ),
+            (
+                "Stories/Story_u1.xml",
+                br#"<Story Self="u1"><Content>Too long</Content></Story>"#,
+            ),
+        ]);
+        let mut package = IdmlPackage::new(Cursor::new(zip)).unwrap();
+
+        let err = package
+            .read_document_with_options(IdmlDocumentReadOptions {
+                story: StoryParseOptions {
+                    max_text_bytes: 3,
+                    ..StoryParseOptions::default()
+                },
+                ..IdmlDocumentReadOptions::default()
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, IdmlError::LimitExceeded { what, .. } if what == "story text bytes"));
     }
 
     #[test]

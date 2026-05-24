@@ -35,7 +35,12 @@ fn main() -> Result<()> {
         br#"<Story Self="u1"><Content>Downstream</Content></Story>"#,
     )?;
 
-    let mut package = IdmlPackage::new(Cursor::new(writer.finish()?.into_inner()))?;
+    let bytes = writer.finish()?.into_inner();
+    let mut package = IdmlPackage::new(Cursor::new(bytes.clone()))?;
+    let document = package.read_document()?;
+    assert_eq!(document.stories["u1"].text, "Downstream");
+
+    let mut package = IdmlPackage::new(Cursor::new(bytes))?;
     let design_map = package.read_designmap()?;
     let mut seen = false;
     package.try_for_each_story_text(&design_map, |story_id, text| {
