@@ -638,6 +638,34 @@ pub struct SpreadListItem {
     pub value: String,
 }
 
+/// Text wrap behavior for a page item.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TextWrapPreference {
+    /// Inverse wrap flag, when present.
+    pub inverse: Option<bool>,
+    /// Restrict wrap application to master pages, when present.
+    pub apply_to_master_page_only: Option<bool>,
+    /// Wrap side mode, when present.
+    pub text_wrap_side: Option<String>,
+    /// Wrap mode, when present.
+    pub text_wrap_mode: Option<String>,
+    /// Wrap offsets, when present.
+    pub text_wrap_offset: Option<TextWrapOffset>,
+}
+
+/// Text wrap offset values.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TextWrapOffset {
+    /// Top offset, preserved as an IDML string.
+    pub top: Option<String>,
+    /// Left offset, preserved as an IDML string.
+    pub left: Option<String>,
+    /// Bottom offset, preserved as an IDML string.
+    pub bottom: Option<String>,
+    /// Right offset, preserved as an IDML string.
+    pub right: Option<String>,
+}
+
 /// Common page item metadata shared by frames, shapes, and groups.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageItemMetadata {
@@ -749,6 +777,8 @@ pub struct PageItemMetadata {
     pub gradient_stroke_hilite_length: Option<String>,
     /// Gradient stroke hilite angle, preserved as an IDML string.
     pub gradient_stroke_hilite_angle: Option<String>,
+    /// Text wrap preference child element, when present.
+    pub text_wrap_preference: Option<TextWrapPreference>,
 }
 
 impl PageItemMetadata {
@@ -983,6 +1013,50 @@ impl PageItemMetadata {
                 reader,
                 max_attribute_bytes,
             )?,
+            text_wrap_preference: None,
+        })
+    }
+}
+
+impl TextWrapPreference {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            inverse: optional_bool_attr(
+                event,
+                "TextWrapPreference",
+                "Inverse",
+                reader,
+                max_attribute_bytes,
+            )?,
+            apply_to_master_page_only: optional_bool_attr(
+                event,
+                "TextWrapPreference",
+                "ApplyToMasterPageOnly",
+                reader,
+                max_attribute_bytes,
+            )?,
+            text_wrap_side: optional_attr(event, "TextWrapSide", reader, max_attribute_bytes)?,
+            text_wrap_mode: optional_attr(event, "TextWrapMode", reader, max_attribute_bytes)?,
+            text_wrap_offset: None,
+        })
+    }
+}
+
+impl TextWrapOffset {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            top: optional_attr(event, "Top", reader, max_attribute_bytes)?,
+            left: optional_attr(event, "Left", reader, max_attribute_bytes)?,
+            bottom: optional_attr(event, "Bottom", reader, max_attribute_bytes)?,
+            right: optional_attr(event, "Right", reader, max_attribute_bytes)?,
         })
     }
 }
@@ -2144,6 +2218,15 @@ fn parse_text_frame_contents(
                     frame.preference = Some(parse_text_frame_preference_contents(
                         reader, preference, state,
                     )?);
+                } else if e.name().as_ref() == b"TextWrapPreference" {
+                    let preference = TextWrapPreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    frame.metadata.text_wrap_preference = Some(
+                        parse_text_wrap_preference_contents(reader, preference, state)?,
+                    );
                 }
             }
             Event::Empty(e) => {
@@ -2166,6 +2249,12 @@ fn parse_text_frame_contents(
                     )?;
                 } else if e.name().as_ref() == b"TextFramePreference" {
                     frame.preference = Some(TextFramePreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"TextWrapPreference" {
+                    frame.metadata.text_wrap_preference = Some(TextWrapPreference::from_xml_event(
                         &e,
                         reader,
                         state.options.max_attribute_bytes,
@@ -2258,6 +2347,65 @@ fn parse_text_frame_preference_contents(
                 return Err(IdmlError::InvalidElement {
                     element: "TextFramePreference".to_owned(),
                     reason: "unclosed TextFramePreference element",
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(preference)
+}
+
+fn parse_text_wrap_preference_contents(
+    reader: &mut Reader<&[u8]>,
+    mut preference: TextWrapPreference,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<TextWrapPreference> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                if e.name().as_ref() == b"TextWrapOffset" {
+                    preference.text_wrap_offset = Some(TextWrapOffset::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                }
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                if e.name().as_ref() == b"TextWrapOffset" {
+                    preference.text_wrap_offset = Some(TextWrapOffset::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                }
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"TextWrapPreference" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "TextWrapPreference".to_owned(),
+                    reason: "unclosed TextWrapPreference element",
                 });
             }
             _ => {}
@@ -2447,7 +2595,13 @@ fn parse_oval_contents(
     mut oval: Oval,
     state: &mut NestedSpreadParseState<'_>,
 ) -> Result<Oval> {
-    parse_page_item_path_contents(reader, "Oval", state, &mut oval.path_geometry)?;
+    parse_page_item_path_contents(
+        reader,
+        "Oval",
+        state,
+        &mut oval.path_geometry,
+        &mut oval.metadata,
+    )?;
     Ok(oval)
 }
 
@@ -2456,7 +2610,13 @@ fn parse_graphic_line_contents(
     mut line: GraphicLine,
     state: &mut NestedSpreadParseState<'_>,
 ) -> Result<GraphicLine> {
-    parse_page_item_path_contents(reader, "GraphicLine", state, &mut line.path_geometry)?;
+    parse_page_item_path_contents(
+        reader,
+        "GraphicLine",
+        state,
+        &mut line.path_geometry,
+        &mut line.metadata,
+    )?;
     Ok(line)
 }
 
@@ -2465,7 +2625,13 @@ fn parse_polygon_contents(
     mut polygon: Polygon,
     state: &mut NestedSpreadParseState<'_>,
 ) -> Result<Polygon> {
-    parse_page_item_path_contents(reader, "Polygon", state, &mut polygon.path_geometry)?;
+    parse_page_item_path_contents(
+        reader,
+        "Polygon",
+        state,
+        &mut polygon.path_geometry,
+        &mut polygon.metadata,
+    )?;
     Ok(polygon)
 }
 
@@ -2474,6 +2640,7 @@ fn parse_page_item_path_contents(
     end_tag: &'static str,
     state: &mut NestedSpreadParseState<'_>,
     path_geometry: &mut Option<PathGeometry>,
+    metadata: &mut PageItemMetadata,
 ) -> Result<()> {
     loop {
         match reader.read_event()? {
@@ -2495,6 +2662,15 @@ fn parse_page_item_path_contents(
                         )?,
                         state.options.max_text_frames,
                     )?;
+                } else if e.name().as_ref() == b"TextWrapPreference" {
+                    let preference = TextWrapPreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    metadata.text_wrap_preference = Some(parse_text_wrap_preference_contents(
+                        reader, preference, state,
+                    )?);
                 }
             }
             Event::Empty(e) => {
@@ -2512,6 +2688,12 @@ fn parse_page_item_path_contents(
                         )?,
                         state.options.max_text_frames,
                     )?;
+                } else if e.name().as_ref() == b"TextWrapPreference" {
+                    metadata.text_wrap_preference = Some(TextWrapPreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
                 }
             }
             Event::End(e) => {
@@ -2718,6 +2900,15 @@ fn parse_rectangle_contents(
                             Ok::<(), IdmlError>(())
                         })
                         .transpose()?;
+                } else if e.name().as_ref() == b"TextWrapPreference" {
+                    let preference = TextWrapPreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    rectangle.metadata.text_wrap_preference = Some(
+                        parse_text_wrap_preference_contents(reader, preference, state)?,
+                    );
                 }
             }
             Event::Empty(e) => {
@@ -2735,6 +2926,13 @@ fn parse_rectangle_contents(
                         &mut rectangle.path_geometry,
                         PathGeometry { paths: Vec::new() },
                     );
+                } else if e.name().as_ref() == b"TextWrapPreference" {
+                    rectangle.metadata.text_wrap_preference =
+                        Some(TextWrapPreference::from_xml_event(
+                            &e,
+                            reader,
+                            state.options.max_attribute_bytes,
+                        )?);
                 }
             }
             Event::End(e) => {
@@ -2920,6 +3118,15 @@ fn parse_group_contents(
                         state.page_item_count,
                         state.options.max_page_items,
                     )?;
+                } else if e.name().as_ref() == b"TextWrapPreference" {
+                    let preference = TextWrapPreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    group.metadata.text_wrap_preference = Some(
+                        parse_text_wrap_preference_contents(reader, preference, state)?,
+                    );
                 }
             }
             Event::Empty(e) => {
@@ -2998,6 +3205,12 @@ fn parse_group_contents(
                         state.page_item_count,
                         state.options.max_page_items,
                     )?;
+                } else if e.name().as_ref() == b"TextWrapPreference" {
+                    group.metadata.text_wrap_preference = Some(TextWrapPreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
                 }
             }
             Event::End(e) => {
@@ -3819,7 +4032,36 @@ fn validate_page_item_metadata(element: &'static str, metadata: &PageItemMetadat
         element,
         "GradientStrokeHiliteAngle",
         metadata.gradient_stroke_hilite_angle.as_deref(),
-    )
+    )?;
+    if let Some(preference) = &metadata.text_wrap_preference {
+        validate_text_wrap_preference(preference)?;
+    }
+    Ok(())
+}
+
+fn validate_text_wrap_preference(preference: &TextWrapPreference) -> Result<()> {
+    validate_optional_attr(
+        "TextWrapPreference",
+        "TextWrapSide",
+        preference.text_wrap_side.as_deref(),
+    )?;
+    validate_optional_attr(
+        "TextWrapPreference",
+        "TextWrapMode",
+        preference.text_wrap_mode.as_deref(),
+    )?;
+    if let Some(offset) = &preference.text_wrap_offset {
+        validate_text_wrap_offset(offset)?;
+    }
+    Ok(())
+}
+
+fn validate_text_wrap_offset(offset: &TextWrapOffset) -> Result<()> {
+    validate_optional_attr("TextWrapOffset", "Top", offset.top.as_deref())?;
+    validate_optional_attr("TextWrapOffset", "Left", offset.left.as_deref())?;
+    validate_optional_attr("TextWrapOffset", "Bottom", offset.bottom.as_deref())?;
+    validate_optional_attr("TextWrapOffset", "Right", offset.right.as_deref())?;
+    Ok(())
 }
 
 fn validate_path_geometry(path_geometry: &PathGeometry) -> Result<()> {
@@ -3930,7 +4172,10 @@ fn serialize_text_frame_with_indent(
         let bounds = format_geometric_bounds("TextFrame", bounds)?;
         push_attr(xml, "TextFrame", "GeometricBounds", &bounds)?;
     }
-    if frame.path_geometry.is_some() || frame.preference.is_some() {
+    if frame.path_geometry.is_some()
+        || frame.preference.is_some()
+        || frame.metadata.text_wrap_preference.is_some()
+    {
         xml.push_str(">\n");
         if let Some(path_geometry) = &frame.path_geometry {
             serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
@@ -3938,6 +4183,7 @@ fn serialize_text_frame_with_indent(
         if let Some(preference) = &frame.preference {
             serialize_text_frame_preference(xml, preference, indent + 2)?;
         }
+        serialize_page_item_metadata_children(xml, &frame.metadata, indent + 2)?;
         push_indent(xml, indent);
         xml.push_str("</TextFrame>\n");
         return Ok(());
@@ -4217,6 +4463,81 @@ fn push_optional_bool_serialized_attr(
     Ok(())
 }
 
+fn serialize_page_item_metadata_children(
+    xml: &mut String,
+    metadata: &PageItemMetadata,
+    indent: usize,
+) -> Result<()> {
+    if let Some(preference) = &metadata.text_wrap_preference {
+        serialize_text_wrap_preference(xml, preference, indent)?;
+    }
+    Ok(())
+}
+
+fn serialize_text_wrap_preference(
+    xml: &mut String,
+    preference: &TextWrapPreference,
+    indent: usize,
+) -> Result<()> {
+    validate_text_wrap_preference(preference)?;
+    push_indent(xml, indent);
+    xml.push_str("<TextWrapPreference");
+    if let Some(inverse) = preference.inverse {
+        push_attr(xml, "TextWrapPreference", "Inverse", bool_str(inverse))?;
+    }
+    if let Some(apply_to_master_page_only) = preference.apply_to_master_page_only {
+        push_attr(
+            xml,
+            "TextWrapPreference",
+            "ApplyToMasterPageOnly",
+            bool_str(apply_to_master_page_only),
+        )?;
+    }
+    push_optional_serialized_attr(
+        xml,
+        "TextWrapPreference",
+        "TextWrapSide",
+        preference.text_wrap_side.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextWrapPreference",
+        "TextWrapMode",
+        preference.text_wrap_mode.as_deref(),
+    )?;
+
+    let Some(offset) = &preference.text_wrap_offset else {
+        xml.push_str(" />\n");
+        return Ok(());
+    };
+
+    xml.push_str(">\n");
+    push_indent(xml, indent + 2);
+    xml.push_str("<Properties>\n");
+    serialize_text_wrap_offset(xml, offset, indent + 4)?;
+    push_indent(xml, indent + 2);
+    xml.push_str("</Properties>\n");
+    push_indent(xml, indent);
+    xml.push_str("</TextWrapPreference>\n");
+    Ok(())
+}
+
+fn serialize_text_wrap_offset(
+    xml: &mut String,
+    offset: &TextWrapOffset,
+    indent: usize,
+) -> Result<()> {
+    validate_text_wrap_offset(offset)?;
+    push_indent(xml, indent);
+    xml.push_str("<TextWrapOffset");
+    push_optional_serialized_attr(xml, "TextWrapOffset", "Top", offset.top.as_deref())?;
+    push_optional_serialized_attr(xml, "TextWrapOffset", "Left", offset.left.as_deref())?;
+    push_optional_serialized_attr(xml, "TextWrapOffset", "Bottom", offset.bottom.as_deref())?;
+    push_optional_serialized_attr(xml, "TextWrapOffset", "Right", offset.right.as_deref())?;
+    xml.push_str(" />\n");
+    Ok(())
+}
+
 fn push_page_item_metadata(
     xml: &mut String,
     element: &'static str,
@@ -4486,7 +4807,10 @@ fn serialize_rectangle_with_indent(
         let bounds = format_geometric_bounds("Rectangle", bounds)?;
         push_attr(xml, "Rectangle", "GeometricBounds", &bounds)?;
     }
-    if rectangle.path_geometry.is_none() && rectangle.images.is_empty() {
+    if rectangle.path_geometry.is_none()
+        && rectangle.images.is_empty()
+        && rectangle.metadata.text_wrap_preference.is_none()
+    {
         xml.push_str(" />\n");
         return Ok(());
     }
@@ -4497,6 +4821,7 @@ fn serialize_rectangle_with_indent(
     for image in &rectangle.images {
         serialize_image(xml, image, indent + 2)?;
     }
+    serialize_page_item_metadata_children(xml, &rectangle.metadata, indent + 2)?;
     push_indent(xml, indent);
     xml.push_str("</Rectangle>\n");
     Ok(())
@@ -4666,9 +4991,12 @@ fn serialize_oval_with_indent(xml: &mut String, oval: &Oval, indent: usize) -> R
         let bounds = format_geometric_bounds("Oval", bounds)?;
         push_attr(xml, "Oval", "GeometricBounds", &bounds)?;
     }
-    if let Some(path_geometry) = &oval.path_geometry {
+    if oval.path_geometry.is_some() || oval.metadata.text_wrap_preference.is_some() {
         xml.push_str(">\n");
-        serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        if let Some(path_geometry) = &oval.path_geometry {
+            serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        }
+        serialize_page_item_metadata_children(xml, &oval.metadata, indent + 2)?;
         push_indent(xml, indent);
         xml.push_str("</Oval>\n");
         return Ok(());
@@ -4695,9 +5023,12 @@ fn serialize_graphic_line_with_indent(
         let bounds = format_geometric_bounds("GraphicLine", bounds)?;
         push_attr(xml, "GraphicLine", "GeometricBounds", &bounds)?;
     }
-    if let Some(path_geometry) = &line.path_geometry {
+    if line.path_geometry.is_some() || line.metadata.text_wrap_preference.is_some() {
         xml.push_str(">\n");
-        serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        if let Some(path_geometry) = &line.path_geometry {
+            serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        }
+        serialize_page_item_metadata_children(xml, &line.metadata, indent + 2)?;
         push_indent(xml, indent);
         xml.push_str("</GraphicLine>\n");
         return Ok(());
@@ -4720,9 +5051,12 @@ fn serialize_polygon_with_indent(xml: &mut String, polygon: &Polygon, indent: us
         let bounds = format_geometric_bounds("Polygon", bounds)?;
         push_attr(xml, "Polygon", "GeometricBounds", &bounds)?;
     }
-    if let Some(path_geometry) = &polygon.path_geometry {
+    if polygon.path_geometry.is_some() || polygon.metadata.text_wrap_preference.is_some() {
         xml.push_str(">\n");
-        serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        if let Some(path_geometry) = &polygon.path_geometry {
+            serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        }
+        serialize_page_item_metadata_children(xml, &polygon.metadata, indent + 2)?;
         push_indent(xml, indent);
         xml.push_str("</Polygon>\n");
         return Ok(());
@@ -4745,11 +5079,12 @@ fn serialize_group(xml: &mut String, group: &Group, indent: usize) -> Result<()>
         let bounds = format_geometric_bounds("Group", bounds)?;
         push_attr(xml, "Group", "GeometricBounds", &bounds)?;
     }
-    if group.page_items.is_empty() {
+    if group.page_items.is_empty() && group.metadata.text_wrap_preference.is_none() {
         xml.push_str(" />\n");
         return Ok(());
     }
     xml.push_str(">\n");
+    serialize_page_item_metadata_children(xml, &group.metadata, indent + 2)?;
     for child in &group.page_items {
         serialize_page_item(xml, child, indent + 2)?;
     }
@@ -6102,6 +6437,54 @@ mod tests {
         assert!(serialized.contains("<TextFramePreference"));
         assert!(serialized.contains("<InsetSpacing type=\"list\">"));
         assert!(serialized.contains("<ListItem type=\"unit\">1</ListItem>"));
+        assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
+    }
+
+    #[test]
+    fn preserves_text_wrap_preferences_on_page_items() {
+        let xml = r#"<Spread Self="s1">
+  <Rectangle Self="r1">
+    <TextWrapPreference Inverse="false" ApplyToMasterPageOnly="true" TextWrapSide="BothSides" TextWrapMode="BoundingBoxTextWrap">
+      <Properties>
+        <TextWrapOffset Top="1" Left="2" Bottom="3" Right="4" />
+      </Properties>
+    </TextWrapPreference>
+  </Rectangle>
+  <TextFrame Self="tf1" ParentStory="u1">
+    <TextWrapPreference Inverse="true" ApplyToMasterPageOnly="false" TextWrapSide="LeftSide" TextWrapMode="None" />
+  </TextFrame>
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+        let PageItem::Rectangle(rectangle) = &spread.page_items[0] else {
+            panic!("expected rectangle page item");
+        };
+        let rectangle_wrap = rectangle.metadata.text_wrap_preference.as_ref().unwrap();
+        let rectangle_offset = rectangle_wrap.text_wrap_offset.as_ref().unwrap();
+        let frame_wrap = spread.text_frames[0]
+            .metadata
+            .text_wrap_preference
+            .as_ref()
+            .unwrap();
+
+        assert_eq!(rectangle_wrap.inverse, Some(false));
+        assert_eq!(rectangle_wrap.apply_to_master_page_only, Some(true));
+        assert_eq!(
+            rectangle_wrap.text_wrap_mode.as_deref(),
+            Some("BoundingBoxTextWrap")
+        );
+        assert_eq!(rectangle_offset.top.as_deref(), Some("1"));
+        assert_eq!(rectangle_offset.left.as_deref(), Some("2"));
+        assert_eq!(rectangle_offset.bottom.as_deref(), Some("3"));
+        assert_eq!(rectangle_offset.right.as_deref(), Some("4"));
+        assert_eq!(frame_wrap.inverse, Some(true));
+        assert_eq!(frame_wrap.text_wrap_side.as_deref(), Some("LeftSide"));
+
+        let serialized = spread.to_xml().unwrap();
+        assert!(serialized.contains("<TextWrapPreference"));
+        assert!(
+            serialized.contains("<TextWrapOffset Top=\"1\" Left=\"2\" Bottom=\"3\" Right=\"4\" />")
+        );
         assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
     }
 

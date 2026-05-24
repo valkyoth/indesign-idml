@@ -421,6 +421,24 @@ struct MetadataSummary {
     gradient_fill_hilite_angle: Option<String>,
     gradient_stroke_hilite_length: Option<String>,
     gradient_stroke_hilite_angle: Option<String>,
+    text_wrap_preference: Option<TextWrapPreferenceSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct TextWrapPreferenceSummary {
+    inverse: Option<bool>,
+    apply_to_master_page_only: Option<bool>,
+    text_wrap_side: Option<String>,
+    text_wrap_mode: Option<String>,
+    text_wrap_offset: Option<TextWrapOffsetSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct TextWrapOffsetSummary {
+    top: Option<String>,
+    left: Option<String>,
+    bottom: Option<String>,
+    right: Option<String>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -981,6 +999,27 @@ fn summarize_metadata(metadata: &PageItemMetadata) -> MetadataSummary {
         gradient_fill_hilite_angle: metadata.gradient_fill_hilite_angle.clone(),
         gradient_stroke_hilite_length: metadata.gradient_stroke_hilite_length.clone(),
         gradient_stroke_hilite_angle: metadata.gradient_stroke_hilite_angle.clone(),
+        text_wrap_preference: metadata
+            .text_wrap_preference
+            .as_ref()
+            .map(summarize_text_wrap_preference),
+    }
+}
+
+fn summarize_text_wrap_preference(preference: &TextWrapPreference) -> TextWrapPreferenceSummary {
+    TextWrapPreferenceSummary {
+        inverse: preference.inverse,
+        apply_to_master_page_only: preference.apply_to_master_page_only,
+        text_wrap_side: preference.text_wrap_side.clone(),
+        text_wrap_mode: preference.text_wrap_mode.clone(),
+        text_wrap_offset: preference.text_wrap_offset.as_ref().map(|offset| {
+            TextWrapOffsetSummary {
+                top: offset.top.clone(),
+                left: offset.left.clone(),
+                bottom: offset.bottom.clone(),
+                right: offset.right.clone(),
+            }
+        }),
     }
 }
 

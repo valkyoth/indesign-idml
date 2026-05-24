@@ -22,6 +22,7 @@ pub use crate::model::spread::{
     GeometryPath, GraphicLine, Group, Guide, Image, ImageLink, Oval, Page, PageItem,
     PageItemMetadata, PathGeometry, PathPoint, Point, Polygon, Rect, RectMm, Rectangle, Spread,
     SpreadListItem, SpreadListProperty, SpreadParseOptions, TextFrame, TextFramePreference,
+    TextWrapOffset, TextWrapPreference,
 };
 pub use crate::model::story::{
     CharacterStyleProperties, CharacterStyleRange, InCopyExportOption, ParagraphStyleProperties,
