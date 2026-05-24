@@ -433,6 +433,7 @@ impl IdmlDocument {
         self.validate_spread_models()?;
         self.validate_unique_object_ids()?;
         self.validate_parent_stories()?;
+        self.validate_text_frame_threads()?;
         self.validate_item_layers()?;
         Ok(())
     }
@@ -901,6 +902,31 @@ impl IdmlDocument {
                         id: parent_story.to_owned(),
                     });
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_text_frame_threads(&self) -> Result<()> {
+        let text_frame_ids = self
+            .spreads
+            .values()
+            .flat_map(|spread| spread.text_frames.iter())
+            .filter_map(|frame| frame.id.as_deref())
+            .collect::<IndexSet<_>>();
+
+        for spread in self.spreads.values() {
+            for frame in &spread.text_frames {
+                validate_text_frame_thread_ref(
+                    frame.id.as_deref(),
+                    frame.previous_text_frame.as_deref(),
+                    &text_frame_ids,
+                )?;
+                validate_text_frame_thread_ref(
+                    frame.id.as_deref(),
+                    frame.next_text_frame.as_deref(),
+                    &text_frame_ids,
+                )?;
             }
         }
         Ok(())
@@ -1397,6 +1423,33 @@ fn validate_layer_id(layer_id: Option<&str>, layer_ids: &IndexSet<&str>) -> Resu
     Err(IdmlError::MissingReference {
         kind: "page item layer",
         id: layer_id.to_owned(),
+    })
+}
+
+fn validate_text_frame_thread_ref(
+    frame_id: Option<&str>,
+    thread_ref: Option<&str>,
+    text_frame_ids: &IndexSet<&str>,
+) -> Result<()> {
+    let Some(thread_ref) = thread_ref else {
+        return Ok(());
+    };
+    if thread_ref == "n" {
+        return Ok(());
+    }
+    if frame_id == Some(thread_ref) {
+        return Err(IdmlError::InvalidReference {
+            kind: "text frame thread",
+            id: thread_ref.to_owned(),
+            reason: "thread reference points to itself",
+        });
+    }
+    if text_frame_ids.contains(thread_ref) {
+        return Ok(());
+    }
+    Err(IdmlError::MissingReference {
+        kind: "text frame thread",
+        id: thread_ref.to_owned(),
     })
 }
 
@@ -2963,6 +3016,70 @@ mod tests {
                 kind: "text frame parent story",
                 id
             } if id == "missing"
+        ));
+    }
+
+    #[test]
+    fn accepts_known_text_frame_thread_references() {
+        let mut document = make_document();
+        let spread = document.spreads.get_mut("u10").unwrap();
+        spread.text_frames[0].next_text_frame = Some("tf2".to_owned());
+        spread.text_frames.push(TextFrame {
+            id: Some("tf2".to_owned()),
+            layer_id: None,
+            parent_story: Some("u1".to_owned()),
+            previous_text_frame: Some("tf1".to_owned()),
+            next_text_frame: None,
+            geometric_bounds: None,
+            metadata: Default::default(),
+            path_geometry: None,
+        });
+
+        document.validate().unwrap();
+    }
+
+    #[test]
+    fn accepts_text_frame_thread_none_sentinel() {
+        let mut document = make_document();
+        let frame = &mut document.spreads.get_mut("u10").unwrap().text_frames[0];
+        frame.previous_text_frame = Some("n".to_owned());
+        frame.next_text_frame = Some("n".to_owned());
+
+        document.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_dangling_text_frame_thread_reference() {
+        let mut document = make_document();
+        document.spreads.get_mut("u10").unwrap().text_frames[0].previous_text_frame =
+            Some("missing".to_owned());
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingReference {
+                kind: "text frame thread",
+                id,
+            } if id == "missing"
+        ));
+    }
+
+    #[test]
+    fn rejects_self_text_frame_thread_reference() {
+        let mut document = make_document();
+        document.spreads.get_mut("u10").unwrap().text_frames[0].next_text_frame =
+            Some("tf1".to_owned());
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidReference {
+                kind: "text frame thread",
+                id,
+                reason: "thread reference points to itself",
+            } if id == "tf1"
         ));
     }
 
