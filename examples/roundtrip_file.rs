@@ -422,6 +422,7 @@ struct MetadataSummary {
     gradient_stroke_hilite_length: Option<String>,
     gradient_stroke_hilite_angle: Option<String>,
     text_wrap_preference: Option<TextWrapPreferenceSummary>,
+    frame_fitting_option: Option<FrameFittingOptionSummary>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -439,6 +440,17 @@ struct TextWrapOffsetSummary {
     left: Option<String>,
     bottom: Option<String>,
     right: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct FrameFittingOptionSummary {
+    auto_fit: Option<bool>,
+    left_crop: Option<String>,
+    top_crop: Option<String>,
+    right_crop: Option<String>,
+    bottom_crop: Option<String>,
+    fitting_on_empty_frame: Option<String>,
+    fitting_alignment: Option<String>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1003,6 +1015,10 @@ fn summarize_metadata(metadata: &PageItemMetadata) -> MetadataSummary {
             .text_wrap_preference
             .as_ref()
             .map(summarize_text_wrap_preference),
+        frame_fitting_option: metadata
+            .frame_fitting_option
+            .as_ref()
+            .map(summarize_frame_fitting_option),
     }
 }
 
@@ -1020,6 +1036,18 @@ fn summarize_text_wrap_preference(preference: &TextWrapPreference) -> TextWrapPr
                 right: offset.right.clone(),
             }
         }),
+    }
+}
+
+fn summarize_frame_fitting_option(option: &FrameFittingOption) -> FrameFittingOptionSummary {
+    FrameFittingOptionSummary {
+        auto_fit: option.auto_fit,
+        left_crop: option.left_crop.clone(),
+        top_crop: option.top_crop.clone(),
+        right_crop: option.right_crop.clone(),
+        bottom_crop: option.bottom_crop.clone(),
+        fitting_on_empty_frame: option.fitting_on_empty_frame.clone(),
+        fitting_alignment: option.fitting_alignment.clone(),
     }
 }
 

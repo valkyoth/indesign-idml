@@ -666,6 +666,25 @@ pub struct TextWrapOffset {
     pub right: Option<String>,
 }
 
+/// Frame fitting behavior for a page item.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FrameFittingOption {
+    /// Auto-fit flag, when present.
+    pub auto_fit: Option<bool>,
+    /// Left crop, preserved as an IDML string.
+    pub left_crop: Option<String>,
+    /// Top crop, preserved as an IDML string.
+    pub top_crop: Option<String>,
+    /// Right crop, preserved as an IDML string.
+    pub right_crop: Option<String>,
+    /// Bottom crop, preserved as an IDML string.
+    pub bottom_crop: Option<String>,
+    /// Fitting behavior for empty frames, when present.
+    pub fitting_on_empty_frame: Option<String>,
+    /// Fitting alignment anchor, when present.
+    pub fitting_alignment: Option<String>,
+}
+
 /// Common page item metadata shared by frames, shapes, and groups.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageItemMetadata {
@@ -779,6 +798,8 @@ pub struct PageItemMetadata {
     pub gradient_stroke_hilite_angle: Option<String>,
     /// Text wrap preference child element, when present.
     pub text_wrap_preference: Option<TextWrapPreference>,
+    /// Frame fitting option child element, when present.
+    pub frame_fitting_option: Option<FrameFittingOption>,
 }
 
 impl PageItemMetadata {
@@ -1014,6 +1035,7 @@ impl PageItemMetadata {
                 max_attribute_bytes,
             )?,
             text_wrap_preference: None,
+            frame_fitting_option: None,
         })
     }
 }
@@ -1057,6 +1079,40 @@ impl TextWrapOffset {
             left: optional_attr(event, "Left", reader, max_attribute_bytes)?,
             bottom: optional_attr(event, "Bottom", reader, max_attribute_bytes)?,
             right: optional_attr(event, "Right", reader, max_attribute_bytes)?,
+        })
+    }
+}
+
+impl FrameFittingOption {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            auto_fit: optional_bool_attr(
+                event,
+                "FrameFittingOption",
+                "AutoFit",
+                reader,
+                max_attribute_bytes,
+            )?,
+            left_crop: optional_attr(event, "LeftCrop", reader, max_attribute_bytes)?,
+            top_crop: optional_attr(event, "TopCrop", reader, max_attribute_bytes)?,
+            right_crop: optional_attr(event, "RightCrop", reader, max_attribute_bytes)?,
+            bottom_crop: optional_attr(event, "BottomCrop", reader, max_attribute_bytes)?,
+            fitting_on_empty_frame: optional_attr(
+                event,
+                "FittingOnEmptyFrame",
+                reader,
+                max_attribute_bytes,
+            )?,
+            fitting_alignment: optional_attr(
+                event,
+                "FittingAlignment",
+                reader,
+                max_attribute_bytes,
+            )?,
         })
     }
 }
@@ -2227,6 +2283,13 @@ fn parse_text_frame_contents(
                     frame.metadata.text_wrap_preference = Some(
                         parse_text_wrap_preference_contents(reader, preference, state)?,
                     );
+                } else if e.name().as_ref() == b"FrameFittingOption" {
+                    frame.metadata.frame_fitting_option = Some(FrameFittingOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                    parse_frame_fitting_option_contents(reader, state)?;
                 }
             }
             Event::Empty(e) => {
@@ -2255,6 +2318,12 @@ fn parse_text_frame_contents(
                     )?);
                 } else if e.name().as_ref() == b"TextWrapPreference" {
                     frame.metadata.text_wrap_preference = Some(TextWrapPreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"FrameFittingOption" {
+                    frame.metadata.frame_fitting_option = Some(FrameFittingOption::from_xml_event(
                         &e,
                         reader,
                         state.options.max_attribute_bytes,
@@ -2412,6 +2481,50 @@ fn parse_text_wrap_preference_contents(
         }
     }
     Ok(preference)
+}
+
+fn parse_frame_fitting_option_contents(
+    reader: &mut Reader<&[u8]>,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<()> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"FrameFittingOption" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "FrameFittingOption".to_owned(),
+                    reason: "unclosed FrameFittingOption element",
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn parse_spread_list_property_contents(
@@ -2671,6 +2784,13 @@ fn parse_page_item_path_contents(
                     metadata.text_wrap_preference = Some(parse_text_wrap_preference_contents(
                         reader, preference, state,
                     )?);
+                } else if e.name().as_ref() == b"FrameFittingOption" {
+                    metadata.frame_fitting_option = Some(FrameFittingOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                    parse_frame_fitting_option_contents(reader, state)?;
                 }
             }
             Event::Empty(e) => {
@@ -2690,6 +2810,12 @@ fn parse_page_item_path_contents(
                     )?;
                 } else if e.name().as_ref() == b"TextWrapPreference" {
                     metadata.text_wrap_preference = Some(TextWrapPreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"FrameFittingOption" {
+                    metadata.frame_fitting_option = Some(FrameFittingOption::from_xml_event(
                         &e,
                         reader,
                         state.options.max_attribute_bytes,
@@ -2909,6 +3035,14 @@ fn parse_rectangle_contents(
                     rectangle.metadata.text_wrap_preference = Some(
                         parse_text_wrap_preference_contents(reader, preference, state)?,
                     );
+                } else if e.name().as_ref() == b"FrameFittingOption" {
+                    rectangle.metadata.frame_fitting_option =
+                        Some(FrameFittingOption::from_xml_event(
+                            &e,
+                            reader,
+                            state.options.max_attribute_bytes,
+                        )?);
+                    parse_frame_fitting_option_contents(reader, state)?;
                 }
             }
             Event::Empty(e) => {
@@ -2929,6 +3063,13 @@ fn parse_rectangle_contents(
                 } else if e.name().as_ref() == b"TextWrapPreference" {
                     rectangle.metadata.text_wrap_preference =
                         Some(TextWrapPreference::from_xml_event(
+                            &e,
+                            reader,
+                            state.options.max_attribute_bytes,
+                        )?);
+                } else if e.name().as_ref() == b"FrameFittingOption" {
+                    rectangle.metadata.frame_fitting_option =
+                        Some(FrameFittingOption::from_xml_event(
                             &e,
                             reader,
                             state.options.max_attribute_bytes,
@@ -3127,6 +3268,13 @@ fn parse_group_contents(
                     group.metadata.text_wrap_preference = Some(
                         parse_text_wrap_preference_contents(reader, preference, state)?,
                     );
+                } else if e.name().as_ref() == b"FrameFittingOption" {
+                    group.metadata.frame_fitting_option = Some(FrameFittingOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                    parse_frame_fitting_option_contents(reader, state)?;
                 }
             }
             Event::Empty(e) => {
@@ -3207,6 +3355,12 @@ fn parse_group_contents(
                     )?;
                 } else if e.name().as_ref() == b"TextWrapPreference" {
                     group.metadata.text_wrap_preference = Some(TextWrapPreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"FrameFittingOption" {
+                    group.metadata.frame_fitting_option = Some(FrameFittingOption::from_xml_event(
                         &e,
                         reader,
                         state.options.max_attribute_bytes,
@@ -4036,6 +4190,9 @@ fn validate_page_item_metadata(element: &'static str, metadata: &PageItemMetadat
     if let Some(preference) = &metadata.text_wrap_preference {
         validate_text_wrap_preference(preference)?;
     }
+    if let Some(option) = &metadata.frame_fitting_option {
+        validate_frame_fitting_option(option)?;
+    }
     Ok(())
 }
 
@@ -4061,6 +4218,36 @@ fn validate_text_wrap_offset(offset: &TextWrapOffset) -> Result<()> {
     validate_optional_attr("TextWrapOffset", "Left", offset.left.as_deref())?;
     validate_optional_attr("TextWrapOffset", "Bottom", offset.bottom.as_deref())?;
     validate_optional_attr("TextWrapOffset", "Right", offset.right.as_deref())?;
+    Ok(())
+}
+
+fn validate_frame_fitting_option(option: &FrameFittingOption) -> Result<()> {
+    validate_optional_attr(
+        "FrameFittingOption",
+        "LeftCrop",
+        option.left_crop.as_deref(),
+    )?;
+    validate_optional_attr("FrameFittingOption", "TopCrop", option.top_crop.as_deref())?;
+    validate_optional_attr(
+        "FrameFittingOption",
+        "RightCrop",
+        option.right_crop.as_deref(),
+    )?;
+    validate_optional_attr(
+        "FrameFittingOption",
+        "BottomCrop",
+        option.bottom_crop.as_deref(),
+    )?;
+    validate_optional_attr(
+        "FrameFittingOption",
+        "FittingOnEmptyFrame",
+        option.fitting_on_empty_frame.as_deref(),
+    )?;
+    validate_optional_attr(
+        "FrameFittingOption",
+        "FittingAlignment",
+        option.fitting_alignment.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -4175,6 +4362,7 @@ fn serialize_text_frame_with_indent(
     if frame.path_geometry.is_some()
         || frame.preference.is_some()
         || frame.metadata.text_wrap_preference.is_some()
+        || frame.metadata.frame_fitting_option.is_some()
     {
         xml.push_str(">\n");
         if let Some(path_geometry) = &frame.path_geometry {
@@ -4471,6 +4659,9 @@ fn serialize_page_item_metadata_children(
     if let Some(preference) = &metadata.text_wrap_preference {
         serialize_text_wrap_preference(xml, preference, indent)?;
     }
+    if let Some(option) = &metadata.frame_fitting_option {
+        serialize_frame_fitting_option(xml, option, indent)?;
+    }
     Ok(())
 }
 
@@ -4534,6 +4725,57 @@ fn serialize_text_wrap_offset(
     push_optional_serialized_attr(xml, "TextWrapOffset", "Left", offset.left.as_deref())?;
     push_optional_serialized_attr(xml, "TextWrapOffset", "Bottom", offset.bottom.as_deref())?;
     push_optional_serialized_attr(xml, "TextWrapOffset", "Right", offset.right.as_deref())?;
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn serialize_frame_fitting_option(
+    xml: &mut String,
+    option: &FrameFittingOption,
+    indent: usize,
+) -> Result<()> {
+    validate_frame_fitting_option(option)?;
+    push_indent(xml, indent);
+    xml.push_str("<FrameFittingOption");
+    if let Some(auto_fit) = option.auto_fit {
+        push_attr(xml, "FrameFittingOption", "AutoFit", bool_str(auto_fit))?;
+    }
+    push_optional_serialized_attr(
+        xml,
+        "FrameFittingOption",
+        "LeftCrop",
+        option.left_crop.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "FrameFittingOption",
+        "TopCrop",
+        option.top_crop.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "FrameFittingOption",
+        "RightCrop",
+        option.right_crop.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "FrameFittingOption",
+        "BottomCrop",
+        option.bottom_crop.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "FrameFittingOption",
+        "FittingOnEmptyFrame",
+        option.fitting_on_empty_frame.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "FrameFittingOption",
+        "FittingAlignment",
+        option.fitting_alignment.as_deref(),
+    )?;
     xml.push_str(" />\n");
     Ok(())
 }
@@ -4810,6 +5052,7 @@ fn serialize_rectangle_with_indent(
     if rectangle.path_geometry.is_none()
         && rectangle.images.is_empty()
         && rectangle.metadata.text_wrap_preference.is_none()
+        && rectangle.metadata.frame_fitting_option.is_none()
     {
         xml.push_str(" />\n");
         return Ok(());
@@ -4991,7 +5234,10 @@ fn serialize_oval_with_indent(xml: &mut String, oval: &Oval, indent: usize) -> R
         let bounds = format_geometric_bounds("Oval", bounds)?;
         push_attr(xml, "Oval", "GeometricBounds", &bounds)?;
     }
-    if oval.path_geometry.is_some() || oval.metadata.text_wrap_preference.is_some() {
+    if oval.path_geometry.is_some()
+        || oval.metadata.text_wrap_preference.is_some()
+        || oval.metadata.frame_fitting_option.is_some()
+    {
         xml.push_str(">\n");
         if let Some(path_geometry) = &oval.path_geometry {
             serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
@@ -5023,7 +5269,10 @@ fn serialize_graphic_line_with_indent(
         let bounds = format_geometric_bounds("GraphicLine", bounds)?;
         push_attr(xml, "GraphicLine", "GeometricBounds", &bounds)?;
     }
-    if line.path_geometry.is_some() || line.metadata.text_wrap_preference.is_some() {
+    if line.path_geometry.is_some()
+        || line.metadata.text_wrap_preference.is_some()
+        || line.metadata.frame_fitting_option.is_some()
+    {
         xml.push_str(">\n");
         if let Some(path_geometry) = &line.path_geometry {
             serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
@@ -5051,7 +5300,10 @@ fn serialize_polygon_with_indent(xml: &mut String, polygon: &Polygon, indent: us
         let bounds = format_geometric_bounds("Polygon", bounds)?;
         push_attr(xml, "Polygon", "GeometricBounds", &bounds)?;
     }
-    if polygon.path_geometry.is_some() || polygon.metadata.text_wrap_preference.is_some() {
+    if polygon.path_geometry.is_some()
+        || polygon.metadata.text_wrap_preference.is_some()
+        || polygon.metadata.frame_fitting_option.is_some()
+    {
         xml.push_str(">\n");
         if let Some(path_geometry) = &polygon.path_geometry {
             serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
@@ -5079,7 +5331,10 @@ fn serialize_group(xml: &mut String, group: &Group, indent: usize) -> Result<()>
         let bounds = format_geometric_bounds("Group", bounds)?;
         push_attr(xml, "Group", "GeometricBounds", &bounds)?;
     }
-    if group.page_items.is_empty() && group.metadata.text_wrap_preference.is_none() {
+    if group.page_items.is_empty()
+        && group.metadata.text_wrap_preference.is_none()
+        && group.metadata.frame_fitting_option.is_none()
+    {
         xml.push_str(" />\n");
         return Ok(());
     }
@@ -6485,6 +6740,53 @@ mod tests {
         assert!(
             serialized.contains("<TextWrapOffset Top=\"1\" Left=\"2\" Bottom=\"3\" Right=\"4\" />")
         );
+        assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
+    }
+
+    #[test]
+    fn preserves_frame_fitting_options_on_page_items() {
+        let xml = r#"<Spread Self="s1">
+  <Rectangle Self="r1">
+    <FrameFittingOption AutoFit="true" LeftCrop="1" TopCrop="2" RightCrop="3" BottomCrop="4" FittingOnEmptyFrame="FillProportionally" FittingAlignment="CenterAnchor" />
+  </Rectangle>
+  <TextFrame Self="tf1" ParentStory="u1">
+    <FrameFittingOption FittingOnEmptyFrame="ContentToFrame" />
+  </TextFrame>
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+        let PageItem::Rectangle(rectangle) = &spread.page_items[0] else {
+            panic!("expected rectangle page item");
+        };
+        let rectangle_option = rectangle.metadata.frame_fitting_option.as_ref().unwrap();
+        let frame_option = spread.text_frames[0]
+            .metadata
+            .frame_fitting_option
+            .as_ref()
+            .unwrap();
+
+        assert_eq!(rectangle_option.auto_fit, Some(true));
+        assert_eq!(rectangle_option.left_crop.as_deref(), Some("1"));
+        assert_eq!(rectangle_option.top_crop.as_deref(), Some("2"));
+        assert_eq!(rectangle_option.right_crop.as_deref(), Some("3"));
+        assert_eq!(rectangle_option.bottom_crop.as_deref(), Some("4"));
+        assert_eq!(
+            rectangle_option.fitting_on_empty_frame.as_deref(),
+            Some("FillProportionally")
+        );
+        assert_eq!(
+            rectangle_option.fitting_alignment.as_deref(),
+            Some("CenterAnchor")
+        );
+        assert_eq!(
+            frame_option.fitting_on_empty_frame.as_deref(),
+            Some("ContentToFrame")
+        );
+
+        let serialized = spread.to_xml().unwrap();
+        assert!(serialized.contains("<FrameFittingOption"));
+        assert!(serialized.contains("FittingOnEmptyFrame=\"FillProportionally\""));
+        assert!(serialized.contains("FittingOnEmptyFrame=\"ContentToFrame\""));
         assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
     }
 
