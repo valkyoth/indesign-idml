@@ -15,6 +15,7 @@ fn main() -> Result<()> {
         Story {
             id: Some("u1".to_owned()),
             text: "Catalog entry".to_owned(),
+            paragraph_style_ranges: Vec::new(),
             metadata: Default::default(),
             preference: None,
             incopy_export_option: None,

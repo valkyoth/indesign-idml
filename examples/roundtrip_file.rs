@@ -77,9 +77,29 @@ struct StorySummary {
     id: String,
     self_id: Option<String>,
     text: String,
+    paragraph_style_ranges: Vec<ParagraphStyleRangeSummary>,
     metadata: StoryMetadataSummary,
     preference: Option<StoryPreferenceSummary>,
     incopy_export_option: Option<InCopyExportOptionSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ParagraphStyleRangeSummary {
+    applied_paragraph_style: Option<String>,
+    justification: Option<String>,
+    hyphenation: Option<bool>,
+    character_style_ranges: Vec<CharacterStyleRangeSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CharacterStyleRangeSummary {
+    applied_character_style: Option<String>,
+    point_size: Option<String>,
+    font_style: Option<String>,
+    fill_color: Option<String>,
+    tracking: Option<String>,
+    stroke_weight: Option<String>,
+    text: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -328,6 +348,9 @@ impl Snapshot {
                         id: story_id.to_owned(),
                         self_id: story.id.clone(),
                         text: story.text.clone(),
+                        paragraph_style_ranges: summarize_paragraph_style_ranges(
+                            &story.paragraph_style_ranges,
+                        ),
                         metadata: summarize_story_metadata(&story.metadata),
                         preference: story.preference.as_ref().map(summarize_story_preference),
                         incopy_export_option: story
@@ -403,6 +426,32 @@ impl Snapshot {
             spread_summaries,
         })
     }
+}
+
+fn summarize_paragraph_style_ranges(
+    ranges: &[ParagraphStyleRange],
+) -> Vec<ParagraphStyleRangeSummary> {
+    ranges
+        .iter()
+        .map(|paragraph| ParagraphStyleRangeSummary {
+            applied_paragraph_style: paragraph.applied_paragraph_style.clone(),
+            justification: paragraph.justification.clone(),
+            hyphenation: paragraph.hyphenation,
+            character_style_ranges: paragraph
+                .character_style_ranges
+                .iter()
+                .map(|character| CharacterStyleRangeSummary {
+                    applied_character_style: character.applied_character_style.clone(),
+                    point_size: character.point_size.clone(),
+                    font_style: character.font_style.clone(),
+                    fill_color: character.fill_color.clone(),
+                    tracking: character.tracking.clone(),
+                    stroke_weight: character.stroke_weight.clone(),
+                    text: character.text.clone(),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 fn summarize_story_metadata(metadata: &StoryMetadata) -> StoryMetadataSummary {

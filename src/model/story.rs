@@ -49,6 +49,8 @@ pub struct Story {
     pub id: Option<String>,
     /// Visible text extracted from `Content`, `Br`, and `Tab` elements.
     pub text: String,
+    /// Paragraph and character style ranges in story order.
+    pub paragraph_style_ranges: Vec<ParagraphStyleRange>,
     /// Story root metadata, when present.
     pub metadata: StoryMetadata,
     /// Story preference metadata, when present.
@@ -98,6 +100,38 @@ pub struct InCopyExportOption {
     pub include_all_resources: Option<bool>,
 }
 
+/// A paragraph style range and its contained character ranges.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ParagraphStyleRange {
+    /// Applied paragraph style reference, when present.
+    pub applied_paragraph_style: Option<String>,
+    /// Justification value, when present.
+    pub justification: Option<String>,
+    /// Hyphenation flag, when present.
+    pub hyphenation: Option<bool>,
+    /// Character ranges in this paragraph range.
+    pub character_style_ranges: Vec<CharacterStyleRange>,
+}
+
+/// A character style range with extracted visible text.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CharacterStyleRange {
+    /// Applied character style reference, when present.
+    pub applied_character_style: Option<String>,
+    /// Point size value, preserved as an IDML string.
+    pub point_size: Option<String>,
+    /// Font style value, when present.
+    pub font_style: Option<String>,
+    /// Fill color reference, when present.
+    pub fill_color: Option<String>,
+    /// Tracking value, preserved as an IDML string.
+    pub tracking: Option<String>,
+    /// Stroke weight value, preserved as an IDML string.
+    pub stroke_weight: Option<String>,
+    /// Visible text carried by this character range.
+    pub text: String,
+}
+
 impl Story {
     /// Parses a story XML document with default limits.
     pub fn from_xml(xml_content: &str) -> Result<Self> {
@@ -113,6 +147,9 @@ impl Story {
 
         let mut id = None;
         let mut text = String::new();
+        let mut paragraph_style_ranges = Vec::new();
+        let mut current_paragraph_range = None;
+        let mut current_character_range = None;
         let mut metadata = StoryMetadata::default();
         let mut preference = None;
         let mut incopy_export_option = None;
@@ -158,6 +195,27 @@ impl Story {
                             &reader,
                             options.max_attribute_bytes,
                         )?);
+                    } else if story_depth > 0 && e.name().as_ref() == b"ParagraphStyleRange" {
+                        paragraph_style_ranges.push(ParagraphStyleRange::from_xml_event(
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?);
+                        current_paragraph_range = Some(paragraph_style_ranges.len() - 1);
+                    } else if story_depth > 0 && e.name().as_ref() == b"CharacterStyleRange" {
+                        let paragraph_index = ensure_current_paragraph_range(
+                            &mut paragraph_style_ranges,
+                            &mut current_paragraph_range,
+                        );
+                        let paragraph = &mut paragraph_style_ranges[paragraph_index];
+                        paragraph
+                            .character_style_ranges
+                            .push(CharacterStyleRange::from_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?);
+                        current_character_range = Some(paragraph.character_style_ranges.len() - 1);
                     }
                     if story_depth > 0 && e.name().as_ref() == b"Content" {
                         content_depth = 1;
@@ -170,6 +228,12 @@ impl Story {
                     root.exit(e.name().as_ref())?;
                 }
                 Event::End(e) => {
+                    if e.name().as_ref() == b"CharacterStyleRange" {
+                        current_character_range = None;
+                    } else if e.name().as_ref() == b"ParagraphStyleRange" {
+                        current_character_range = None;
+                        current_paragraph_range = None;
+                    }
                     exit_story_depth(&mut story_depth)?;
                     xml_depth.exit()?;
                     root.exit(e.name().as_ref())?;
@@ -179,14 +243,25 @@ impl Story {
                     if content_depth > 0 {
                         let decoded = e.decode()?;
                         push_limited(&mut text, decoded.as_ref(), options.max_text_bytes)?;
+                        push_range_limited(
+                            &mut paragraph_style_ranges,
+                            current_paragraph_range,
+                            current_character_range,
+                            decoded.as_ref(),
+                            options.max_text_bytes,
+                        )?;
                     }
                 }
                 Event::CData(e) => {
                     root.visit_cdata()?;
                     if content_depth > 0 {
-                        push_limited(
-                            &mut text,
-                            e.xml_content(XmlVersion::Implicit1_0)?.as_ref(),
+                        let decoded = e.xml_content(XmlVersion::Implicit1_0)?;
+                        push_limited(&mut text, decoded.as_ref(), options.max_text_bytes)?;
+                        push_range_limited(
+                            &mut paragraph_style_ranges,
+                            current_paragraph_range,
+                            current_character_range,
+                            decoded.as_ref(),
                             options.max_text_bytes,
                         )?;
                     }
@@ -196,6 +271,13 @@ impl Story {
                     if content_depth > 0 {
                         if let Some(ch) = e.resolve_char_ref()? {
                             push_char_limited(&mut text, ch, options.max_text_bytes)?;
+                            push_range_char_limited(
+                                &mut paragraph_style_ranges,
+                                current_paragraph_range,
+                                current_character_range,
+                                ch,
+                                options.max_text_bytes,
+                            )?;
                         } else {
                             let entity = e.decode()?;
                             let replacement = resolve_predefined_entity(entity.as_ref())
@@ -206,6 +288,13 @@ impl Story {
                                     ))
                                 })?;
                             push_limited(&mut text, replacement, options.max_text_bytes)?;
+                            push_range_limited(
+                                &mut paragraph_style_ranges,
+                                current_paragraph_range,
+                                current_character_range,
+                                replacement,
+                                options.max_text_bytes,
+                            )?;
                         }
                     } else {
                         reject_xml_entity_reference()?;
@@ -241,10 +330,42 @@ impl Story {
                             &reader,
                             options.max_attribute_bytes,
                         )?);
+                    } else if story_depth > 0 && e.name().as_ref() == b"ParagraphStyleRange" {
+                        paragraph_style_ranges.push(ParagraphStyleRange::from_xml_event(
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?);
+                    } else if story_depth > 0 && e.name().as_ref() == b"CharacterStyleRange" {
+                        let paragraph_index = ensure_current_paragraph_range(
+                            &mut paragraph_style_ranges,
+                            &mut current_paragraph_range,
+                        );
+                        paragraph_style_ranges[paragraph_index]
+                            .character_style_ranges
+                            .push(CharacterStyleRange::from_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?);
                     } else if story_depth > 0 && e.name().as_ref() == b"Br" {
                         push_limited(&mut text, "\n", options.max_text_bytes)?;
+                        push_range_limited(
+                            &mut paragraph_style_ranges,
+                            current_paragraph_range,
+                            current_character_range,
+                            "\n",
+                            options.max_text_bytes,
+                        )?;
                     } else if story_depth > 0 && e.name().as_ref() == b"Tab" {
                         push_limited(&mut text, "\t", options.max_text_bytes)?;
+                        push_range_limited(
+                            &mut paragraph_style_ranges,
+                            current_paragraph_range,
+                            current_character_range,
+                            "\t",
+                            options.max_text_bytes,
+                        )?;
                     }
                 }
                 Event::DocType(_) => reject_xml_doctype()?,
@@ -263,9 +384,11 @@ impl Story {
                 reason: "missing Story element",
             });
         }
+        normalize_default_style_ranges(&mut paragraph_style_ranges, &text);
         Ok(Self {
             id,
             text,
+            paragraph_style_ranges,
             metadata,
             preference,
             incopy_export_option,
@@ -372,6 +495,49 @@ impl InCopyExportOption {
                 reader,
                 max_attribute_bytes,
             )?,
+        })
+    }
+}
+
+impl ParagraphStyleRange {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            applied_paragraph_style: optional_attr(
+                event,
+                "AppliedParagraphStyle",
+                reader,
+                max_attribute_bytes,
+            )?,
+            justification: optional_attr(event, "Justification", reader, max_attribute_bytes)?,
+            hyphenation: optional_bool_attr(event, "Hyphenation", reader, max_attribute_bytes)?,
+            character_style_ranges: Vec::new(),
+        })
+    }
+}
+
+impl CharacterStyleRange {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            applied_character_style: optional_attr(
+                event,
+                "AppliedCharacterStyle",
+                reader,
+                max_attribute_bytes,
+            )?,
+            point_size: optional_attr(event, "PointSize", reader, max_attribute_bytes)?,
+            font_style: optional_attr(event, "FontStyle", reader, max_attribute_bytes)?,
+            fill_color: optional_attr(event, "FillColor", reader, max_attribute_bytes)?,
+            tracking: optional_attr(event, "Tracking", reader, max_attribute_bytes)?,
+            stroke_weight: optional_attr(event, "StrokeWeight", reader, max_attribute_bytes)?,
+            text: String::new(),
         })
     }
 }
@@ -532,6 +698,88 @@ fn push_char_limited(output: &mut String, ch: char, max_text_bytes: usize) -> Re
     push_limited(output, ch.encode_utf8(&mut buffer), max_text_bytes)
 }
 
+fn ensure_current_paragraph_range(
+    paragraph_style_ranges: &mut Vec<ParagraphStyleRange>,
+    current_paragraph_range: &mut Option<usize>,
+) -> usize {
+    if let Some(index) = *current_paragraph_range {
+        return index;
+    }
+
+    paragraph_style_ranges.push(ParagraphStyleRange::default());
+    let index = paragraph_style_ranges.len() - 1;
+    *current_paragraph_range = Some(index);
+    index
+}
+
+fn push_range_limited(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    current_paragraph_range: Option<usize>,
+    current_character_range: Option<usize>,
+    text: &str,
+    max_text_bytes: usize,
+) -> Result<()> {
+    let Some(paragraph_index) = current_paragraph_range else {
+        return Ok(());
+    };
+    let Some(character_index) = current_character_range else {
+        return Ok(());
+    };
+    let Some(range) = paragraph_style_ranges
+        .get_mut(paragraph_index)
+        .and_then(|paragraph| paragraph.character_style_ranges.get_mut(character_index))
+    else {
+        return Err(IdmlError::InvalidElement {
+            element: "CharacterStyleRange".to_owned(),
+            reason: "style range parser state is inconsistent",
+        });
+    };
+    push_limited(&mut range.text, text, max_text_bytes)
+}
+
+fn push_range_char_limited(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    current_paragraph_range: Option<usize>,
+    current_character_range: Option<usize>,
+    ch: char,
+    max_text_bytes: usize,
+) -> Result<()> {
+    let mut buffer = [0u8; 4];
+    push_range_limited(
+        paragraph_style_ranges,
+        current_paragraph_range,
+        current_character_range,
+        ch.encode_utf8(&mut buffer),
+        max_text_bytes,
+    )
+}
+
+fn normalize_default_style_ranges(ranges: &mut Vec<ParagraphStyleRange>, text: &str) {
+    let [paragraph] = ranges.as_mut_slice() else {
+        return;
+    };
+    if paragraph.applied_paragraph_style.is_some()
+        || paragraph.justification.is_some()
+        || paragraph.hyphenation.is_some()
+    {
+        return;
+    }
+
+    let [character] = paragraph.character_style_ranges.as_slice() else {
+        return;
+    };
+    if character.applied_character_style.is_none()
+        && character.point_size.is_none()
+        && character.font_style.is_none()
+        && character.fill_color.is_none()
+        && character.tracking.is_none()
+        && character.stroke_weight.is_none()
+        && character.text == text
+    {
+        ranges.clear();
+    }
+}
+
 fn exit_content_depth(content_depth: &mut usize) -> Result<()> {
     if *content_depth == 0 {
         return Err(IdmlError::InvalidElement {
@@ -553,25 +801,14 @@ fn serialize_story(story: &Story) -> Result<String> {
         push_attr(&mut xml, "Story", "Self", id)?;
     }
     push_story_metadata(&mut xml, &story.metadata)?;
-    xml.push_str(">\n  <ParagraphStyleRange>\n    <CharacterStyleRange>");
-
-    let mut content = String::new();
-    for ch in story.text.chars() {
-        match ch {
-            '\n' => {
-                push_content_if_needed(&mut xml, &mut content);
-                xml.push_str("<Br/>");
-            }
-            '\t' => {
-                push_content_if_needed(&mut xml, &mut content);
-                xml.push_str("<Tab/>");
-            }
-            _ => content.push(ch),
-        }
+    xml.push_str(">\n");
+    if story.paragraph_style_ranges.is_empty() {
+        xml.push_str("  <ParagraphStyleRange>\n    <CharacterStyleRange>");
+        push_story_text_content(&mut xml, &story.text);
+        xml.push_str("</CharacterStyleRange>\n  </ParagraphStyleRange>\n");
+    } else {
+        serialize_paragraph_style_ranges(&mut xml, &story.paragraph_style_ranges)?;
     }
-    push_content_if_needed(&mut xml, &mut content);
-
-    xml.push_str("</CharacterStyleRange>\n  </ParagraphStyleRange>\n");
     if let Some(preference) = &story.preference {
         serialize_story_preference(&mut xml, preference)?;
     }
@@ -594,6 +831,7 @@ fn validate_serialized_story_limits(story: &Story) -> Result<()> {
         validate_incopy_export_option(option)?;
     }
     enforce_serialized_story_text_bytes(story.text.len())?;
+    validate_story_style_ranges(story)?;
     Ok(())
 }
 
@@ -638,6 +876,73 @@ fn validate_incopy_export_option(_: &InCopyExportOption) -> Result<()> {
     Ok(())
 }
 
+fn validate_story_style_ranges(story: &Story) -> Result<()> {
+    if story.paragraph_style_ranges.is_empty() {
+        return Ok(());
+    }
+
+    let mut range_text = String::new();
+    for paragraph in &story.paragraph_style_ranges {
+        validate_optional_story_attr(
+            "ParagraphStyleRange",
+            "AppliedParagraphStyle",
+            paragraph.applied_paragraph_style.as_deref(),
+        )?;
+        validate_optional_story_attr(
+            "ParagraphStyleRange",
+            "Justification",
+            paragraph.justification.as_deref(),
+        )?;
+
+        for character in &paragraph.character_style_ranges {
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "AppliedCharacterStyle",
+                character.applied_character_style.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "PointSize",
+                character.point_size.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "FontStyle",
+                character.font_style.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "FillColor",
+                character.fill_color.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "Tracking",
+                character.tracking.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "StrokeWeight",
+                character.stroke_weight.as_deref(),
+            )?;
+            validate_xml_text("story style range text", &character.text)?;
+            push_limited(
+                &mut range_text,
+                &character.text,
+                DEFAULT_MAX_STORY_TEXT_BYTES,
+            )?;
+        }
+    }
+
+    if range_text != story.text {
+        return Err(IdmlError::InvalidText {
+            what: "story style range text",
+            reason: "does not match story text",
+        });
+    }
+    Ok(())
+}
+
 fn validate_optional_story_attr(
     element: &'static str,
     attribute: &'static str,
@@ -671,6 +976,24 @@ fn push_content_if_needed(xml: &mut String, content: &mut String) {
     content.clear();
 }
 
+fn push_story_text_content(xml: &mut String, text: &str) {
+    let mut content = String::new();
+    for ch in text.chars() {
+        match ch {
+            '\n' => {
+                push_content_if_needed(xml, &mut content);
+                xml.push_str("<Br/>");
+            }
+            '\t' => {
+                push_content_if_needed(xml, &mut content);
+                xml.push_str("<Tab/>");
+            }
+            _ => content.push(ch),
+        }
+    }
+    push_content_if_needed(xml, &mut content);
+}
+
 fn push_story_metadata(xml: &mut String, metadata: &StoryMetadata) -> Result<()> {
     if let Some(applied_toc_style) = &metadata.applied_toc_style {
         push_attr(xml, "Story", "AppliedTOCStyle", applied_toc_style)?;
@@ -690,6 +1013,76 @@ fn push_story_metadata(xml: &mut String, metadata: &StoryMetadata) -> Result<()>
     if let Some(is_endnote_story) = metadata.is_endnote_story {
         push_attr(xml, "Story", "IsEndnoteStory", bool_str(is_endnote_story))?;
     }
+    Ok(())
+}
+
+fn serialize_paragraph_style_ranges(
+    xml: &mut String,
+    ranges: &[ParagraphStyleRange],
+) -> Result<()> {
+    for paragraph in ranges {
+        xml.push_str("  <ParagraphStyleRange");
+        if let Some(applied_paragraph_style) = &paragraph.applied_paragraph_style {
+            push_attr(
+                xml,
+                "ParagraphStyleRange",
+                "AppliedParagraphStyle",
+                applied_paragraph_style,
+            )?;
+        }
+        if let Some(justification) = &paragraph.justification {
+            push_attr(xml, "ParagraphStyleRange", "Justification", justification)?;
+        }
+        if let Some(hyphenation) = paragraph.hyphenation {
+            push_attr(
+                xml,
+                "ParagraphStyleRange",
+                "Hyphenation",
+                bool_str(hyphenation),
+            )?;
+        }
+        if paragraph.character_style_ranges.is_empty() {
+            xml.push_str(" />\n");
+            continue;
+        }
+
+        xml.push_str(">\n");
+        for character in &paragraph.character_style_ranges {
+            serialize_character_style_range(xml, character)?;
+        }
+        xml.push_str("  </ParagraphStyleRange>\n");
+    }
+    Ok(())
+}
+
+fn serialize_character_style_range(xml: &mut String, range: &CharacterStyleRange) -> Result<()> {
+    xml.push_str("    <CharacterStyleRange");
+    if let Some(applied_character_style) = &range.applied_character_style {
+        push_attr(
+            xml,
+            "CharacterStyleRange",
+            "AppliedCharacterStyle",
+            applied_character_style,
+        )?;
+    }
+    if let Some(point_size) = &range.point_size {
+        push_attr(xml, "CharacterStyleRange", "PointSize", point_size)?;
+    }
+    if let Some(font_style) = &range.font_style {
+        push_attr(xml, "CharacterStyleRange", "FontStyle", font_style)?;
+    }
+    if let Some(fill_color) = &range.fill_color {
+        push_attr(xml, "CharacterStyleRange", "FillColor", fill_color)?;
+    }
+    if let Some(tracking) = &range.tracking {
+        push_attr(xml, "CharacterStyleRange", "Tracking", tracking)?;
+    }
+    if let Some(stroke_weight) = &range.stroke_weight {
+        push_attr(xml, "CharacterStyleRange", "StrokeWeight", stroke_weight)?;
+    }
+    xml.push('>');
+    push_story_text_content(xml, &range.text);
+    xml.push_str("</CharacterStyleRange>\n");
     Ok(())
 }
 
@@ -772,7 +1165,10 @@ fn push_attr(
 
 #[cfg(test)]
 mod tests {
-    use super::{InCopyExportOption, Story, StoryMetadata, StoryParseOptions, StoryPreference};
+    use super::{
+        CharacterStyleRange, InCopyExportOption, ParagraphStyleRange, Story, StoryMetadata,
+        StoryParseOptions, StoryPreference,
+    };
     use crate::IdmlError;
 
     #[test]
@@ -1157,6 +1553,7 @@ mod tests {
         let story = Story {
             id: Some("u&\"2".to_owned()),
             text: "Hello & <world>\nNext\tCell".to_owned(),
+            paragraph_style_ranges: Vec::new(),
             metadata: StoryMetadata {
                 applied_toc_style: Some("n".to_owned()),
                 track_changes: Some(false),
@@ -1191,10 +1588,114 @@ mod tests {
     }
 
     #[test]
+    fn parses_and_serializes_story_style_ranges() {
+        let xml = r##"<Story Self="u2">
+  <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle" Justification="CenterAlign" Hyphenation="false">
+    <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/$ID/[No character style]" PointSize="12" FontStyle="Bold" FillColor="Color/Black" Tracking="15" StrokeWeight="0.5">
+      <Content>Hello</Content><Br/><Content>Next</Content>
+    </CharacterStyleRange>
+    <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Emphasis" PointSize="10">
+      <Tab/><Content>Cell</Content>
+    </CharacterStyleRange>
+  </ParagraphStyleRange>
+  <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Caption">
+    <CharacterStyleRange FillColor="Color/Red"><Content>Tail</Content></CharacterStyleRange>
+  </ParagraphStyleRange>
+</Story>"##;
+
+        let story = Story::from_xml(xml).unwrap();
+
+        assert_eq!(story.text, "Hello\nNext\tCellTail");
+        assert_eq!(story.paragraph_style_ranges.len(), 2);
+        let paragraph = &story.paragraph_style_ranges[0];
+        assert_eq!(
+            paragraph.applied_paragraph_style.as_deref(),
+            Some("ParagraphStyle/$ID/NormalParagraphStyle")
+        );
+        assert_eq!(paragraph.justification.as_deref(), Some("CenterAlign"));
+        assert_eq!(paragraph.hyphenation, Some(false));
+        assert_eq!(paragraph.character_style_ranges.len(), 2);
+        let character = &paragraph.character_style_ranges[0];
+        assert_eq!(
+            character.applied_character_style.as_deref(),
+            Some("CharacterStyle/$ID/[No character style]")
+        );
+        assert_eq!(character.point_size.as_deref(), Some("12"));
+        assert_eq!(character.font_style.as_deref(), Some("Bold"));
+        assert_eq!(character.fill_color.as_deref(), Some("Color/Black"));
+        assert_eq!(character.tracking.as_deref(), Some("15"));
+        assert_eq!(character.stroke_weight.as_deref(), Some("0.5"));
+        assert_eq!(character.text, "Hello\nNext");
+        assert_eq!(paragraph.character_style_ranges[1].text, "\tCell");
+        assert_eq!(
+            story.paragraph_style_ranges[1].character_style_ranges[0].text,
+            "Tail"
+        );
+
+        let serialized = story.to_xml().unwrap();
+        assert!(
+            serialized
+                .contains("AppliedParagraphStyle=\"ParagraphStyle/$ID/NormalParagraphStyle\"")
+        );
+        assert!(
+            serialized
+                .contains("AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\"")
+        );
+        assert!(serialized.contains("StrokeWeight=\"0.5\""));
+        assert_eq!(Story::from_xml(&serialized).unwrap(), story);
+    }
+
+    #[test]
+    fn rejects_invalid_story_style_range_boolean() {
+        let err = Story::from_xml(
+            r#"<Story><ParagraphStyleRange Hyphenation="maybe"><CharacterStyleRange><Content>x</Content></CharacterStyleRange></ParagraphStyleRange></Story>"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Hyphenation",
+                reason: "expected boolean",
+            } if element == "ParagraphStyleRange"
+        ));
+    }
+
+    #[test]
+    fn serializer_rejects_mismatched_story_style_range_text() {
+        let story = Story {
+            id: Some("u1".to_owned()),
+            text: "expected".to_owned(),
+            paragraph_style_ranges: vec![ParagraphStyleRange {
+                character_style_ranges: vec![CharacterStyleRange {
+                    text: "actual".to_owned(),
+                    ..CharacterStyleRange::default()
+                }],
+                ..ParagraphStyleRange::default()
+            }],
+            metadata: Default::default(),
+            preference: None,
+            incopy_export_option: None,
+        };
+
+        let err = story.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidText {
+                what: "story style range text",
+                reason: "does not match story text",
+            }
+        ));
+    }
+
+    #[test]
     fn serializer_enforces_text_byte_limit() {
         let story = Story {
             id: None,
             text: "a".repeat(super::DEFAULT_MAX_STORY_TEXT_BYTES + 1),
+            paragraph_style_ranges: Vec::new(),
             metadata: Default::default(),
             preference: None,
             incopy_export_option: None,
@@ -1217,6 +1718,7 @@ mod tests {
         let story = Story {
             id: Some("u".repeat(super::DEFAULT_MAX_STORY_ATTRIBUTE_BYTES + 1)),
             text: "valid".to_owned(),
+            paragraph_style_ranges: Vec::new(),
             metadata: Default::default(),
             preference: None,
             incopy_export_option: None,
@@ -1239,6 +1741,7 @@ mod tests {
         let story = Story {
             id: Some("u1".to_owned()),
             text: "bad\u{0}".to_owned(),
+            paragraph_style_ranges: Vec::new(),
             metadata: Default::default(),
             preference: None,
             incopy_export_option: None,
@@ -1260,6 +1763,7 @@ mod tests {
         let story = Story {
             id: Some("u\u{0}".to_owned()),
             text: "valid".to_owned(),
+            paragraph_style_ranges: Vec::new(),
             metadata: Default::default(),
             preference: None,
             incopy_export_option: None,

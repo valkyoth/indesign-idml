@@ -2885,6 +2885,7 @@ mod tests {
         let story = Story {
             id: Some("u1".to_owned()),
             text: "Generated & safe\nline".to_owned(),
+            paragraph_style_ranges: Vec::new(),
             metadata: Default::default(),
             preference: None,
             incopy_export_option: None,
