@@ -910,12 +910,7 @@ fn serialize_spread(spread: &Spread) -> Result<String> {
             serialize_text_frame(&mut xml, frame)?;
         }
     } else {
-        for page_item in &spread.page_items {
-            serialize_page_item(&mut xml, page_item, 2)?;
-        }
-        for frame in unrepresented_text_frames(spread)? {
-            serialize_text_frame(&mut xml, frame)?;
-        }
+        serialize_page_items_with_unrepresented_text_frames(&mut xml, spread)?;
     }
 
     xml.push_str("</Spread>\n");
@@ -983,6 +978,49 @@ fn enforce_serialized_spread_count(actual: usize, limit: usize, what: &'static s
             actual: actual as u64,
         });
     }
+    Ok(())
+}
+
+fn serialize_page_items_with_unrepresented_text_frames(
+    xml: &mut String,
+    spread: &Spread,
+) -> Result<()> {
+    let mut text_frame_index = 0usize;
+
+    for page_item in &spread.page_items {
+        let mut item_text_frames = Vec::new();
+        collect_text_frames_from_page_item(page_item, &mut item_text_frames);
+
+        if let Some(first_item_frame) = item_text_frames.first() {
+            loop {
+                let Some(indexed_frame) = spread.text_frames.get(text_frame_index) else {
+                    return Err(stale_page_items_error());
+                };
+                if indexed_frame == *first_item_frame {
+                    break;
+                }
+                serialize_text_frame(xml, indexed_frame)?;
+                text_frame_index += 1;
+            }
+        }
+
+        serialize_page_item(xml, page_item, 2)?;
+
+        for item_frame in item_text_frames {
+            let Some(indexed_frame) = spread.text_frames.get(text_frame_index) else {
+                return Err(stale_page_items_error());
+            };
+            if indexed_frame != item_frame {
+                return Err(stale_page_items_error());
+            }
+            text_frame_index += 1;
+        }
+    }
+
+    for frame in &spread.text_frames[text_frame_index..] {
+        serialize_text_frame(xml, frame)?;
+    }
+
     Ok(())
 }
 
@@ -1375,13 +1413,14 @@ mod tests {
   <Polygon Self="poly1">
     <TextPath Self="tp1" ParentStory="u2" />
   </Polygon>
+  <TextFrame Self="tf2" ParentStory="u3" />
   <Rectangle Self="r1" />
 </Spread>"#;
 
         let spread = Spread::from_xml(xml).unwrap();
 
-        assert_eq!(spread.text_frames.len(), 2);
-        assert_eq!(spread.page_items.len(), 2);
+        assert_eq!(spread.text_frames.len(), 3);
+        assert_eq!(spread.page_items.len(), 3);
         spread.validate().unwrap();
 
         let serialized = spread.to_xml().unwrap();
@@ -1392,7 +1431,7 @@ mod tests {
             .filter_map(|frame| frame.parent_story.as_deref())
             .collect::<Vec<_>>();
 
-        assert_eq!(story_ids, ["u1", "u2"]);
+        assert_eq!(story_ids, ["u1", "u2", "u3"]);
     }
 
     #[test]

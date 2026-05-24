@@ -39,6 +39,20 @@ struct Snapshot {
     spread_count: usize,
     preserved_entry_count: usize,
     story_texts: Vec<(String, String)>,
+    spread_summaries: Vec<SpreadSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SpreadSummary {
+    id: String,
+    page_count: usize,
+    text_frames: Vec<TextFrameSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct TextFrameSummary {
+    id: Option<String>,
+    parent_story: Option<String>,
 }
 
 impl Snapshot {
@@ -48,12 +62,38 @@ impl Snapshot {
             story_texts.push((story_id.to_owned(), text.to_owned()));
             Ok::<(), IdmlError>(())
         })?;
+        let spread_summaries =
+            document
+                .design_map
+                .spread_ids()
+                .map(|spread_id| {
+                    let spread = document.spreads.get(spread_id).ok_or_else(|| {
+                        IdmlError::MissingReference {
+                            kind: "spread model",
+                            id: spread_id.to_owned(),
+                        }
+                    })?;
+                    Ok(SpreadSummary {
+                        id: spread_id.to_owned(),
+                        page_count: spread.pages.len(),
+                        text_frames: spread
+                            .text_frames
+                            .iter()
+                            .map(|frame| TextFrameSummary {
+                                id: frame.id.clone(),
+                                parent_story: frame.parent_story.clone(),
+                            })
+                            .collect(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             story_count: document.design_map.story_srcs.len(),
             spread_count: document.design_map.spread_srcs.len(),
             preserved_entry_count: document.preserved_entries.len(),
             story_texts,
+            spread_summaries,
         })
     }
 }
