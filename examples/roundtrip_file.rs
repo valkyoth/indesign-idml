@@ -88,6 +88,7 @@ struct ParagraphStyleRangeSummary {
     applied_paragraph_style: Option<String>,
     justification: Option<String>,
     hyphenation: Option<bool>,
+    properties: ParagraphStylePropertiesSummary,
     character_style_ranges: Vec<CharacterStyleRangeSummary>,
 }
 
@@ -99,7 +100,29 @@ struct CharacterStyleRangeSummary {
     fill_color: Option<String>,
     tracking: Option<String>,
     stroke_weight: Option<String>,
+    properties: CharacterStylePropertiesSummary,
     text: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ParagraphStylePropertiesSummary {
+    same_para_style_spacing: Option<StoryPropertySummary>,
+    rule_above_gap_color: Option<StoryPropertySummary>,
+    rule_below_gap_color: Option<StoryPropertySummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CharacterStylePropertiesSummary {
+    applied_font: Option<StoryPropertySummary>,
+    leading: Option<StoryPropertySummary>,
+    underline_gap_color: Option<StoryPropertySummary>,
+    strike_through_gap_color: Option<StoryPropertySummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StoryPropertySummary {
+    value_type: Option<String>,
+    value: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -437,6 +460,7 @@ fn summarize_paragraph_style_ranges(
             applied_paragraph_style: paragraph.applied_paragraph_style.clone(),
             justification: paragraph.justification.clone(),
             hyphenation: paragraph.hyphenation,
+            properties: summarize_paragraph_style_properties(&paragraph.properties),
             character_style_ranges: paragraph
                 .character_style_ranges
                 .iter()
@@ -447,11 +471,58 @@ fn summarize_paragraph_style_ranges(
                     fill_color: character.fill_color.clone(),
                     tracking: character.tracking.clone(),
                     stroke_weight: character.stroke_weight.clone(),
+                    properties: summarize_character_style_properties(&character.properties),
                     text: character.text.clone(),
                 })
                 .collect(),
         })
         .collect()
+}
+
+fn summarize_paragraph_style_properties(
+    properties: &ParagraphStyleProperties,
+) -> ParagraphStylePropertiesSummary {
+    ParagraphStylePropertiesSummary {
+        same_para_style_spacing: properties
+            .same_para_style_spacing
+            .as_ref()
+            .map(summarize_story_property),
+        rule_above_gap_color: properties
+            .rule_above_gap_color
+            .as_ref()
+            .map(summarize_story_property),
+        rule_below_gap_color: properties
+            .rule_below_gap_color
+            .as_ref()
+            .map(summarize_story_property),
+    }
+}
+
+fn summarize_character_style_properties(
+    properties: &CharacterStyleProperties,
+) -> CharacterStylePropertiesSummary {
+    CharacterStylePropertiesSummary {
+        applied_font: properties
+            .applied_font
+            .as_ref()
+            .map(summarize_story_property),
+        leading: properties.leading.as_ref().map(summarize_story_property),
+        underline_gap_color: properties
+            .underline_gap_color
+            .as_ref()
+            .map(summarize_story_property),
+        strike_through_gap_color: properties
+            .strike_through_gap_color
+            .as_ref()
+            .map(summarize_story_property),
+    }
+}
+
+fn summarize_story_property(property: &StoryProperty) -> StoryPropertySummary {
+    StoryPropertySummary {
+        value_type: property.value_type.clone(),
+        value: property.value.clone(),
+    }
 }
 
 fn summarize_story_metadata(metadata: &StoryMetadata) -> StoryMetadataSummary {

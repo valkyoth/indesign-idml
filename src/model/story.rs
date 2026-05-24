@@ -109,8 +109,21 @@ pub struct ParagraphStyleRange {
     pub justification: Option<String>,
     /// Hyphenation flag, when present.
     pub hyphenation: Option<bool>,
+    /// Paragraph style properties, when present.
+    pub properties: ParagraphStyleProperties,
     /// Character ranges in this paragraph range.
     pub character_style_ranges: Vec<CharacterStyleRange>,
+}
+
+/// Typed child properties from a paragraph style range.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ParagraphStyleProperties {
+    /// Same-paragraph style spacing property, when present.
+    pub same_para_style_spacing: Option<StoryProperty>,
+    /// Rule-above gap color property, when present.
+    pub rule_above_gap_color: Option<StoryProperty>,
+    /// Rule-below gap color property, when present.
+    pub rule_below_gap_color: Option<StoryProperty>,
 }
 
 /// A character style range with extracted visible text.
@@ -128,8 +141,50 @@ pub struct CharacterStyleRange {
     pub tracking: Option<String>,
     /// Stroke weight value, preserved as an IDML string.
     pub stroke_weight: Option<String>,
+    /// Character style properties, when present.
+    pub properties: CharacterStyleProperties,
     /// Visible text carried by this character range.
     pub text: String,
+}
+
+/// Typed child properties from a character style range.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CharacterStyleProperties {
+    /// Applied font property, when present.
+    pub applied_font: Option<StoryProperty>,
+    /// Leading property, when present.
+    pub leading: Option<StoryProperty>,
+    /// Underline gap color property, when present.
+    pub underline_gap_color: Option<StoryProperty>,
+    /// Strike-through gap color property, when present.
+    pub strike_through_gap_color: Option<StoryProperty>,
+}
+
+/// A typed IDML property value from a style range `Properties` element.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StoryProperty {
+    /// IDML `type` attribute, when present.
+    pub value_type: Option<String>,
+    /// Property text value.
+    pub value: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StoryPropertyTarget {
+    ParagraphSameParaStyleSpacing(usize),
+    ParagraphRuleAboveGapColor(usize),
+    ParagraphRuleBelowGapColor(usize),
+    CharacterAppliedFont(usize, usize),
+    CharacterLeading(usize, usize),
+    CharacterUnderlineGapColor(usize, usize),
+    CharacterStrikeThroughGapColor(usize, usize),
+}
+
+#[derive(Debug)]
+struct StoryPropertyCapture {
+    element: &'static str,
+    target: StoryPropertyTarget,
+    property: StoryProperty,
 }
 
 impl Story {
@@ -150,6 +205,7 @@ impl Story {
         let mut paragraph_style_ranges = Vec::new();
         let mut current_paragraph_range = None;
         let mut current_character_range = None;
+        let mut current_property = None;
         let mut metadata = StoryMetadata::default();
         let mut preference = None;
         let mut incopy_export_option = None;
@@ -170,6 +226,12 @@ impl Story {
                         return Err(IdmlError::InvalidElement {
                             element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
                             reason: "element inside story Content",
+                        });
+                    }
+                    if current_property.is_some() {
+                        return Err(IdmlError::InvalidElement {
+                            element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                            reason: "element inside story property",
                         });
                     }
                     if e.name().as_ref() == b"Story" {
@@ -216,6 +278,15 @@ impl Story {
                                 options.max_attribute_bytes,
                             )?);
                         current_character_range = Some(paragraph.character_style_ranges.len() - 1);
+                    } else if story_depth > 0 {
+                        maybe_start_story_property(
+                            &mut current_property,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                            current_paragraph_range,
+                            current_character_range,
+                        )?;
                     }
                     if story_depth > 0 && e.name().as_ref() == b"Content" {
                         content_depth = 1;
@@ -228,7 +299,9 @@ impl Story {
                     root.exit(e.name().as_ref())?;
                 }
                 Event::End(e) => {
-                    if e.name().as_ref() == b"CharacterStyleRange" {
+                    if property_end_matches(&current_property, e.name().as_ref()) {
+                        finish_story_property(&mut paragraph_style_ranges, &mut current_property)?;
+                    } else if e.name().as_ref() == b"CharacterStyleRange" {
                         current_character_range = None;
                     } else if e.name().as_ref() == b"ParagraphStyleRange" {
                         current_character_range = None;
@@ -250,6 +323,13 @@ impl Story {
                             decoded.as_ref(),
                             options.max_text_bytes,
                         )?;
+                    } else if let Some(property) = &mut current_property {
+                        let decoded = e.decode()?;
+                        push_property_value_limited(
+                            &mut property.property.value,
+                            decoded.as_ref(),
+                            options.max_attribute_bytes,
+                        )?;
                     }
                 }
                 Event::CData(e) => {
@@ -263,6 +343,13 @@ impl Story {
                             current_character_range,
                             decoded.as_ref(),
                             options.max_text_bytes,
+                        )?;
+                    } else if let Some(property) = &mut current_property {
+                        let decoded = e.xml_content(XmlVersion::Implicit1_0)?;
+                        push_property_value_limited(
+                            &mut property.property.value,
+                            decoded.as_ref(),
+                            options.max_attribute_bytes,
                         )?;
                     }
                 }
@@ -296,6 +383,28 @@ impl Story {
                                 options.max_text_bytes,
                             )?;
                         }
+                    } else if let Some(property) = &mut current_property {
+                        if let Some(ch) = e.resolve_char_ref()? {
+                            push_property_char_limited(
+                                &mut property.property.value,
+                                ch,
+                                options.max_attribute_bytes,
+                            )?;
+                        } else {
+                            let entity = e.decode()?;
+                            let replacement = resolve_predefined_entity(entity.as_ref())
+                                .ok_or_else(|| {
+                                    IdmlError::XmlEscape(EscapeError::UnrecognizedEntity(
+                                        0..entity.len(),
+                                        entity.to_string(),
+                                    ))
+                                })?;
+                            push_property_value_limited(
+                                &mut property.property.value,
+                                replacement,
+                                options.max_attribute_bytes,
+                            )?;
+                        }
                     } else {
                         reject_xml_entity_reference()?;
                     }
@@ -308,6 +417,12 @@ impl Story {
                         return Err(IdmlError::InvalidElement {
                             element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
                             reason: "element inside story Content",
+                        });
+                    }
+                    if current_property.is_some() {
+                        return Err(IdmlError::InvalidElement {
+                            element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                            reason: "element inside story property",
                         });
                     }
                     if e.name().as_ref() == b"Story" {
@@ -348,6 +463,16 @@ impl Story {
                                 &reader,
                                 options.max_attribute_bytes,
                             )?);
+                    } else if story_depth > 0
+                        && maybe_insert_empty_story_property(
+                            &mut paragraph_style_ranges,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                            current_paragraph_range,
+                            current_character_range,
+                        )?
+                    {
                     } else if story_depth > 0 && e.name().as_ref() == b"Br" {
                         push_limited(&mut text, "\n", options.max_text_bytes)?;
                         push_range_limited(
@@ -514,6 +639,7 @@ impl ParagraphStyleRange {
             )?,
             justification: optional_attr(event, "Justification", reader, max_attribute_bytes)?,
             hyphenation: optional_bool_attr(event, "Hyphenation", reader, max_attribute_bytes)?,
+            properties: ParagraphStyleProperties::default(),
             character_style_ranges: Vec::new(),
         })
     }
@@ -537,7 +663,21 @@ impl CharacterStyleRange {
             fill_color: optional_attr(event, "FillColor", reader, max_attribute_bytes)?,
             tracking: optional_attr(event, "Tracking", reader, max_attribute_bytes)?,
             stroke_weight: optional_attr(event, "StrokeWeight", reader, max_attribute_bytes)?,
+            properties: CharacterStyleProperties::default(),
             text: String::new(),
+        })
+    }
+}
+
+impl StoryProperty {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            value_type: optional_attr(event, "type", reader, max_attribute_bytes)?,
+            value: String::new(),
         })
     }
 }
@@ -698,6 +838,41 @@ fn push_char_limited(output: &mut String, ch: char, max_text_bytes: usize) -> Re
     push_limited(output, ch.encode_utf8(&mut buffer), max_text_bytes)
 }
 
+fn push_property_value_limited(
+    output: &mut String,
+    text: &str,
+    max_property_bytes: usize,
+) -> Result<()> {
+    let next_len = output
+        .len()
+        .checked_add(text.len())
+        .ok_or(IdmlError::LimitExceeded {
+            what: "Story XML property bytes",
+            limit: max_property_bytes as u64,
+            actual: u64::MAX,
+        })?;
+
+    if next_len > max_property_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what: "Story XML property bytes",
+            limit: max_property_bytes as u64,
+            actual: next_len as u64,
+        });
+    }
+
+    output.push_str(text);
+    Ok(())
+}
+
+fn push_property_char_limited(
+    output: &mut String,
+    ch: char,
+    max_property_bytes: usize,
+) -> Result<()> {
+    let mut buffer = [0u8; 4];
+    push_property_value_limited(output, ch.encode_utf8(&mut buffer), max_property_bytes)
+}
+
 fn ensure_current_paragraph_range(
     paragraph_style_ranges: &mut Vec<ParagraphStyleRange>,
     current_paragraph_range: &mut Option<usize>,
@@ -754,6 +929,263 @@ fn push_range_char_limited(
     )
 }
 
+fn maybe_start_story_property(
+    current_property: &mut Option<StoryPropertyCapture>,
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+    current_paragraph_range: Option<usize>,
+    current_character_range: Option<usize>,
+) -> Result<()> {
+    let Some((element, target)) = story_property_target(
+        event.name().as_ref(),
+        current_paragraph_range,
+        current_character_range,
+    ) else {
+        return Ok(());
+    };
+
+    if current_property.is_some() {
+        return Err(IdmlError::InvalidElement {
+            element: element.to_owned(),
+            reason: "nested story property",
+        });
+    }
+
+    *current_property = Some(StoryPropertyCapture {
+        element,
+        target,
+        property: StoryProperty::from_xml_event(event, reader, max_attribute_bytes)?,
+    });
+    Ok(())
+}
+
+fn maybe_insert_empty_story_property(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+    current_paragraph_range: Option<usize>,
+    current_character_range: Option<usize>,
+) -> Result<bool> {
+    let Some((_, target)) = story_property_target(
+        event.name().as_ref(),
+        current_paragraph_range,
+        current_character_range,
+    ) else {
+        return Ok(false);
+    };
+
+    insert_story_property(
+        paragraph_style_ranges,
+        target,
+        StoryProperty::from_xml_event(event, reader, max_attribute_bytes)?,
+    )?;
+    Ok(true)
+}
+
+fn story_property_target(
+    element: &[u8],
+    current_paragraph_range: Option<usize>,
+    current_character_range: Option<usize>,
+) -> Option<(&'static str, StoryPropertyTarget)> {
+    match element {
+        b"SameParaStyleSpacing" => current_paragraph_range.map(|paragraph| {
+            (
+                "SameParaStyleSpacing",
+                StoryPropertyTarget::ParagraphSameParaStyleSpacing(paragraph),
+            )
+        }),
+        b"RuleAboveGapColor" => current_paragraph_range.map(|paragraph| {
+            (
+                "RuleAboveGapColor",
+                StoryPropertyTarget::ParagraphRuleAboveGapColor(paragraph),
+            )
+        }),
+        b"RuleBelowGapColor" => current_paragraph_range.map(|paragraph| {
+            (
+                "RuleBelowGapColor",
+                StoryPropertyTarget::ParagraphRuleBelowGapColor(paragraph),
+            )
+        }),
+        b"AppliedFont" => {
+            current_paragraph_range
+                .zip(current_character_range)
+                .map(|(paragraph, character)| {
+                    (
+                        "AppliedFont",
+                        StoryPropertyTarget::CharacterAppliedFont(paragraph, character),
+                    )
+                })
+        }
+        b"Leading" => {
+            current_paragraph_range
+                .zip(current_character_range)
+                .map(|(paragraph, character)| {
+                    (
+                        "Leading",
+                        StoryPropertyTarget::CharacterLeading(paragraph, character),
+                    )
+                })
+        }
+        b"UnderlineGapColor" => {
+            current_paragraph_range
+                .zip(current_character_range)
+                .map(|(paragraph, character)| {
+                    (
+                        "UnderlineGapColor",
+                        StoryPropertyTarget::CharacterUnderlineGapColor(paragraph, character),
+                    )
+                })
+        }
+        b"StrikeThroughGapColor" => {
+            current_paragraph_range
+                .zip(current_character_range)
+                .map(|(paragraph, character)| {
+                    (
+                        "StrikeThroughGapColor",
+                        StoryPropertyTarget::CharacterStrikeThroughGapColor(paragraph, character),
+                    )
+                })
+        }
+        _ => None,
+    }
+}
+
+fn property_end_matches(current_property: &Option<StoryPropertyCapture>, element: &[u8]) -> bool {
+    current_property
+        .as_ref()
+        .is_some_and(|property| property.element.as_bytes() == element)
+}
+
+fn finish_story_property(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    current_property: &mut Option<StoryPropertyCapture>,
+) -> Result<()> {
+    let Some(capture) = current_property.take() else {
+        return Ok(());
+    };
+    insert_story_property(paragraph_style_ranges, capture.target, capture.property)
+}
+
+fn insert_story_property(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    target: StoryPropertyTarget,
+    property: StoryProperty,
+) -> Result<()> {
+    match target {
+        StoryPropertyTarget::ParagraphSameParaStyleSpacing(paragraph) => set_paragraph_property(
+            paragraph_style_ranges,
+            paragraph,
+            "SameParaStyleSpacing",
+            |properties| &mut properties.same_para_style_spacing,
+            property,
+        ),
+        StoryPropertyTarget::ParagraphRuleAboveGapColor(paragraph) => set_paragraph_property(
+            paragraph_style_ranges,
+            paragraph,
+            "RuleAboveGapColor",
+            |properties| &mut properties.rule_above_gap_color,
+            property,
+        ),
+        StoryPropertyTarget::ParagraphRuleBelowGapColor(paragraph) => set_paragraph_property(
+            paragraph_style_ranges,
+            paragraph,
+            "RuleBelowGapColor",
+            |properties| &mut properties.rule_below_gap_color,
+            property,
+        ),
+        StoryPropertyTarget::CharacterAppliedFont(paragraph, character) => set_character_property(
+            paragraph_style_ranges,
+            paragraph,
+            character,
+            "AppliedFont",
+            |properties| &mut properties.applied_font,
+            property,
+        ),
+        StoryPropertyTarget::CharacterLeading(paragraph, character) => set_character_property(
+            paragraph_style_ranges,
+            paragraph,
+            character,
+            "Leading",
+            |properties| &mut properties.leading,
+            property,
+        ),
+        StoryPropertyTarget::CharacterUnderlineGapColor(paragraph, character) => {
+            set_character_property(
+                paragraph_style_ranges,
+                paragraph,
+                character,
+                "UnderlineGapColor",
+                |properties| &mut properties.underline_gap_color,
+                property,
+            )
+        }
+        StoryPropertyTarget::CharacterStrikeThroughGapColor(paragraph, character) => {
+            set_character_property(
+                paragraph_style_ranges,
+                paragraph,
+                character,
+                "StrikeThroughGapColor",
+                |properties| &mut properties.strike_through_gap_color,
+                property,
+            )
+        }
+    }
+}
+
+fn set_paragraph_property(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    paragraph: usize,
+    element: &'static str,
+    selector: impl FnOnce(&mut ParagraphStyleProperties) -> &mut Option<StoryProperty>,
+    property: StoryProperty,
+) -> Result<()> {
+    let Some(paragraph) = paragraph_style_ranges.get_mut(paragraph) else {
+        return Err(inconsistent_property_state(element));
+    };
+    set_story_property_slot(selector(&mut paragraph.properties), element, property)
+}
+
+fn set_character_property(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    paragraph: usize,
+    character: usize,
+    element: &'static str,
+    selector: impl FnOnce(&mut CharacterStyleProperties) -> &mut Option<StoryProperty>,
+    property: StoryProperty,
+) -> Result<()> {
+    let Some(character) = paragraph_style_ranges
+        .get_mut(paragraph)
+        .and_then(|paragraph| paragraph.character_style_ranges.get_mut(character))
+    else {
+        return Err(inconsistent_property_state(element));
+    };
+    set_story_property_slot(selector(&mut character.properties), element, property)
+}
+
+fn set_story_property_slot(
+    slot: &mut Option<StoryProperty>,
+    element: &'static str,
+    property: StoryProperty,
+) -> Result<()> {
+    if slot.is_some() {
+        return Err(IdmlError::InvalidElement {
+            element: element.to_owned(),
+            reason: "duplicate story property",
+        });
+    }
+    *slot = Some(property);
+    Ok(())
+}
+
+fn inconsistent_property_state(element: &'static str) -> IdmlError {
+    IdmlError::InvalidElement {
+        element: element.to_owned(),
+        reason: "story property parser state is inconsistent",
+    }
+}
+
 fn normalize_default_style_ranges(ranges: &mut Vec<ParagraphStyleRange>, text: &str) {
     let [paragraph] = ranges.as_mut_slice() else {
         return;
@@ -761,6 +1193,7 @@ fn normalize_default_style_ranges(ranges: &mut Vec<ParagraphStyleRange>, text: &
     if paragraph.applied_paragraph_style.is_some()
         || paragraph.justification.is_some()
         || paragraph.hyphenation.is_some()
+        || paragraph.properties != ParagraphStyleProperties::default()
     {
         return;
     }
@@ -774,6 +1207,7 @@ fn normalize_default_style_ranges(ranges: &mut Vec<ParagraphStyleRange>, text: &
         && character.fill_color.is_none()
         && character.tracking.is_none()
         && character.stroke_weight.is_none()
+        && character.properties == CharacterStyleProperties::default()
         && character.text == text
     {
         ranges.clear();
@@ -893,6 +1327,7 @@ fn validate_story_style_ranges(story: &Story) -> Result<()> {
             "Justification",
             paragraph.justification.as_deref(),
         )?;
+        validate_paragraph_style_properties(&paragraph.properties)?;
 
         for character in &paragraph.character_style_ranges {
             validate_optional_story_attr(
@@ -925,6 +1360,7 @@ fn validate_story_style_ranges(story: &Story) -> Result<()> {
                 "StrokeWeight",
                 character.stroke_weight.as_deref(),
             )?;
+            validate_character_style_properties(&character.properties)?;
             validate_xml_text("story style range text", &character.text)?;
             push_limited(
                 &mut range_text,
@@ -941,6 +1377,40 @@ fn validate_story_style_ranges(story: &Story) -> Result<()> {
         });
     }
     Ok(())
+}
+
+fn validate_paragraph_style_properties(properties: &ParagraphStyleProperties) -> Result<()> {
+    validate_story_property(
+        "SameParaStyleSpacing",
+        properties.same_para_style_spacing.as_ref(),
+    )?;
+    validate_story_property(
+        "RuleAboveGapColor",
+        properties.rule_above_gap_color.as_ref(),
+    )?;
+    validate_story_property(
+        "RuleBelowGapColor",
+        properties.rule_below_gap_color.as_ref(),
+    )
+}
+
+fn validate_character_style_properties(properties: &CharacterStyleProperties) -> Result<()> {
+    validate_story_property("AppliedFont", properties.applied_font.as_ref())?;
+    validate_story_property("Leading", properties.leading.as_ref())?;
+    validate_story_property("UnderlineGapColor", properties.underline_gap_color.as_ref())?;
+    validate_story_property(
+        "StrikeThroughGapColor",
+        properties.strike_through_gap_color.as_ref(),
+    )
+}
+
+fn validate_story_property(element: &'static str, property: Option<&StoryProperty>) -> Result<()> {
+    let Some(property) = property else {
+        return Ok(());
+    };
+    validate_optional_story_attr(element, "type", property.value_type.as_deref())?;
+    enforce_story_attribute_bytes(property.value.len(), DEFAULT_MAX_STORY_ATTRIBUTE_BYTES)?;
+    validate_xml_text("story property value", &property.value)
 }
 
 fn validate_optional_story_attr(
@@ -1041,12 +1511,15 @@ fn serialize_paragraph_style_ranges(
                 bool_str(hyphenation),
             )?;
         }
-        if paragraph.character_style_ranges.is_empty() {
+        if paragraph.character_style_ranges.is_empty()
+            && paragraph.properties == ParagraphStyleProperties::default()
+        {
             xml.push_str(" />\n");
             continue;
         }
 
         xml.push_str(">\n");
+        serialize_paragraph_style_properties(xml, &paragraph.properties)?;
         for character in &paragraph.character_style_ranges {
             serialize_character_style_range(xml, character)?;
         }
@@ -1081,8 +1554,93 @@ fn serialize_character_style_range(xml: &mut String, range: &CharacterStyleRange
         push_attr(xml, "CharacterStyleRange", "StrokeWeight", stroke_weight)?;
     }
     xml.push('>');
+    serialize_character_style_properties(xml, &range.properties)?;
     push_story_text_content(xml, &range.text);
     xml.push_str("</CharacterStyleRange>\n");
+    Ok(())
+}
+
+fn serialize_paragraph_style_properties(
+    xml: &mut String,
+    properties: &ParagraphStyleProperties,
+) -> Result<()> {
+    if properties == &ParagraphStyleProperties::default() {
+        return Ok(());
+    }
+
+    xml.push_str("    <Properties>\n");
+    serialize_story_property(
+        xml,
+        "SameParaStyleSpacing",
+        properties.same_para_style_spacing.as_ref(),
+        6,
+    )?;
+    serialize_story_property(
+        xml,
+        "RuleAboveGapColor",
+        properties.rule_above_gap_color.as_ref(),
+        6,
+    )?;
+    serialize_story_property(
+        xml,
+        "RuleBelowGapColor",
+        properties.rule_below_gap_color.as_ref(),
+        6,
+    )?;
+    xml.push_str("    </Properties>\n");
+    Ok(())
+}
+
+fn serialize_character_style_properties(
+    xml: &mut String,
+    properties: &CharacterStyleProperties,
+) -> Result<()> {
+    if properties == &CharacterStyleProperties::default() {
+        return Ok(());
+    }
+
+    xml.push_str("\n      <Properties>\n");
+    serialize_story_property(xml, "Leading", properties.leading.as_ref(), 8)?;
+    serialize_story_property(xml, "AppliedFont", properties.applied_font.as_ref(), 8)?;
+    serialize_story_property(
+        xml,
+        "UnderlineGapColor",
+        properties.underline_gap_color.as_ref(),
+        8,
+    )?;
+    serialize_story_property(
+        xml,
+        "StrikeThroughGapColor",
+        properties.strike_through_gap_color.as_ref(),
+        8,
+    )?;
+    xml.push_str("      </Properties>\n      ");
+    Ok(())
+}
+
+fn serialize_story_property(
+    xml: &mut String,
+    element: &'static str,
+    property: Option<&StoryProperty>,
+    indent: usize,
+) -> Result<()> {
+    let Some(property) = property else {
+        return Ok(());
+    };
+
+    for _ in 0..indent {
+        xml.push(' ');
+    }
+    xml.push('<');
+    xml.push_str(element);
+    if let Some(value_type) = &property.value_type {
+        push_attr(xml, element, "type", value_type)?;
+    }
+    xml.push('>');
+    xml.push_str(partial_escape(property.value.as_str()).as_ref());
+    xml.push_str("</");
+    xml.push_str(element);
+    xml.push_str(">\n");
     Ok(())
 }
 
@@ -1166,8 +1724,9 @@ fn push_attr(
 #[cfg(test)]
 mod tests {
     use super::{
-        CharacterStyleRange, InCopyExportOption, ParagraphStyleRange, Story, StoryMetadata,
-        StoryParseOptions, StoryPreference,
+        CharacterStyleProperties, CharacterStyleRange, InCopyExportOption,
+        ParagraphStyleProperties, ParagraphStyleRange, Story, StoryMetadata, StoryParseOptions,
+        StoryPreference, StoryProperty,
     };
     use crate::IdmlError;
 
@@ -1592,6 +2151,10 @@ mod tests {
         let xml = r##"<Story Self="u2">
   <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle" Justification="CenterAlign" Hyphenation="false">
     <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/$ID/[No character style]" PointSize="12" FontStyle="Bold" FillColor="Color/Black" Tracking="15" StrokeWeight="0.5">
+      <Properties>
+        <Leading type="unit">14</Leading>
+        <AppliedFont type="string">Lato &amp; Sans</AppliedFont>
+      </Properties>
       <Content>Hello</Content><Br/><Content>Next</Content>
     </CharacterStyleRange>
     <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Emphasis" PointSize="10">
@@ -1625,6 +2188,20 @@ mod tests {
         assert_eq!(character.fill_color.as_deref(), Some("Color/Black"));
         assert_eq!(character.tracking.as_deref(), Some("15"));
         assert_eq!(character.stroke_weight.as_deref(), Some("0.5"));
+        assert_eq!(
+            character.properties.leading.as_ref(),
+            Some(&StoryProperty {
+                value_type: Some("unit".to_owned()),
+                value: "14".to_owned()
+            })
+        );
+        assert_eq!(
+            character.properties.applied_font.as_ref(),
+            Some(&StoryProperty {
+                value_type: Some("string".to_owned()),
+                value: "Lato & Sans".to_owned()
+            })
+        );
         assert_eq!(character.text, "Hello\nNext");
         assert_eq!(paragraph.character_style_ranges[1].text, "\tCell");
         assert_eq!(
@@ -1642,7 +2219,65 @@ mod tests {
                 .contains("AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\"")
         );
         assert!(serialized.contains("StrokeWeight=\"0.5\""));
+        assert!(serialized.contains("<AppliedFont type=\"string\">Lato &amp; Sans</AppliedFont>"));
+        assert!(serialized.contains("<Leading type=\"unit\">14</Leading>"));
         assert_eq!(Story::from_xml(&serialized).unwrap(), story);
+    }
+
+    #[test]
+    fn serializes_paragraph_and_character_style_properties() {
+        let story = Story {
+            id: Some("u1".to_owned()),
+            text: "Styled".to_owned(),
+            paragraph_style_ranges: vec![ParagraphStyleRange {
+                applied_paragraph_style: Some("ParagraphStyle/Body".to_owned()),
+                properties: ParagraphStyleProperties {
+                    same_para_style_spacing: Some(StoryProperty {
+                        value_type: Some("unit".to_owned()),
+                        value: "3.5".to_owned(),
+                    }),
+                    rule_above_gap_color: Some(StoryProperty {
+                        value_type: Some("string".to_owned()),
+                        value: "Color/None".to_owned(),
+                    }),
+                    rule_below_gap_color: None,
+                },
+                character_style_ranges: vec![CharacterStyleRange {
+                    applied_character_style: Some(
+                        "CharacterStyle/$ID/[No character style]".to_owned(),
+                    ),
+                    properties: CharacterStyleProperties {
+                        applied_font: Some(StoryProperty {
+                            value_type: Some("string".to_owned()),
+                            value: "Lato".to_owned(),
+                        }),
+                        leading: Some(StoryProperty {
+                            value_type: Some("unit".to_owned()),
+                            value: "12".to_owned(),
+                        }),
+                        underline_gap_color: Some(StoryProperty {
+                            value_type: Some("string".to_owned()),
+                            value: "Color/Black".to_owned(),
+                        }),
+                        strike_through_gap_color: None,
+                    },
+                    text: "Styled".to_owned(),
+                    ..CharacterStyleRange::default()
+                }],
+                ..ParagraphStyleRange::default()
+            }],
+            metadata: Default::default(),
+            preference: None,
+            incopy_export_option: None,
+        };
+
+        let xml = story.to_xml().unwrap();
+        let parsed = Story::from_xml(&xml).unwrap();
+
+        assert!(xml.contains("<SameParaStyleSpacing type=\"unit\">3.5</SameParaStyleSpacing>"));
+        assert!(xml.contains("<RuleAboveGapColor type=\"string\">Color/None</RuleAboveGapColor>"));
+        assert!(xml.contains("<UnderlineGapColor type=\"string\">Color/Black</UnderlineGapColor>"));
+        assert_eq!(parsed, story);
     }
 
     #[test]

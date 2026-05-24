@@ -24,7 +24,7 @@ pub use crate::model::spread::{
     SpreadParseOptions, TextFrame,
 };
 pub use crate::model::story::{
-    CharacterStyleRange, InCopyExportOption, ParagraphStyleRange, Story, StoryMetadata,
-    StoryParseOptions, StoryPreference,
+    CharacterStyleProperties, CharacterStyleRange, InCopyExportOption, ParagraphStyleProperties,
+    ParagraphStyleRange, Story, StoryMetadata, StoryParseOptions, StoryPreference, StoryProperty,
 };
 pub use crate::traits::{XmlLoadable, XmlSaveable};
