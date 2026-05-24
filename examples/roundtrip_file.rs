@@ -191,12 +191,26 @@ struct CharacterStylePropertiesSummary {
     leading: Option<StoryPropertySummary>,
     underline_gap_color: Option<StoryPropertySummary>,
     strike_through_gap_color: Option<StoryPropertySummary>,
+    open_type_features: Option<StoryListPropertySummary>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 struct StoryPropertySummary {
     value_type: Option<String>,
     value: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StoryListPropertySummary {
+    value_type: Option<String>,
+    items: Vec<StoryListItemSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StoryListItemSummary {
+    value_type: Option<String>,
+    value: String,
+    items: Vec<StoryListItemSummary>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -673,6 +687,10 @@ fn summarize_character_style_properties(
             .strike_through_gap_color
             .as_ref()
             .map(summarize_story_property),
+        open_type_features: properties
+            .open_type_features
+            .as_ref()
+            .map(summarize_story_list_property),
     }
 }
 
@@ -680,6 +698,25 @@ fn summarize_story_property(property: &StoryProperty) -> StoryPropertySummary {
     StoryPropertySummary {
         value_type: property.value_type.clone(),
         value: property.value.clone(),
+    }
+}
+
+fn summarize_story_list_property(property: &StoryListProperty) -> StoryListPropertySummary {
+    StoryListPropertySummary {
+        value_type: property.value_type.clone(),
+        items: property
+            .items
+            .iter()
+            .map(summarize_story_list_item)
+            .collect(),
+    }
+}
+
+fn summarize_story_list_item(item: &StoryListItem) -> StoryListItemSummary {
+    StoryListItemSummary {
+        value_type: item.value_type.clone(),
+        value: item.value.clone(),
+        items: item.items.iter().map(summarize_story_list_item).collect(),
     }
 }
 

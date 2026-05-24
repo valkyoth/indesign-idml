@@ -291,6 +291,8 @@ pub struct CharacterStyleProperties {
     pub underline_gap_color: Option<StoryProperty>,
     /// Strike-through gap color property, when present.
     pub strike_through_gap_color: Option<StoryProperty>,
+    /// OpenType feature list property, when present.
+    pub open_type_features: Option<StoryListProperty>,
 }
 
 /// A typed IDML property value from a style range `Properties` element.
@@ -300,6 +302,26 @@ pub struct StoryProperty {
     pub value_type: Option<String>,
     /// Property text value.
     pub value: String,
+}
+
+/// A typed IDML list property from a style range `Properties` element.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StoryListProperty {
+    /// IDML `type` attribute, when present.
+    pub value_type: Option<String>,
+    /// Ordered list items.
+    pub items: Vec<StoryListItem>,
+}
+
+/// A recursively nested IDML list item.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StoryListItem {
+    /// IDML `type` attribute, when present.
+    pub value_type: Option<String>,
+    /// Scalar value text for non-list items.
+    pub value: String,
+    /// Nested list items for list-valued items.
+    pub items: Vec<StoryListItem>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -313,11 +335,24 @@ enum StoryPropertyTarget {
     CharacterStrikeThroughGapColor(usize, usize),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StoryListPropertyTarget {
+    CharacterOpenTypeFeatures(usize, usize),
+}
+
 #[derive(Debug)]
 struct StoryPropertyCapture {
     element: &'static str,
     target: StoryPropertyTarget,
     property: StoryProperty,
+}
+
+#[derive(Debug)]
+struct StoryListPropertyCapture {
+    element: &'static str,
+    target: StoryListPropertyTarget,
+    property: StoryListProperty,
+    item_stack: Vec<StoryListItem>,
 }
 
 impl Story {
@@ -339,6 +374,7 @@ impl Story {
         let mut current_paragraph_range = None;
         let mut current_character_range = None;
         let mut current_property = None;
+        let mut current_list_property = None;
         let mut current_table = None;
         let mut current_cell = None;
         let mut saved_outer_style_range = None;
@@ -380,6 +416,10 @@ impl Story {
                         )?;
                     } else if story_depth > 0 {
                         story_depth = increment_story_depth(story_depth)?;
+                    }
+                    if let Some(capture) = &mut current_list_property {
+                        start_story_list_item(capture, &e, &reader, options.max_attribute_bytes)?;
+                        continue;
                     }
                     if story_depth > 0 && e.name().as_ref() == b"StoryPreference" {
                         preference = Some(StoryPreference::from_xml_event(
@@ -460,6 +500,16 @@ impl Story {
                         current_paragraph_range = None;
                         current_character_range = None;
                     } else if story_depth > 0 {
+                        if maybe_start_story_list_property(
+                            &mut current_list_property,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                            current_paragraph_range,
+                            current_character_range,
+                        )? {
+                            continue;
+                        }
                         maybe_start_story_property(
                             &mut current_property,
                             &e,
@@ -480,7 +530,14 @@ impl Story {
                     root.exit(e.name().as_ref())?;
                 }
                 Event::End(e) => {
-                    if property_end_matches(&current_property, e.name().as_ref()) {
+                    if handle_story_list_property_end(
+                        &mut paragraph_style_ranges,
+                        current_table,
+                        current_cell,
+                        &mut current_list_property,
+                        e.name().as_ref(),
+                    )? {
+                    } else if property_end_matches(&current_property, e.name().as_ref()) {
                         let ranges = active_paragraph_style_ranges_mut(
                             &mut paragraph_style_ranges,
                             current_table,
@@ -522,6 +579,13 @@ impl Story {
                             decoded.as_ref(),
                             options.max_text_bytes,
                         )?;
+                    } else if let Some(capture) = &mut current_list_property {
+                        let decoded = e.decode()?;
+                        push_story_list_item_value_limited(
+                            capture,
+                            decoded.as_ref(),
+                            options.max_attribute_bytes,
+                        )?;
                     } else if let Some(property) = &mut current_property {
                         let decoded = e.decode()?;
                         push_property_value_limited(
@@ -547,6 +611,13 @@ impl Story {
                             current_character_range,
                             decoded.as_ref(),
                             options.max_text_bytes,
+                        )?;
+                    } else if let Some(capture) = &mut current_list_property {
+                        let decoded = e.xml_content(XmlVersion::Implicit1_0)?;
+                        push_story_list_item_value_limited(
+                            capture,
+                            decoded.as_ref(),
+                            options.max_attribute_bytes,
                         )?;
                     } else if let Some(property) = &mut current_property {
                         let decoded = e.xml_content(XmlVersion::Implicit1_0)?;
@@ -597,6 +668,28 @@ impl Story {
                                 options.max_text_bytes,
                             )?;
                         }
+                    } else if let Some(capture) = &mut current_list_property {
+                        if let Some(ch) = e.resolve_char_ref()? {
+                            push_story_list_item_char_limited(
+                                capture,
+                                ch,
+                                options.max_attribute_bytes,
+                            )?;
+                        } else {
+                            let entity = e.decode()?;
+                            let replacement = resolve_predefined_entity(entity.as_ref())
+                                .ok_or_else(|| {
+                                    IdmlError::XmlEscape(EscapeError::UnrecognizedEntity(
+                                        0..entity.len(),
+                                        entity.to_string(),
+                                    ))
+                                })?;
+                            push_story_list_item_value_limited(
+                                capture,
+                                replacement,
+                                options.max_attribute_bytes,
+                            )?;
+                        }
                     } else if let Some(property) = &mut current_property {
                         if let Some(ch) = e.resolve_char_ref()? {
                             push_property_char_limited(
@@ -632,6 +725,15 @@ impl Story {
                             element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
                             reason: "element inside story Content",
                         });
+                    }
+                    if let Some(capture) = &mut current_list_property {
+                        insert_empty_story_list_item(
+                            capture,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?;
+                        continue;
                     }
                     if current_property.is_some() {
                         return Err(IdmlError::InvalidElement {
@@ -718,20 +820,6 @@ impl Story {
                             &reader,
                             options.max_attribute_bytes,
                         )?;
-                    } else if story_depth > 0
-                        && maybe_insert_empty_story_property(
-                            active_paragraph_style_ranges_mut(
-                                &mut paragraph_style_ranges,
-                                current_table,
-                                current_cell,
-                            )?,
-                            &e,
-                            &reader,
-                            options.max_attribute_bytes,
-                            current_paragraph_range,
-                            current_character_range,
-                        )?
-                    {
                     } else if story_depth > 0 && e.name().as_ref() == b"Br" {
                         push_limited(&mut text, "\n", options.max_text_bytes)?;
                         let ranges = active_paragraph_style_ranges_mut(
@@ -760,6 +848,33 @@ impl Story {
                             "\t",
                             options.max_text_bytes,
                         )?;
+                    } else if story_depth > 0 {
+                        let inserted_list_property = maybe_insert_empty_story_list_property(
+                            active_paragraph_style_ranges_mut(
+                                &mut paragraph_style_ranges,
+                                current_table,
+                                current_cell,
+                            )?,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                            current_paragraph_range,
+                            current_character_range,
+                        )?;
+                        if !inserted_list_property {
+                            maybe_insert_empty_story_property(
+                                active_paragraph_style_ranges_mut(
+                                    &mut paragraph_style_ranges,
+                                    current_table,
+                                    current_cell,
+                                )?,
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                                current_paragraph_range,
+                                current_character_range,
+                            )?;
+                        }
                     }
                 }
                 Event::DocType(_) => reject_xml_doctype()?,
@@ -770,6 +885,18 @@ impl Story {
 
         root.finish()?;
         xml_depth.finish()?;
+        if let Some(capture) = current_list_property {
+            return Err(IdmlError::InvalidElement {
+                element: capture.element.to_owned(),
+                reason: "unclosed story list property",
+            });
+        }
+        if let Some(capture) = current_property {
+            return Err(IdmlError::InvalidElement {
+                element: capture.element.to_owned(),
+                reason: "unclosed story property",
+            });
+        }
         if !seen_story {
             return Err(IdmlError::InvalidElement {
                 element: root_name
@@ -1106,6 +1233,33 @@ impl StoryProperty {
         Ok(Self {
             value_type: optional_attr(event, "type", reader, max_attribute_bytes)?,
             value: String::new(),
+        })
+    }
+}
+
+impl StoryListProperty {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            value_type: optional_attr(event, "type", reader, max_attribute_bytes)?,
+            items: Vec::new(),
+        })
+    }
+}
+
+impl StoryListItem {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            value_type: optional_attr(event, "type", reader, max_attribute_bytes)?,
+            value: String::new(),
+            items: Vec::new(),
         })
     }
 }
@@ -1483,6 +1637,183 @@ fn active_paragraph_style_ranges_mut(
         })
 }
 
+fn maybe_start_story_list_property(
+    current_list_property: &mut Option<StoryListPropertyCapture>,
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+    current_paragraph_range: Option<usize>,
+    current_character_range: Option<usize>,
+) -> Result<bool> {
+    let Some((element, target)) = story_list_property_target(
+        event.name().as_ref(),
+        current_paragraph_range,
+        current_character_range,
+    ) else {
+        return Ok(false);
+    };
+
+    if current_list_property.is_some() {
+        return Err(IdmlError::InvalidElement {
+            element: element.to_owned(),
+            reason: "nested story list property",
+        });
+    }
+
+    *current_list_property = Some(StoryListPropertyCapture {
+        element,
+        target,
+        property: StoryListProperty::from_xml_event(event, reader, max_attribute_bytes)?,
+        item_stack: Vec::new(),
+    });
+    Ok(true)
+}
+
+fn maybe_insert_empty_story_list_property(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+    current_paragraph_range: Option<usize>,
+    current_character_range: Option<usize>,
+) -> Result<bool> {
+    let Some((_, target)) = story_list_property_target(
+        event.name().as_ref(),
+        current_paragraph_range,
+        current_character_range,
+    ) else {
+        return Ok(false);
+    };
+
+    insert_story_list_property(
+        paragraph_style_ranges,
+        target,
+        StoryListProperty::from_xml_event(event, reader, max_attribute_bytes)?,
+    )?;
+    Ok(true)
+}
+
+fn start_story_list_item(
+    capture: &mut StoryListPropertyCapture,
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<()> {
+    if event.name().as_ref() != b"ListItem" {
+        return Err(IdmlError::InvalidElement {
+            element: String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+            reason: "unsupported element inside story list property",
+        });
+    }
+    capture.item_stack.push(StoryListItem::from_xml_event(
+        event,
+        reader,
+        max_attribute_bytes,
+    )?);
+    Ok(())
+}
+
+fn insert_empty_story_list_item(
+    capture: &mut StoryListPropertyCapture,
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<()> {
+    if event.name().as_ref() != b"ListItem" {
+        return Err(IdmlError::InvalidElement {
+            element: String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+            reason: "unsupported element inside story list property",
+        });
+    }
+    append_story_list_item(
+        capture,
+        StoryListItem::from_xml_event(event, reader, max_attribute_bytes)?,
+    );
+    Ok(())
+}
+
+fn handle_story_list_property_end(
+    paragraph_style_ranges: &mut Vec<ParagraphStyleRange>,
+    current_table: Option<(usize, usize, usize)>,
+    current_cell: Option<usize>,
+    current_list_property: &mut Option<StoryListPropertyCapture>,
+    element: &[u8],
+) -> Result<bool> {
+    let Some(capture) = current_list_property else {
+        return Ok(false);
+    };
+
+    if element == b"ListItem" {
+        let item = capture
+            .item_stack
+            .pop()
+            .ok_or_else(|| IdmlError::InvalidElement {
+                element: "ListItem".to_owned(),
+                reason: "unexpected closing ListItem element",
+            })?;
+        append_story_list_item(capture, item);
+        return Ok(true);
+    }
+
+    if capture.element.as_bytes() == element {
+        if !capture.item_stack.is_empty() {
+            return Err(IdmlError::InvalidElement {
+                element: capture.element.to_owned(),
+                reason: "unclosed ListItem element",
+            });
+        }
+        let capture = current_list_property.take().expect("checked above");
+        let ranges =
+            active_paragraph_style_ranges_mut(paragraph_style_ranges, current_table, current_cell)?;
+        insert_story_list_property(ranges, capture.target, capture.property)?;
+        return Ok(true);
+    }
+
+    Err(IdmlError::InvalidElement {
+        element: String::from_utf8_lossy(element).into_owned(),
+        reason: "unexpected closing element inside story list property",
+    })
+}
+
+fn append_story_list_item(capture: &mut StoryListPropertyCapture, item: StoryListItem) {
+    if let Some(parent) = capture.item_stack.last_mut() {
+        parent.items.push(item);
+    } else {
+        capture.property.items.push(item);
+    }
+}
+
+fn push_story_list_item_value_limited(
+    capture: &mut StoryListPropertyCapture,
+    text: &str,
+    max_property_bytes: usize,
+) -> Result<()> {
+    let Some(item) = capture.item_stack.last_mut() else {
+        if text.bytes().all(|byte| byte.is_ascii_whitespace()) {
+            return Ok(());
+        }
+        return Err(IdmlError::InvalidElement {
+            element: capture.element.to_owned(),
+            reason: "text outside ListItem element",
+        });
+    };
+    if text.bytes().all(|byte| byte.is_ascii_whitespace())
+        && item.value_type.as_deref() == Some("list")
+    {
+        return Ok(());
+    }
+    push_property_value_limited(&mut item.value, text, max_property_bytes)
+}
+
+fn push_story_list_item_char_limited(
+    capture: &mut StoryListPropertyCapture,
+    ch: char,
+    max_property_bytes: usize,
+) -> Result<()> {
+    let mut buffer = [0u8; 4];
+    push_story_list_item_value_limited(capture, ch.encode_utf8(&mut buffer), max_property_bytes)
+}
+
 fn maybe_start_story_property(
     current_property: &mut Option<StoryPropertyCapture>,
     event: &BytesStart<'_>,
@@ -1606,6 +1937,26 @@ fn story_property_target(
     }
 }
 
+fn story_list_property_target(
+    element: &[u8],
+    current_paragraph_range: Option<usize>,
+    current_character_range: Option<usize>,
+) -> Option<(&'static str, StoryListPropertyTarget)> {
+    match element {
+        b"OpenTypeFeatures" => {
+            current_paragraph_range
+                .zip(current_character_range)
+                .map(|(paragraph, character)| {
+                    (
+                        "OpenTypeFeatures",
+                        StoryListPropertyTarget::CharacterOpenTypeFeatures(paragraph, character),
+                    )
+                })
+        }
+        _ => None,
+    }
+}
+
 fn property_end_matches(current_property: &Option<StoryPropertyCapture>, element: &[u8]) -> bool {
     current_property
         .as_ref()
@@ -1688,6 +2039,25 @@ fn insert_story_property(
     }
 }
 
+fn insert_story_list_property(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    target: StoryListPropertyTarget,
+    property: StoryListProperty,
+) -> Result<()> {
+    match target {
+        StoryListPropertyTarget::CharacterOpenTypeFeatures(paragraph, character) => {
+            set_character_list_property(
+                paragraph_style_ranges,
+                paragraph,
+                character,
+                "OpenTypeFeatures",
+                |properties| &mut properties.open_type_features,
+                property,
+            )
+        }
+    }
+}
+
 fn set_paragraph_property(
     paragraph_style_ranges: &mut [ParagraphStyleRange],
     paragraph: usize,
@@ -1718,6 +2088,23 @@ fn set_character_property(
     set_story_property_slot(selector(&mut character.properties), element, property)
 }
 
+fn set_character_list_property(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    paragraph: usize,
+    character: usize,
+    element: &'static str,
+    selector: impl FnOnce(&mut CharacterStyleProperties) -> &mut Option<StoryListProperty>,
+    property: StoryListProperty,
+) -> Result<()> {
+    let Some(character) = paragraph_style_ranges
+        .get_mut(paragraph)
+        .and_then(|paragraph| paragraph.character_style_ranges.get_mut(character))
+    else {
+        return Err(inconsistent_property_state(element));
+    };
+    set_story_list_property_slot(selector(&mut character.properties), element, property)
+}
+
 fn set_story_property_slot(
     slot: &mut Option<StoryProperty>,
     element: &'static str,
@@ -1727,6 +2114,21 @@ fn set_story_property_slot(
         return Err(IdmlError::InvalidElement {
             element: element.to_owned(),
             reason: "duplicate story property",
+        });
+    }
+    *slot = Some(property);
+    Ok(())
+}
+
+fn set_story_list_property_slot(
+    slot: &mut Option<StoryListProperty>,
+    element: &'static str,
+    property: StoryListProperty,
+) -> Result<()> {
+    if slot.is_some() {
+        return Err(IdmlError::InvalidElement {
+            element: element.to_owned(),
+            reason: "duplicate story list property",
         });
     }
     *slot = Some(property);
@@ -2039,7 +2441,8 @@ fn validate_character_style_properties(properties: &CharacterStyleProperties) ->
     validate_story_property(
         "StrikeThroughGapColor",
         properties.strike_through_gap_color.as_ref(),
-    )
+    )?;
+    validate_story_list_property("OpenTypeFeatures", properties.open_type_features.as_ref())
 }
 
 fn validate_story_property(element: &'static str, property: Option<&StoryProperty>) -> Result<()> {
@@ -2049,6 +2452,30 @@ fn validate_story_property(element: &'static str, property: Option<&StoryPropert
     validate_optional_story_attr(element, "type", property.value_type.as_deref())?;
     enforce_story_attribute_bytes(property.value.len(), DEFAULT_MAX_STORY_ATTRIBUTE_BYTES)?;
     validate_xml_text("story property value", &property.value)
+}
+
+fn validate_story_list_property(
+    element: &'static str,
+    property: Option<&StoryListProperty>,
+) -> Result<()> {
+    let Some(property) = property else {
+        return Ok(());
+    };
+    validate_optional_story_attr(element, "type", property.value_type.as_deref())?;
+    for item in &property.items {
+        validate_story_list_item(item)?;
+    }
+    Ok(())
+}
+
+fn validate_story_list_item(item: &StoryListItem) -> Result<()> {
+    validate_optional_story_attr("ListItem", "type", item.value_type.as_deref())?;
+    enforce_story_attribute_bytes(item.value.len(), DEFAULT_MAX_STORY_ATTRIBUTE_BYTES)?;
+    validate_xml_text("story list item value", &item.value)?;
+    for child in &item.items {
+        validate_story_list_item(child)?;
+    }
+    Ok(())
 }
 
 fn validate_story_tables(tables: &[StoryTable], range_text: &mut String) -> Result<()> {
@@ -2576,6 +3003,12 @@ fn serialize_character_style_properties(
         properties.strike_through_gap_color.as_ref(),
         8,
     )?;
+    serialize_story_list_property(
+        xml,
+        "OpenTypeFeatures",
+        properties.open_type_features.as_ref(),
+        8,
+    )?;
     xml.push_str("      </Properties>\n      ");
     Ok(())
 }
@@ -2603,6 +3036,75 @@ fn serialize_story_property(
     xml.push_str("</");
     xml.push_str(element);
     xml.push_str(">\n");
+    Ok(())
+}
+
+fn serialize_story_list_property(
+    xml: &mut String,
+    element: &'static str,
+    property: Option<&StoryListProperty>,
+    indent: usize,
+) -> Result<()> {
+    let Some(property) = property else {
+        return Ok(());
+    };
+
+    for _ in 0..indent {
+        xml.push(' ');
+    }
+    xml.push('<');
+    xml.push_str(element);
+    if let Some(value_type) = &property.value_type {
+        push_attr(xml, element, "type", value_type)?;
+    }
+    if property.items.is_empty() {
+        xml.push_str(" />\n");
+        return Ok(());
+    }
+
+    xml.push_str(">\n");
+    for item in &property.items {
+        serialize_story_list_item(xml, item, indent + 2)?;
+    }
+    for _ in 0..indent {
+        xml.push(' ');
+    }
+    xml.push_str("</");
+    xml.push_str(element);
+    xml.push_str(">\n");
+    Ok(())
+}
+
+fn serialize_story_list_item(xml: &mut String, item: &StoryListItem, indent: usize) -> Result<()> {
+    for _ in 0..indent {
+        xml.push(' ');
+    }
+    xml.push_str("<ListItem");
+    if let Some(value_type) = &item.value_type {
+        push_attr(xml, "ListItem", "type", value_type)?;
+    }
+    if item.items.is_empty() && item.value.is_empty() {
+        xml.push_str(" />\n");
+        return Ok(());
+    }
+
+    xml.push('>');
+    if !item.value.is_empty() {
+        xml.push_str(partial_escape(item.value.as_str()).as_ref());
+    }
+    if item.items.is_empty() {
+        xml.push_str("</ListItem>\n");
+        return Ok(());
+    }
+
+    xml.push('\n');
+    for child in &item.items {
+        serialize_story_list_item(xml, child, indent + 2)?;
+    }
+    for _ in 0..indent {
+        xml.push(' ');
+    }
+    xml.push_str("</ListItem>\n");
     Ok(())
 }
 
@@ -2687,8 +3189,8 @@ fn push_attr(
 mod tests {
     use super::{
         CharacterStyleProperties, CharacterStyleRange, InCopyExportOption,
-        ParagraphStyleProperties, ParagraphStyleRange, Story, StoryMetadata, StoryParseOptions,
-        StoryPreference, StoryProperty,
+        ParagraphStyleProperties, ParagraphStyleRange, Story, StoryListItem, StoryListProperty,
+        StoryMetadata, StoryParseOptions, StoryPreference, StoryProperty,
     };
     use crate::IdmlError;
 
@@ -3242,6 +3744,25 @@ mod tests {
                             value: "Color/Black".to_owned(),
                         }),
                         strike_through_gap_color: None,
+                        open_type_features: Some(StoryListProperty {
+                            value_type: Some("list".to_owned()),
+                            items: vec![StoryListItem {
+                                value_type: Some("list".to_owned()),
+                                value: String::new(),
+                                items: vec![
+                                    StoryListItem {
+                                        value_type: Some("string".to_owned()),
+                                        value: "$ID/salt".to_owned(),
+                                        items: Vec::new(),
+                                    },
+                                    StoryListItem {
+                                        value_type: Some("long".to_owned()),
+                                        value: "1".to_owned(),
+                                        items: Vec::new(),
+                                    },
+                                ],
+                            }],
+                        }),
                     },
                     text: "Styled".to_owned(),
                     ..CharacterStyleRange::default()
@@ -3259,6 +3780,8 @@ mod tests {
         assert!(xml.contains("<SameParaStyleSpacing type=\"unit\">3.5</SameParaStyleSpacing>"));
         assert!(xml.contains("<RuleAboveGapColor type=\"string\">Color/None</RuleAboveGapColor>"));
         assert!(xml.contains("<UnderlineGapColor type=\"string\">Color/Black</UnderlineGapColor>"));
+        assert!(xml.contains("<OpenTypeFeatures type=\"list\">"));
+        assert!(xml.contains("<ListItem type=\"string\">$ID/salt</ListItem>"));
         assert_eq!(parsed, story);
     }
 
