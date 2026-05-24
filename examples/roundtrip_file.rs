@@ -105,6 +105,11 @@ enum PageItemSummary {
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
     },
+    GraphicLine {
+        id: Option<String>,
+        layer_id: Option<String>,
+        bounds: Option<[u64; 4]>,
+    },
     Group {
         id: Option<String>,
         layer_id: Option<String>,
@@ -215,6 +220,11 @@ fn summarize_page_items(page_items: &[PageItem]) -> Vec<PageItemSummary> {
                 id: oval.id.clone(),
                 layer_id: oval.layer_id.clone(),
                 bounds: oval.geometric_bounds.map(rect_bits),
+            }),
+            PageItem::GraphicLine(line) => Some(PageItemSummary::GraphicLine {
+                id: line.id.clone(),
+                layer_id: line.layer_id.clone(),
+                bounds: line.geometric_bounds.map(rect_bits),
             }),
             PageItem::Group(group) => Some(PageItemSummary::Group {
                 id: group.id.clone(),

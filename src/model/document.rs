@@ -1127,6 +1127,12 @@ fn remember_structural_page_item_ids(
             }
             Ok(())
         }
+        crate::model::spread::PageItem::GraphicLine(line) => {
+            if let Some(id) = &line.id {
+                remember_object_id(seen, id)?;
+            }
+            Ok(())
+        }
         crate::model::spread::PageItem::Group(group) => {
             if let Some(id) = &group.id {
                 remember_object_id(seen, id)?;
@@ -1159,6 +1165,11 @@ fn reserve_page_item_object_ids(
                 allocator.reserve_existing(id);
             }
         }
+        crate::model::spread::PageItem::GraphicLine(line) => {
+            if let Some(id) = &line.id {
+                allocator.reserve_existing(id);
+            }
+        }
         crate::model::spread::PageItem::Group(group) => {
             if let Some(id) = &group.id {
                 allocator.reserve_existing(id);
@@ -1175,6 +1186,7 @@ fn page_item_contains_object_id(page_item: &crate::model::spread::PageItem, id: 
         crate::model::spread::PageItem::TextFrame(frame) => frame.id.as_deref() == Some(id),
         crate::model::spread::PageItem::Rectangle(rectangle) => rectangle.id.as_deref() == Some(id),
         crate::model::spread::PageItem::Oval(oval) => oval.id.as_deref() == Some(id),
+        crate::model::spread::PageItem::GraphicLine(line) => line.id.as_deref() == Some(id),
         crate::model::spread::PageItem::Group(group) => {
             group.id.as_deref() == Some(id)
                 || group
@@ -1284,6 +1296,9 @@ fn validate_page_item_layer_id(
         crate::model::spread::PageItem::Oval(oval) => {
             validate_layer_id(oval.layer_id.as_deref(), layer_ids)
         }
+        crate::model::spread::PageItem::GraphicLine(line) => {
+            validate_layer_id(line.layer_id.as_deref(), layer_ids)
+        }
         crate::model::spread::PageItem::Group(group) => {
             validate_layer_id(group.layer_id.as_deref(), layer_ids)?;
             for child in &group.page_items {
@@ -1363,7 +1378,8 @@ mod tests {
     };
     use crate::model::resources::ResourceIntegrityOptions;
     use crate::model::spread::{
-        Group, Oval, Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame,
+        GraphicLine, Group, Oval, Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions,
+        TextFrame,
     };
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::Cursor;
@@ -2937,6 +2953,52 @@ mod tests {
             panic!("expected oval page item");
         };
         oval.layer_id = Some("missing".to_owned());
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingReference {
+                kind: "page item layer",
+                id,
+            } if id == "missing"
+        ));
+    }
+
+    #[test]
+    fn validates_nested_graphic_line_layer_references() {
+        let mut document = make_document();
+        document.design_map.layers.push(Layer {
+            id: Some("layer1".to_owned()),
+            name: Some("Text".to_owned()),
+            visible: Some(true),
+            locked: Some(false),
+        });
+        let spread = document.spreads.get_mut("u10").unwrap();
+        spread
+            .page_items
+            .push(PageItem::TextFrame(spread.text_frames[0].clone()));
+        spread.page_items.push(PageItem::Group(Group {
+            id: Some("group1".to_owned()),
+            layer_id: Some("layer1".to_owned()),
+            geometric_bounds: None,
+            page_items: vec![PageItem::GraphicLine(GraphicLine {
+                id: Some("line1".to_owned()),
+                layer_id: Some("layer1".to_owned()),
+                geometric_bounds: None,
+            })],
+        }));
+
+        document.validate().unwrap();
+
+        let spread = document.spreads.get_mut("u10").unwrap();
+        let PageItem::Group(group) = spread.page_items.last_mut().unwrap() else {
+            panic!("expected group page item");
+        };
+        let PageItem::GraphicLine(line) = group.page_items.first_mut().unwrap() else {
+            panic!("expected graphic line page item");
+        };
+        line.layer_id = Some("missing".to_owned());
 
         let err = document.validate().unwrap_err();
 
