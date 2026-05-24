@@ -114,7 +114,67 @@ struct CharacterStyleRangeSummary {
     horizontal_scale: Option<String>,
     vertical_scale: Option<String>,
     properties: CharacterStylePropertiesSummary,
+    tables: Vec<StoryTableSummary>,
     text: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StoryTableSummary {
+    id: Option<String>,
+    header_row_count: Option<String>,
+    footer_row_count: Option<String>,
+    body_row_count: Option<String>,
+    column_count: Option<String>,
+    applied_table_style: Option<String>,
+    table_direction: Option<String>,
+    text_frame: TableTextInsetsSummary,
+    rows: Vec<StoryTableRowSummary>,
+    columns: Vec<StoryTableColumnSummary>,
+    cells: Vec<StoryTableCellSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct TableTextInsetsSummary {
+    text_top_inset: Option<String>,
+    text_left_inset: Option<String>,
+    text_bottom_inset: Option<String>,
+    text_right_inset: Option<String>,
+    clip_content_to_text_cell: Option<bool>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StoryTableRowSummary {
+    id: Option<String>,
+    name: Option<String>,
+    text_frame: TableTextInsetsSummary,
+    single_row_height: Option<String>,
+    minimum_height: Option<String>,
+    auto_grow: Option<bool>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StoryTableColumnSummary {
+    id: Option<String>,
+    name: Option<String>,
+    text_frame: TableTextInsetsSummary,
+    single_column_width: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StoryTableCellSummary {
+    id: Option<String>,
+    name: Option<String>,
+    row_span: Option<String>,
+    column_span: Option<String>,
+    cell_type: Option<String>,
+    applied_cell_style: Option<String>,
+    applied_cell_style_priority: Option<String>,
+    text_frame: TableTextInsetsSummary,
+    left_inset: Option<String>,
+    top_inset: Option<String>,
+    right_inset: Option<String>,
+    bottom_inset: Option<String>,
+    fill_color: Option<String>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -498,11 +558,79 @@ fn summarize_paragraph_style_ranges(
                     horizontal_scale: character.horizontal_scale.clone(),
                     vertical_scale: character.vertical_scale.clone(),
                     properties: summarize_character_style_properties(&character.properties),
+                    tables: summarize_story_tables(&character.tables),
                     text: character.text.clone(),
                 })
                 .collect(),
         })
         .collect()
+}
+
+fn summarize_story_tables(tables: &[StoryTable]) -> Vec<StoryTableSummary> {
+    tables
+        .iter()
+        .map(|table| StoryTableSummary {
+            id: table.id.clone(),
+            header_row_count: table.header_row_count.clone(),
+            footer_row_count: table.footer_row_count.clone(),
+            body_row_count: table.body_row_count.clone(),
+            column_count: table.column_count.clone(),
+            applied_table_style: table.applied_table_style.clone(),
+            table_direction: table.table_direction.clone(),
+            text_frame: summarize_table_text_insets(&table.text_frame),
+            rows: table
+                .rows
+                .iter()
+                .map(|row| StoryTableRowSummary {
+                    id: row.id.clone(),
+                    name: row.name.clone(),
+                    text_frame: summarize_table_text_insets(&row.text_frame),
+                    single_row_height: row.single_row_height.clone(),
+                    minimum_height: row.minimum_height.clone(),
+                    auto_grow: row.auto_grow,
+                })
+                .collect(),
+            columns: table
+                .columns
+                .iter()
+                .map(|column| StoryTableColumnSummary {
+                    id: column.id.clone(),
+                    name: column.name.clone(),
+                    text_frame: summarize_table_text_insets(&column.text_frame),
+                    single_column_width: column.single_column_width.clone(),
+                })
+                .collect(),
+            cells: table
+                .cells
+                .iter()
+                .map(|cell| StoryTableCellSummary {
+                    id: cell.id.clone(),
+                    name: cell.name.clone(),
+                    row_span: cell.row_span.clone(),
+                    column_span: cell.column_span.clone(),
+                    cell_type: cell.cell_type.clone(),
+                    applied_cell_style: cell.applied_cell_style.clone(),
+                    applied_cell_style_priority: cell.applied_cell_style_priority.clone(),
+                    text_frame: summarize_table_text_insets(&cell.text_frame),
+                    left_inset: cell.left_inset.clone(),
+                    top_inset: cell.top_inset.clone(),
+                    right_inset: cell.right_inset.clone(),
+                    bottom_inset: cell.bottom_inset.clone(),
+                    fill_color: cell.fill_color.clone(),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn summarize_table_text_insets(insets: &TableTextInsets) -> TableTextInsetsSummary {
+    TableTextInsetsSummary {
+        text_top_inset: insets.text_top_inset.clone(),
+        text_left_inset: insets.text_left_inset.clone(),
+        text_bottom_inset: insets.text_bottom_inset.clone(),
+        text_right_inset: insets.text_right_inset.clone(),
+        clip_content_to_text_cell: insets.clip_content_to_text_cell,
+    }
 }
 
 fn summarize_paragraph_style_properties(

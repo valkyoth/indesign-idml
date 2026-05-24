@@ -169,8 +169,113 @@ pub struct CharacterStyleRange {
     pub vertical_scale: Option<String>,
     /// Character style properties, when present.
     pub properties: CharacterStyleProperties,
+    /// Table metadata directly anchored in this character range.
+    pub tables: Vec<StoryTable>,
     /// Visible text carried by this character range.
     pub text: String,
+}
+
+/// Metadata skeleton for a story table.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StoryTable {
+    /// Table `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Header row count, preserved as an IDML string.
+    pub header_row_count: Option<String>,
+    /// Footer row count, preserved as an IDML string.
+    pub footer_row_count: Option<String>,
+    /// Body row count, preserved as an IDML string.
+    pub body_row_count: Option<String>,
+    /// Column count, preserved as an IDML string.
+    pub column_count: Option<String>,
+    /// Applied table style reference, when present.
+    pub applied_table_style: Option<String>,
+    /// Table direction, when present.
+    pub table_direction: Option<String>,
+    /// Table text insets and clipping metadata.
+    pub text_frame: TableTextInsets,
+    /// Row descriptors in table order.
+    pub rows: Vec<StoryTableRow>,
+    /// Column descriptors in table order.
+    pub columns: Vec<StoryTableColumn>,
+    /// Cell descriptors in table order.
+    pub cells: Vec<StoryTableCell>,
+}
+
+/// Shared table text inset metadata.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TableTextInsets {
+    /// Top text inset, preserved as an IDML string.
+    pub text_top_inset: Option<String>,
+    /// Left text inset, preserved as an IDML string.
+    pub text_left_inset: Option<String>,
+    /// Bottom text inset, preserved as an IDML string.
+    pub text_bottom_inset: Option<String>,
+    /// Right text inset, preserved as an IDML string.
+    pub text_right_inset: Option<String>,
+    /// Clip-content flag, when present.
+    pub clip_content_to_text_cell: Option<bool>,
+}
+
+/// Metadata skeleton for one IDML table row.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StoryTableRow {
+    /// Row `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Row name, when present.
+    pub name: Option<String>,
+    /// Row text insets and clipping metadata.
+    pub text_frame: TableTextInsets,
+    /// Row height, preserved as an IDML string.
+    pub single_row_height: Option<String>,
+    /// Minimum height, preserved as an IDML string.
+    pub minimum_height: Option<String>,
+    /// Auto-grow flag, when present.
+    pub auto_grow: Option<bool>,
+}
+
+/// Metadata skeleton for one IDML table column.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StoryTableColumn {
+    /// Column `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Column name, when present.
+    pub name: Option<String>,
+    /// Column text insets and clipping metadata.
+    pub text_frame: TableTextInsets,
+    /// Column width, preserved as an IDML string.
+    pub single_column_width: Option<String>,
+}
+
+/// Metadata skeleton for one IDML table cell.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StoryTableCell {
+    /// Cell `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Cell name, when present.
+    pub name: Option<String>,
+    /// Row span, preserved as an IDML string.
+    pub row_span: Option<String>,
+    /// Column span, preserved as an IDML string.
+    pub column_span: Option<String>,
+    /// Cell type, when present.
+    pub cell_type: Option<String>,
+    /// Applied cell style reference, when present.
+    pub applied_cell_style: Option<String>,
+    /// Applied cell style priority, preserved as an IDML string.
+    pub applied_cell_style_priority: Option<String>,
+    /// Cell text insets and clipping metadata.
+    pub text_frame: TableTextInsets,
+    /// Left cell inset, preserved as an IDML string.
+    pub left_inset: Option<String>,
+    /// Top cell inset, preserved as an IDML string.
+    pub top_inset: Option<String>,
+    /// Right cell inset, preserved as an IDML string.
+    pub right_inset: Option<String>,
+    /// Bottom cell inset, preserved as an IDML string.
+    pub bottom_inset: Option<String>,
+    /// Fill color reference, when present.
+    pub fill_color: Option<String>,
 }
 
 /// Typed child properties from a character style range.
@@ -232,6 +337,7 @@ impl Story {
         let mut current_paragraph_range = None;
         let mut current_character_range = None;
         let mut current_property = None;
+        let mut current_table = None;
         let mut metadata = StoryMetadata::default();
         let mut preference = None;
         let mut incopy_export_option = None;
@@ -304,6 +410,39 @@ impl Story {
                                 options.max_attribute_bytes,
                             )?);
                         current_character_range = Some(paragraph.character_style_ranges.len() - 1);
+                    } else if story_depth > 0 && e.name().as_ref() == b"Table" {
+                        current_table = Some(start_story_table(
+                            &mut paragraph_style_ranges,
+                            current_paragraph_range,
+                            current_character_range,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?);
+                    } else if story_depth > 0 && e.name().as_ref() == b"Row" {
+                        push_story_table_row(
+                            &mut paragraph_style_ranges,
+                            current_table,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?;
+                    } else if story_depth > 0 && e.name().as_ref() == b"Column" {
+                        push_story_table_column(
+                            &mut paragraph_style_ranges,
+                            current_table,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?;
+                    } else if story_depth > 0 && e.name().as_ref() == b"Cell" {
+                        push_story_table_cell(
+                            &mut paragraph_style_ranges,
+                            current_table,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?;
                     } else if story_depth > 0 {
                         maybe_start_story_property(
                             &mut current_property,
@@ -327,6 +466,8 @@ impl Story {
                 Event::End(e) => {
                     if property_end_matches(&current_property, e.name().as_ref()) {
                         finish_story_property(&mut paragraph_style_ranges, &mut current_property)?;
+                    } else if e.name().as_ref() == b"Table" {
+                        current_table = None;
                     } else if e.name().as_ref() == b"CharacterStyleRange" {
                         current_character_range = None;
                     } else if e.name().as_ref() == b"ParagraphStyleRange" {
@@ -489,6 +630,39 @@ impl Story {
                                 &reader,
                                 options.max_attribute_bytes,
                             )?);
+                    } else if story_depth > 0 && e.name().as_ref() == b"Table" {
+                        start_story_table(
+                            &mut paragraph_style_ranges,
+                            current_paragraph_range,
+                            current_character_range,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?;
+                    } else if story_depth > 0 && e.name().as_ref() == b"Row" {
+                        push_story_table_row(
+                            &mut paragraph_style_ranges,
+                            current_table,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?;
+                    } else if story_depth > 0 && e.name().as_ref() == b"Column" {
+                        push_story_table_column(
+                            &mut paragraph_style_ranges,
+                            current_table,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?;
+                    } else if story_depth > 0 && e.name().as_ref() == b"Cell" {
+                        push_story_table_cell(
+                            &mut paragraph_style_ranges,
+                            current_table,
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?;
                     } else if story_depth > 0
                         && maybe_insert_empty_story_property(
                             &mut paragraph_style_ranges,
@@ -718,7 +892,137 @@ impl CharacterStyleRange {
             horizontal_scale: optional_attr(event, "HorizontalScale", reader, max_attribute_bytes)?,
             vertical_scale: optional_attr(event, "VerticalScale", reader, max_attribute_bytes)?,
             properties: CharacterStyleProperties::default(),
+            tables: Vec::new(),
             text: String::new(),
+        })
+    }
+}
+
+impl StoryTable {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            id: optional_attr(event, "Self", reader, max_attribute_bytes)?,
+            header_row_count: optional_attr(event, "HeaderRowCount", reader, max_attribute_bytes)?,
+            footer_row_count: optional_attr(event, "FooterRowCount", reader, max_attribute_bytes)?,
+            body_row_count: optional_attr(event, "BodyRowCount", reader, max_attribute_bytes)?,
+            column_count: optional_attr(event, "ColumnCount", reader, max_attribute_bytes)?,
+            applied_table_style: optional_attr(
+                event,
+                "AppliedTableStyle",
+                reader,
+                max_attribute_bytes,
+            )?,
+            table_direction: optional_attr(event, "TableDirection", reader, max_attribute_bytes)?,
+            text_frame: TableTextInsets::from_xml_event(event, reader, max_attribute_bytes)?,
+            rows: Vec::new(),
+            columns: Vec::new(),
+            cells: Vec::new(),
+        })
+    }
+}
+
+impl TableTextInsets {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            text_top_inset: optional_attr(event, "TextTopInset", reader, max_attribute_bytes)?,
+            text_left_inset: optional_attr(event, "TextLeftInset", reader, max_attribute_bytes)?,
+            text_bottom_inset: optional_attr(
+                event,
+                "TextBottomInset",
+                reader,
+                max_attribute_bytes,
+            )?,
+            text_right_inset: optional_attr(event, "TextRightInset", reader, max_attribute_bytes)?,
+            clip_content_to_text_cell: optional_bool_attr(
+                event,
+                "ClipContentToTextCell",
+                reader,
+                max_attribute_bytes,
+            )?,
+        })
+    }
+}
+
+impl StoryTableRow {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            id: optional_attr(event, "Self", reader, max_attribute_bytes)?,
+            name: optional_attr(event, "Name", reader, max_attribute_bytes)?,
+            text_frame: TableTextInsets::from_xml_event(event, reader, max_attribute_bytes)?,
+            single_row_height: optional_attr(
+                event,
+                "SingleRowHeight",
+                reader,
+                max_attribute_bytes,
+            )?,
+            minimum_height: optional_attr(event, "MinimumHeight", reader, max_attribute_bytes)?,
+            auto_grow: optional_bool_attr(event, "AutoGrow", reader, max_attribute_bytes)?,
+        })
+    }
+}
+
+impl StoryTableColumn {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            id: optional_attr(event, "Self", reader, max_attribute_bytes)?,
+            name: optional_attr(event, "Name", reader, max_attribute_bytes)?,
+            text_frame: TableTextInsets::from_xml_event(event, reader, max_attribute_bytes)?,
+            single_column_width: optional_attr(
+                event,
+                "SingleColumnWidth",
+                reader,
+                max_attribute_bytes,
+            )?,
+        })
+    }
+}
+
+impl StoryTableCell {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            id: optional_attr(event, "Self", reader, max_attribute_bytes)?,
+            name: optional_attr(event, "Name", reader, max_attribute_bytes)?,
+            row_span: optional_attr(event, "RowSpan", reader, max_attribute_bytes)?,
+            column_span: optional_attr(event, "ColumnSpan", reader, max_attribute_bytes)?,
+            cell_type: optional_attr(event, "CellType", reader, max_attribute_bytes)?,
+            applied_cell_style: optional_attr(
+                event,
+                "AppliedCellStyle",
+                reader,
+                max_attribute_bytes,
+            )?,
+            applied_cell_style_priority: optional_attr(
+                event,
+                "AppliedCellStylePriority",
+                reader,
+                max_attribute_bytes,
+            )?,
+            text_frame: TableTextInsets::from_xml_event(event, reader, max_attribute_bytes)?,
+            left_inset: optional_attr(event, "LeftInset", reader, max_attribute_bytes)?,
+            top_inset: optional_attr(event, "TopInset", reader, max_attribute_bytes)?,
+            right_inset: optional_attr(event, "RightInset", reader, max_attribute_bytes)?,
+            bottom_inset: optional_attr(event, "BottomInset", reader, max_attribute_bytes)?,
+            fill_color: optional_attr(event, "FillColor", reader, max_attribute_bytes)?,
         })
     }
 }
@@ -981,6 +1285,114 @@ fn push_range_char_limited(
         ch.encode_utf8(&mut buffer),
         max_text_bytes,
     )
+}
+
+fn start_story_table(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    current_paragraph_range: Option<usize>,
+    current_character_range: Option<usize>,
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<(usize, usize, usize)> {
+    let Some(paragraph_index) = current_paragraph_range else {
+        return Err(IdmlError::InvalidElement {
+            element: "Table".to_owned(),
+            reason: "table outside paragraph style range",
+        });
+    };
+    let Some(character_index) = current_character_range else {
+        return Err(IdmlError::InvalidElement {
+            element: "Table".to_owned(),
+            reason: "table outside character style range",
+        });
+    };
+    let Some(character) = paragraph_style_ranges
+        .get_mut(paragraph_index)
+        .and_then(|paragraph| paragraph.character_style_ranges.get_mut(character_index))
+    else {
+        return Err(IdmlError::InvalidElement {
+            element: "Table".to_owned(),
+            reason: "table parser state is inconsistent",
+        });
+    };
+
+    character.tables.push(StoryTable::from_xml_event(
+        event,
+        reader,
+        max_attribute_bytes,
+    )?);
+    let table_index = character.tables.len() - 1;
+    Ok((paragraph_index, character_index, table_index))
+}
+
+fn push_story_table_row(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    current_table: Option<(usize, usize, usize)>,
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<()> {
+    let table = current_story_table_mut(paragraph_style_ranges, current_table, "Row")?;
+    table.rows.push(StoryTableRow::from_xml_event(
+        event,
+        reader,
+        max_attribute_bytes,
+    )?);
+    Ok(())
+}
+
+fn push_story_table_column(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    current_table: Option<(usize, usize, usize)>,
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<()> {
+    let table = current_story_table_mut(paragraph_style_ranges, current_table, "Column")?;
+    table.columns.push(StoryTableColumn::from_xml_event(
+        event,
+        reader,
+        max_attribute_bytes,
+    )?);
+    Ok(())
+}
+
+fn push_story_table_cell(
+    paragraph_style_ranges: &mut [ParagraphStyleRange],
+    current_table: Option<(usize, usize, usize)>,
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<()> {
+    let table = current_story_table_mut(paragraph_style_ranges, current_table, "Cell")?;
+    table.cells.push(StoryTableCell::from_xml_event(
+        event,
+        reader,
+        max_attribute_bytes,
+    )?);
+    Ok(())
+}
+
+fn current_story_table_mut<'a>(
+    paragraph_style_ranges: &'a mut [ParagraphStyleRange],
+    current_table: Option<(usize, usize, usize)>,
+    element: &'static str,
+) -> Result<&'a mut StoryTable> {
+    let Some((paragraph_index, character_index, table_index)) = current_table else {
+        return Err(IdmlError::InvalidElement {
+            element: element.to_owned(),
+            reason: "table child outside table",
+        });
+    };
+    paragraph_style_ranges
+        .get_mut(paragraph_index)
+        .and_then(|paragraph| paragraph.character_style_ranges.get_mut(character_index))
+        .and_then(|character| character.tables.get_mut(table_index))
+        .ok_or_else(|| IdmlError::InvalidElement {
+            element: element.to_owned(),
+            reason: "table parser state is inconsistent",
+        })
 }
 
 fn maybe_start_story_property(
@@ -1275,6 +1687,7 @@ fn normalize_default_style_ranges(ranges: &mut Vec<ParagraphStyleRange>, text: &
         && character.horizontal_scale.is_none()
         && character.vertical_scale.is_none()
         && character.properties == CharacterStyleProperties::default()
+        && character.tables.is_empty()
         && character.text == text
     {
         ranges.clear();
@@ -1493,6 +1906,7 @@ fn validate_story_style_ranges(story: &Story) -> Result<()> {
                 character.vertical_scale.as_deref(),
             )?;
             validate_character_style_properties(&character.properties)?;
+            validate_story_tables(&character.tables)?;
             validate_xml_text("story style range text", &character.text)?;
             push_limited(
                 &mut range_text,
@@ -1543,6 +1957,84 @@ fn validate_story_property(element: &'static str, property: Option<&StoryPropert
     validate_optional_story_attr(element, "type", property.value_type.as_deref())?;
     enforce_story_attribute_bytes(property.value.len(), DEFAULT_MAX_STORY_ATTRIBUTE_BYTES)?;
     validate_xml_text("story property value", &property.value)
+}
+
+fn validate_story_tables(tables: &[StoryTable]) -> Result<()> {
+    for table in tables {
+        validate_optional_story_attr("Table", "Self", table.id.as_deref())?;
+        validate_optional_story_attr("Table", "HeaderRowCount", table.header_row_count.as_deref())?;
+        validate_optional_story_attr("Table", "FooterRowCount", table.footer_row_count.as_deref())?;
+        validate_optional_story_attr("Table", "BodyRowCount", table.body_row_count.as_deref())?;
+        validate_optional_story_attr("Table", "ColumnCount", table.column_count.as_deref())?;
+        validate_optional_story_attr(
+            "Table",
+            "AppliedTableStyle",
+            table.applied_table_style.as_deref(),
+        )?;
+        validate_optional_story_attr("Table", "TableDirection", table.table_direction.as_deref())?;
+        validate_table_text_insets("Table", &table.text_frame)?;
+
+        for row in &table.rows {
+            validate_optional_story_attr("Row", "Self", row.id.as_deref())?;
+            validate_optional_story_attr("Row", "Name", row.name.as_deref())?;
+            validate_table_text_insets("Row", &row.text_frame)?;
+            validate_optional_story_attr(
+                "Row",
+                "SingleRowHeight",
+                row.single_row_height.as_deref(),
+            )?;
+            validate_optional_story_attr("Row", "MinimumHeight", row.minimum_height.as_deref())?;
+        }
+        for column in &table.columns {
+            validate_optional_story_attr("Column", "Self", column.id.as_deref())?;
+            validate_optional_story_attr("Column", "Name", column.name.as_deref())?;
+            validate_table_text_insets("Column", &column.text_frame)?;
+            validate_optional_story_attr(
+                "Column",
+                "SingleColumnWidth",
+                column.single_column_width.as_deref(),
+            )?;
+        }
+        for cell in &table.cells {
+            validate_optional_story_attr("Cell", "Self", cell.id.as_deref())?;
+            validate_optional_story_attr("Cell", "Name", cell.name.as_deref())?;
+            validate_optional_story_attr("Cell", "RowSpan", cell.row_span.as_deref())?;
+            validate_optional_story_attr("Cell", "ColumnSpan", cell.column_span.as_deref())?;
+            validate_optional_story_attr("Cell", "CellType", cell.cell_type.as_deref())?;
+            validate_optional_story_attr(
+                "Cell",
+                "AppliedCellStyle",
+                cell.applied_cell_style.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "Cell",
+                "AppliedCellStylePriority",
+                cell.applied_cell_style_priority.as_deref(),
+            )?;
+            validate_table_text_insets("Cell", &cell.text_frame)?;
+            validate_optional_story_attr("Cell", "LeftInset", cell.left_inset.as_deref())?;
+            validate_optional_story_attr("Cell", "TopInset", cell.top_inset.as_deref())?;
+            validate_optional_story_attr("Cell", "RightInset", cell.right_inset.as_deref())?;
+            validate_optional_story_attr("Cell", "BottomInset", cell.bottom_inset.as_deref())?;
+            validate_optional_story_attr("Cell", "FillColor", cell.fill_color.as_deref())?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_table_text_insets(element: &'static str, insets: &TableTextInsets) -> Result<()> {
+    validate_optional_story_attr(element, "TextTopInset", insets.text_top_inset.as_deref())?;
+    validate_optional_story_attr(element, "TextLeftInset", insets.text_left_inset.as_deref())?;
+    validate_optional_story_attr(
+        element,
+        "TextBottomInset",
+        insets.text_bottom_inset.as_deref(),
+    )?;
+    validate_optional_story_attr(
+        element,
+        "TextRightInset",
+        insets.text_right_inset.as_deref(),
+    )
 }
 
 fn validate_optional_story_attr(
@@ -1762,7 +2254,172 @@ fn serialize_character_style_range(xml: &mut String, range: &CharacterStyleRange
     xml.push('>');
     serialize_character_style_properties(xml, &range.properties)?;
     push_story_text_content(xml, &range.text);
+    serialize_story_tables(xml, &range.tables)?;
     xml.push_str("</CharacterStyleRange>\n");
+    Ok(())
+}
+
+fn serialize_story_tables(xml: &mut String, tables: &[StoryTable]) -> Result<()> {
+    for table in tables {
+        xml.push_str("\n      <Table");
+        push_story_table_attrs(xml, table)?;
+        if table.rows.is_empty() && table.columns.is_empty() && table.cells.is_empty() {
+            xml.push_str(" />\n      ");
+            continue;
+        }
+
+        xml.push_str(">\n");
+        for row in &table.rows {
+            xml.push_str("        <Row");
+            push_story_table_row_attrs(xml, row)?;
+            xml.push_str(" />\n");
+        }
+        for column in &table.columns {
+            xml.push_str("        <Column");
+            push_story_table_column_attrs(xml, column)?;
+            xml.push_str(" />\n");
+        }
+        for cell in &table.cells {
+            xml.push_str("        <Cell");
+            push_story_table_cell_attrs(xml, cell)?;
+            xml.push_str(" />\n");
+        }
+        xml.push_str("      </Table>\n      ");
+    }
+    Ok(())
+}
+
+fn push_story_table_attrs(xml: &mut String, table: &StoryTable) -> Result<()> {
+    if let Some(id) = &table.id {
+        push_attr(xml, "Table", "Self", id)?;
+    }
+    if let Some(header_row_count) = &table.header_row_count {
+        push_attr(xml, "Table", "HeaderRowCount", header_row_count)?;
+    }
+    if let Some(footer_row_count) = &table.footer_row_count {
+        push_attr(xml, "Table", "FooterRowCount", footer_row_count)?;
+    }
+    push_table_text_insets(xml, "Table", &table.text_frame)?;
+    if let Some(body_row_count) = &table.body_row_count {
+        push_attr(xml, "Table", "BodyRowCount", body_row_count)?;
+    }
+    if let Some(column_count) = &table.column_count {
+        push_attr(xml, "Table", "ColumnCount", column_count)?;
+    }
+    if let Some(applied_table_style) = &table.applied_table_style {
+        push_attr(xml, "Table", "AppliedTableStyle", applied_table_style)?;
+    }
+    if let Some(table_direction) = &table.table_direction {
+        push_attr(xml, "Table", "TableDirection", table_direction)?;
+    }
+    Ok(())
+}
+
+fn push_story_table_row_attrs(xml: &mut String, row: &StoryTableRow) -> Result<()> {
+    if let Some(id) = &row.id {
+        push_attr(xml, "Row", "Self", id)?;
+    }
+    if let Some(name) = &row.name {
+        push_attr(xml, "Row", "Name", name)?;
+    }
+    push_table_text_insets(xml, "Row", &row.text_frame)?;
+    if let Some(single_row_height) = &row.single_row_height {
+        push_attr(xml, "Row", "SingleRowHeight", single_row_height)?;
+    }
+    if let Some(minimum_height) = &row.minimum_height {
+        push_attr(xml, "Row", "MinimumHeight", minimum_height)?;
+    }
+    if let Some(auto_grow) = row.auto_grow {
+        push_attr(xml, "Row", "AutoGrow", bool_str(auto_grow))?;
+    }
+    Ok(())
+}
+
+fn push_story_table_column_attrs(xml: &mut String, column: &StoryTableColumn) -> Result<()> {
+    if let Some(id) = &column.id {
+        push_attr(xml, "Column", "Self", id)?;
+    }
+    if let Some(name) = &column.name {
+        push_attr(xml, "Column", "Name", name)?;
+    }
+    push_table_text_insets(xml, "Column", &column.text_frame)?;
+    if let Some(single_column_width) = &column.single_column_width {
+        push_attr(xml, "Column", "SingleColumnWidth", single_column_width)?;
+    }
+    Ok(())
+}
+
+fn push_story_table_cell_attrs(xml: &mut String, cell: &StoryTableCell) -> Result<()> {
+    if let Some(id) = &cell.id {
+        push_attr(xml, "Cell", "Self", id)?;
+    }
+    if let Some(name) = &cell.name {
+        push_attr(xml, "Cell", "Name", name)?;
+    }
+    if let Some(row_span) = &cell.row_span {
+        push_attr(xml, "Cell", "RowSpan", row_span)?;
+    }
+    if let Some(column_span) = &cell.column_span {
+        push_attr(xml, "Cell", "ColumnSpan", column_span)?;
+    }
+    if let Some(cell_type) = &cell.cell_type {
+        push_attr(xml, "Cell", "CellType", cell_type)?;
+    }
+    push_table_text_insets(xml, "Cell", &cell.text_frame)?;
+    if let Some(applied_cell_style) = &cell.applied_cell_style {
+        push_attr(xml, "Cell", "AppliedCellStyle", applied_cell_style)?;
+    }
+    if let Some(applied_cell_style_priority) = &cell.applied_cell_style_priority {
+        push_attr(
+            xml,
+            "Cell",
+            "AppliedCellStylePriority",
+            applied_cell_style_priority,
+        )?;
+    }
+    if let Some(left_inset) = &cell.left_inset {
+        push_attr(xml, "Cell", "LeftInset", left_inset)?;
+    }
+    if let Some(top_inset) = &cell.top_inset {
+        push_attr(xml, "Cell", "TopInset", top_inset)?;
+    }
+    if let Some(right_inset) = &cell.right_inset {
+        push_attr(xml, "Cell", "RightInset", right_inset)?;
+    }
+    if let Some(bottom_inset) = &cell.bottom_inset {
+        push_attr(xml, "Cell", "BottomInset", bottom_inset)?;
+    }
+    if let Some(fill_color) = &cell.fill_color {
+        push_attr(xml, "Cell", "FillColor", fill_color)?;
+    }
+    Ok(())
+}
+
+fn push_table_text_insets(
+    xml: &mut String,
+    element: &'static str,
+    insets: &TableTextInsets,
+) -> Result<()> {
+    if let Some(text_top_inset) = &insets.text_top_inset {
+        push_attr(xml, element, "TextTopInset", text_top_inset)?;
+    }
+    if let Some(text_left_inset) = &insets.text_left_inset {
+        push_attr(xml, element, "TextLeftInset", text_left_inset)?;
+    }
+    if let Some(text_bottom_inset) = &insets.text_bottom_inset {
+        push_attr(xml, element, "TextBottomInset", text_bottom_inset)?;
+    }
+    if let Some(text_right_inset) = &insets.text_right_inset {
+        push_attr(xml, element, "TextRightInset", text_right_inset)?;
+    }
+    if let Some(clip_content_to_text_cell) = insets.clip_content_to_text_cell {
+        push_attr(
+            xml,
+            element,
+            "ClipContentToTextCell",
+            bool_str(clip_content_to_text_cell),
+        )?;
+    }
     Ok(())
 }
 
@@ -2504,6 +3161,58 @@ mod tests {
         assert!(xml.contains("<RuleAboveGapColor type=\"string\">Color/None</RuleAboveGapColor>"));
         assert!(xml.contains("<UnderlineGapColor type=\"string\">Color/Black</UnderlineGapColor>"));
         assert_eq!(parsed, story);
+    }
+
+    #[test]
+    fn parses_and_serializes_story_table_metadata() {
+        let xml = r#"<Story Self="u1">
+  <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Table Anchor">
+    <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/$ID/[No character style]">
+      <Table Self="t1" HeaderRowCount="1" FooterRowCount="0" TextTopInset="4" TextLeftInset="5" TextBottomInset="6" TextRightInset="7" ClipContentToTextCell="false" BodyRowCount="1" ColumnCount="1" AppliedTableStyle="TableStyle/$ID/[Basic Table]" TableDirection="LeftToRightDirection">
+        <Row Self="r1" Name="0" TextTopInset="1" TextLeftInset="2" TextBottomInset="3" TextRightInset="4" ClipContentToTextCell="false" SingleRowHeight="10" MinimumHeight="8" AutoGrow="false" />
+        <Column Self="c1" Name="0" TextTopInset="1" TextLeftInset="2" TextBottomInset="3" TextRightInset="4" ClipContentToTextCell="false" SingleColumnWidth="20" />
+        <Cell Self="cell1" Name="0:0" RowSpan="1" ColumnSpan="1" CellType="TextTypeCell" TextTopInset="1" TextLeftInset="2" TextBottomInset="3" TextRightInset="4" ClipContentToTextCell="false" AppliedCellStyle="CellStyle/$ID/[None]" AppliedCellStylePriority="0" LeftInset="2" TopInset="1" RightInset="2" BottomInset="1" FillColor="Swatch/None">
+          <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Cell">
+            <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Cell">
+              <Content>Cell text</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Cell>
+      </Table>
+    </CharacterStyleRange>
+  </ParagraphStyleRange>
+</Story>"#;
+
+        let story = Story::from_xml(xml).unwrap();
+
+        assert_eq!(story.text, "Cell text");
+        assert_eq!(story.paragraph_style_ranges.len(), 2);
+        let table = &story.paragraph_style_ranges[0].character_style_ranges[0].tables[0];
+        assert_eq!(table.id.as_deref(), Some("t1"));
+        assert_eq!(table.header_row_count.as_deref(), Some("1"));
+        assert_eq!(table.body_row_count.as_deref(), Some("1"));
+        assert_eq!(table.column_count.as_deref(), Some("1"));
+        assert_eq!(
+            table.applied_table_style.as_deref(),
+            Some("TableStyle/$ID/[Basic Table]")
+        );
+        assert_eq!(table.text_frame.text_top_inset.as_deref(), Some("4"));
+        assert_eq!(table.text_frame.clip_content_to_text_cell, Some(false));
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(table.rows[0].single_row_height.as_deref(), Some("10"));
+        assert_eq!(table.rows[0].auto_grow, Some(false));
+        assert_eq!(table.columns.len(), 1);
+        assert_eq!(table.columns[0].single_column_width.as_deref(), Some("20"));
+        assert_eq!(table.cells.len(), 1);
+        assert_eq!(table.cells[0].name.as_deref(), Some("0:0"));
+        assert_eq!(table.cells[0].fill_color.as_deref(), Some("Swatch/None"));
+
+        let serialized = story.to_xml().unwrap();
+        assert!(serialized.contains("<Table Self=\"t1\""));
+        assert!(serialized.contains("<Row Self=\"r1\""));
+        assert!(serialized.contains("<Column Self=\"c1\""));
+        assert!(serialized.contains("<Cell Self=\"cell1\""));
+        assert_eq!(Story::from_xml(&serialized).unwrap(), story);
     }
 
     #[test]
