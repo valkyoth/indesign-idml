@@ -14,7 +14,8 @@ categories = ["parser-implementations", "encoding", "filesystem"]
 include = [
     "src/**",
     "examples/**",
-    "tests/**",
+    "tests/idml_text_cli.rs",
+    "tests/fixtures/README.md",
     "fuzz/**",
     "README.md",
     "SECURITY_IMPLEMENTATION_PLAN.md",

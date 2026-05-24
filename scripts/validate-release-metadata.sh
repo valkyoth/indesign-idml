@@ -44,6 +44,11 @@ package_list="$(
     cargo package --locked --allow-dirty --list
 )"
 
+if printf '%s\n' "$package_list" | grep -q '^tests/fixtures/private-idml/'; then
+    echo "published package includes private IDML fixtures" >&2
+    exit 1
+fi
+
 for required_package_file in \
     "Cargo.toml" \
     "LICENSE-APACHE" \
@@ -54,6 +59,8 @@ for required_package_file in \
     "examples/build_basic.rs" \
     "examples/edit_story.rs" \
     "examples/read_text.rs" \
+    "tests/idml_text_cli.rs" \
+    "tests/fixtures/README.md" \
     "src/lib.rs"
 do
     if ! printf '%s\n' "$package_list" | grep -qx "$required_package_file"; then
