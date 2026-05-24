@@ -423,6 +423,7 @@ struct MetadataSummary {
     gradient_stroke_hilite_angle: Option<String>,
     text_wrap_preference: Option<TextWrapPreferenceSummary>,
     frame_fitting_option: Option<FrameFittingOptionSummary>,
+    incopy_export_option: Option<PageItemInCopyExportOptionSummary>,
     object_export_option: Option<ObjectExportOptionSummary>,
 }
 
@@ -452,6 +453,12 @@ struct FrameFittingOptionSummary {
     bottom_crop: Option<String>,
     fitting_on_empty_frame: Option<String>,
     fitting_alignment: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PageItemInCopyExportOptionSummary {
+    include_graphic_proxies: Option<bool>,
+    include_all_resources: Option<bool>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1060,6 +1067,10 @@ fn summarize_metadata(metadata: &PageItemMetadata) -> MetadataSummary {
             .frame_fitting_option
             .as_ref()
             .map(summarize_frame_fitting_option),
+        incopy_export_option: metadata
+            .incopy_export_option
+            .as_ref()
+            .map(summarize_page_item_incopy_export_option),
         object_export_option: metadata
             .object_export_option
             .as_ref()
@@ -1093,6 +1104,15 @@ fn summarize_frame_fitting_option(option: &FrameFittingOption) -> FrameFittingOp
         bottom_crop: option.bottom_crop.clone(),
         fitting_on_empty_frame: option.fitting_on_empty_frame.clone(),
         fitting_alignment: option.fitting_alignment.clone(),
+    }
+}
+
+fn summarize_page_item_incopy_export_option(
+    option: &PageItemInCopyExportOption,
+) -> PageItemInCopyExportOptionSummary {
+    PageItemInCopyExportOptionSummary {
+        include_graphic_proxies: option.include_graphic_proxies,
+        include_all_resources: option.include_all_resources,
     }
 }
 
