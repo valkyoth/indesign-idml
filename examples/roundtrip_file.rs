@@ -47,6 +47,7 @@ struct SpreadSummary {
     id: String,
     pages: Vec<PageSummary>,
     text_frames: Vec<TextFrameSummary>,
+    page_items: Vec<PageItemSummary>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -61,6 +62,21 @@ struct TextFrameSummary {
     layer_id: Option<String>,
     parent_story: Option<String>,
     bounds: Option<[u64; 4]>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum PageItemSummary {
+    Rectangle {
+        id: Option<String>,
+        layer_id: Option<String>,
+        bounds: Option<[u64; 4]>,
+    },
+    Group {
+        id: Option<String>,
+        layer_id: Option<String>,
+        bounds: Option<[u64; 4]>,
+        page_items: Vec<PageItemSummary>,
+    },
 }
 
 impl Snapshot {
@@ -101,6 +117,7 @@ impl Snapshot {
                                 bounds: frame.geometric_bounds.map(rect_bits),
                             })
                             .collect(),
+                        page_items: summarize_page_items(&spread.page_items),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -113,6 +130,26 @@ impl Snapshot {
             spread_summaries,
         })
     }
+}
+
+fn summarize_page_items(page_items: &[PageItem]) -> Vec<PageItemSummary> {
+    page_items
+        .iter()
+        .filter_map(|page_item| match page_item {
+            PageItem::TextFrame(_) => None,
+            PageItem::Rectangle(rectangle) => Some(PageItemSummary::Rectangle {
+                id: rectangle.id.clone(),
+                layer_id: rectangle.layer_id.clone(),
+                bounds: rectangle.geometric_bounds.map(rect_bits),
+            }),
+            PageItem::Group(group) => Some(PageItemSummary::Group {
+                id: group.id.clone(),
+                layer_id: group.layer_id.clone(),
+                bounds: group.geometric_bounds.map(rect_bits),
+                page_items: summarize_page_items(&group.page_items),
+            }),
+        })
+        .collect()
 }
 
 fn rect_bits(rect: Rect) -> [u64; 4] {
