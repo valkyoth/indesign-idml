@@ -41,6 +41,7 @@ struct Snapshot {
     story_count: usize,
     spread_count: usize,
     preserved_entry_count: usize,
+    preserved_entries: Vec<PreservedEntrySummary>,
     story_texts: Vec<(String, String)>,
     spread_summaries: Vec<SpreadSummary>,
 }
@@ -58,6 +59,16 @@ struct PackageRefSummary {
     element: String,
     id: Option<String>,
     path: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PreservedEntrySummary {
+    element: String,
+    id: Option<String>,
+    path: String,
+    compression: String,
+    byte_len: usize,
+    byte_hash: u64,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -124,6 +135,18 @@ impl Snapshot {
                 path: reference.path.as_str().to_owned(),
             })
             .collect();
+        let mut preserved_entries = Vec::new();
+        document.try_for_each_preserved_entry(|preserved| {
+            preserved_entries.push(PreservedEntrySummary {
+                element: preserved.element.to_owned(),
+                id: preserved.id.map(str::to_owned),
+                path: preserved.path.as_str().to_owned(),
+                compression: format!("{:?}", preserved.entry.compression),
+                byte_len: preserved.entry.data.len(),
+                byte_hash: fnv1a64(&preserved.entry.data),
+            });
+            Ok::<(), IdmlError>(())
+        })?;
         let spread_summaries =
             design_map
                 .spread_ids()
@@ -166,6 +189,7 @@ impl Snapshot {
             story_count: design_map.story_srcs.len(),
             spread_count: design_map.spread_srcs.len(),
             preserved_entry_count: document.preserved_entries.len(),
+            preserved_entries,
             story_texts,
             spread_summaries,
         })
@@ -199,4 +223,13 @@ fn rect_bits(rect: Rect) -> [u64; 4] {
         rect.bottom.as_f64().to_bits(),
         rect.right.as_f64().to_bits(),
     ]
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
