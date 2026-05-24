@@ -2924,6 +2924,7 @@ mod tests {
                     Points::new(144.0),
                 )),
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             }],
             page_items: Vec::new(),

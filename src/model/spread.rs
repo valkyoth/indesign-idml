@@ -6,7 +6,7 @@ use crate::traits::{XmlLoadable, XmlSaveable};
 use crate::xml::{
     AnyRootTracker, DEFAULT_MAX_XML_DEPTH, DEFAULT_MAX_XML_INPUT_BYTES, XmlDepthTracker,
     configure_idml_reader, enforce_xml_input_bytes, reject_xml_doctype,
-    reject_xml_entity_reference, validate_xml_attribute,
+    reject_xml_entity_reference, validate_xml_attribute, validate_xml_text,
 };
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -61,6 +61,9 @@ pub const DEFAULT_MAX_PATH_POINTS_PER_SPREAD: usize = 100_000;
 
 /// Default maximum raw bytes accepted for one spread XML attribute value.
 pub const DEFAULT_MAX_SPREAD_ATTRIBUTE_BYTES: usize = 256 * 1024;
+
+/// Default maximum list items accepted in one spread property list.
+pub const DEFAULT_MAX_SPREAD_LIST_ITEMS: usize = 100_000;
 
 /// Spread parser limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -538,8 +541,101 @@ pub struct TextFrame {
     pub geometric_bounds: Option<Rect>,
     /// Common page item metadata.
     pub metadata: PageItemMetadata,
+    /// Text frame layout preferences, when present.
+    pub preference: Option<TextFramePreference>,
     /// Vector path geometry in local point coordinates, when present.
     pub path_geometry: Option<PathGeometry>,
+}
+
+/// Text frame layout preference metadata.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TextFramePreference {
+    /// Number of text columns, preserved as an IDML string.
+    pub text_column_count: Option<String>,
+    /// Column gutter, preserved as an IDML string.
+    pub text_column_gutter: Option<String>,
+    /// Fixed column width, preserved as an IDML string.
+    pub text_column_fixed_width: Option<String>,
+    /// Maximum column width, preserved as an IDML string.
+    pub text_column_max_width: Option<String>,
+    /// Use fixed column width flag, when present.
+    pub use_fixed_column_width: Option<bool>,
+    /// First baseline offset mode, when present.
+    pub first_baseline_offset: Option<String>,
+    /// Minimum first baseline offset, preserved as an IDML string.
+    pub minimum_first_baseline_offset: Option<String>,
+    /// Vertical justification mode, when present.
+    pub vertical_justification: Option<String>,
+    /// Vertical threshold, preserved as an IDML string.
+    pub vertical_threshold: Option<String>,
+    /// Ignore text wrap flag, when present.
+    pub ignore_wrap: Option<bool>,
+    /// Use flexible column width flag, when present.
+    pub use_flexible_column_width: Option<bool>,
+    /// Auto-sizing type, when present.
+    pub auto_sizing_type: Option<String>,
+    /// Auto-sizing reference point, when present.
+    pub auto_sizing_reference_point: Option<String>,
+    /// Use minimum height for auto-sizing flag, when present.
+    pub use_minimum_height_for_auto_sizing: Option<bool>,
+    /// Minimum auto-sizing height, preserved as an IDML string.
+    pub minimum_height_for_auto_sizing: Option<String>,
+    /// Use minimum width for auto-sizing flag, when present.
+    pub use_minimum_width_for_auto_sizing: Option<bool>,
+    /// Minimum auto-sizing width, preserved as an IDML string.
+    pub minimum_width_for_auto_sizing: Option<String>,
+    /// Use no-line-breaks for auto-sizing flag, when present.
+    pub use_no_line_breaks_for_auto_sizing: Option<bool>,
+    /// Override footnote settings flag, when present.
+    pub footnotes_enable_overrides: Option<bool>,
+    /// Span footnotes across columns flag, when present.
+    pub footnotes_span_across_columns: Option<bool>,
+    /// Footnote minimum spacing, preserved as an IDML string.
+    pub footnotes_minimum_spacing: Option<String>,
+    /// Footnote space between, preserved as an IDML string.
+    pub footnotes_space_between: Option<String>,
+    /// Vertically balance columns flag, when present.
+    pub vertical_balance_columns: Option<bool>,
+    /// Column rule override flag, when present.
+    pub column_rule_override: Option<bool>,
+    /// Column rule offset, preserved as an IDML string.
+    pub column_rule_offset: Option<String>,
+    /// Column rule top inset, preserved as an IDML string.
+    pub column_rule_top_inset: Option<String>,
+    /// Column rule inset-chain override flag, when present.
+    pub column_rule_inset_chain_override: Option<bool>,
+    /// Column rule bottom inset, preserved as an IDML string.
+    pub column_rule_bottom_inset: Option<String>,
+    /// Column rule stroke width, preserved as an IDML string.
+    pub column_rule_stroke_width: Option<String>,
+    /// Column rule stroke color reference, when present.
+    pub column_rule_stroke_color: Option<String>,
+    /// Column rule stroke type reference, when present.
+    pub column_rule_stroke_type: Option<String>,
+    /// Column rule stroke tint, preserved as an IDML string.
+    pub column_rule_stroke_tint: Option<String>,
+    /// Column rule overprint override flag, when present.
+    pub column_rule_overprint_override: Option<bool>,
+    /// Inset spacing property, when present.
+    pub inset_spacing: Option<SpreadListProperty>,
+}
+
+/// A typed IDML list property used by spread child properties.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SpreadListProperty {
+    /// IDML `type` attribute, when present.
+    pub value_type: Option<String>,
+    /// Ordered list items.
+    pub items: Vec<SpreadListItem>,
+}
+
+/// A scalar spread list item.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SpreadListItem {
+    /// IDML `type` attribute, when present.
+    pub value_type: Option<String>,
+    /// Item value.
+    pub value: String,
 }
 
 /// Common page item metadata shared by frames, shapes, and groups.
@@ -1128,6 +1224,249 @@ impl Oval {
     }
 }
 
+impl TextFramePreference {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            text_column_count: optional_attr(
+                event,
+                "TextColumnCount",
+                reader,
+                max_attribute_bytes,
+            )?,
+            text_column_gutter: optional_attr(
+                event,
+                "TextColumnGutter",
+                reader,
+                max_attribute_bytes,
+            )?,
+            text_column_fixed_width: optional_attr(
+                event,
+                "TextColumnFixedWidth",
+                reader,
+                max_attribute_bytes,
+            )?,
+            text_column_max_width: optional_attr(
+                event,
+                "TextColumnMaxWidth",
+                reader,
+                max_attribute_bytes,
+            )?,
+            use_fixed_column_width: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "UseFixedColumnWidth",
+                reader,
+                max_attribute_bytes,
+            )?,
+            first_baseline_offset: optional_attr(
+                event,
+                "FirstBaselineOffset",
+                reader,
+                max_attribute_bytes,
+            )?,
+            minimum_first_baseline_offset: optional_attr(
+                event,
+                "MinimumFirstBaselineOffset",
+                reader,
+                max_attribute_bytes,
+            )?,
+            vertical_justification: optional_attr(
+                event,
+                "VerticalJustification",
+                reader,
+                max_attribute_bytes,
+            )?,
+            vertical_threshold: optional_attr(
+                event,
+                "VerticalThreshold",
+                reader,
+                max_attribute_bytes,
+            )?,
+            ignore_wrap: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "IgnoreWrap",
+                reader,
+                max_attribute_bytes,
+            )?,
+            use_flexible_column_width: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "UseFlexibleColumnWidth",
+                reader,
+                max_attribute_bytes,
+            )?,
+            auto_sizing_type: optional_attr(event, "AutoSizingType", reader, max_attribute_bytes)?,
+            auto_sizing_reference_point: optional_attr(
+                event,
+                "AutoSizingReferencePoint",
+                reader,
+                max_attribute_bytes,
+            )?,
+            use_minimum_height_for_auto_sizing: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "UseMinimumHeightForAutoSizing",
+                reader,
+                max_attribute_bytes,
+            )?,
+            minimum_height_for_auto_sizing: optional_attr(
+                event,
+                "MinimumHeightForAutoSizing",
+                reader,
+                max_attribute_bytes,
+            )?,
+            use_minimum_width_for_auto_sizing: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "UseMinimumWidthForAutoSizing",
+                reader,
+                max_attribute_bytes,
+            )?,
+            minimum_width_for_auto_sizing: optional_attr(
+                event,
+                "MinimumWidthForAutoSizing",
+                reader,
+                max_attribute_bytes,
+            )?,
+            use_no_line_breaks_for_auto_sizing: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "UseNoLineBreaksForAutoSizing",
+                reader,
+                max_attribute_bytes,
+            )?,
+            footnotes_enable_overrides: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "FootnotesEnableOverrides",
+                reader,
+                max_attribute_bytes,
+            )?,
+            footnotes_span_across_columns: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "FootnotesSpanAcrossColumns",
+                reader,
+                max_attribute_bytes,
+            )?,
+            footnotes_minimum_spacing: optional_attr(
+                event,
+                "FootnotesMinimumSpacing",
+                reader,
+                max_attribute_bytes,
+            )?,
+            footnotes_space_between: optional_attr(
+                event,
+                "FootnotesSpaceBetween",
+                reader,
+                max_attribute_bytes,
+            )?,
+            vertical_balance_columns: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "VerticalBalanceColumns",
+                reader,
+                max_attribute_bytes,
+            )?,
+            column_rule_override: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "ColumnRuleOverride",
+                reader,
+                max_attribute_bytes,
+            )?,
+            column_rule_offset: optional_attr(
+                event,
+                "ColumnRuleOffset",
+                reader,
+                max_attribute_bytes,
+            )?,
+            column_rule_top_inset: optional_attr(
+                event,
+                "ColumnRuleTopInset",
+                reader,
+                max_attribute_bytes,
+            )?,
+            column_rule_inset_chain_override: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "ColumnRuleInsetChainOverride",
+                reader,
+                max_attribute_bytes,
+            )?,
+            column_rule_bottom_inset: optional_attr(
+                event,
+                "ColumnRuleBottomInset",
+                reader,
+                max_attribute_bytes,
+            )?,
+            column_rule_stroke_width: optional_attr(
+                event,
+                "ColumnRuleStrokeWidth",
+                reader,
+                max_attribute_bytes,
+            )?,
+            column_rule_stroke_color: optional_attr(
+                event,
+                "ColumnRuleStrokeColor",
+                reader,
+                max_attribute_bytes,
+            )?,
+            column_rule_stroke_type: optional_attr(
+                event,
+                "ColumnRuleStrokeType",
+                reader,
+                max_attribute_bytes,
+            )?,
+            column_rule_stroke_tint: optional_attr(
+                event,
+                "ColumnRuleStrokeTint",
+                reader,
+                max_attribute_bytes,
+            )?,
+            column_rule_overprint_override: optional_bool_attr(
+                event,
+                "TextFramePreference",
+                "ColumnRuleOverprintOverride",
+                reader,
+                max_attribute_bytes,
+            )?,
+            inset_spacing: None,
+        })
+    }
+}
+
+impl SpreadListProperty {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            value_type: optional_attr(event, "type", reader, max_attribute_bytes)?,
+            items: Vec::new(),
+        })
+    }
+}
+
+impl SpreadListItem {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            value_type: optional_attr(event, "type", reader, max_attribute_bytes)?,
+            value: String::new(),
+        })
+    }
+}
+
 /// Graphic line geometry.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphicLine {
@@ -1244,6 +1583,7 @@ impl Group {
 
 /// Supported spread page item in z-order.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum PageItem {
     /// A text frame page item.
     TextFrame(TextFrame),
@@ -1301,6 +1641,7 @@ impl TextFrame {
             next_text_frame,
             geometric_bounds,
             metadata: PageItemMetadata::from_xml_event(event, reader, max_attribute_bytes)?,
+            preference: None,
             path_geometry: None,
         })
     }
@@ -1774,8 +2115,331 @@ fn parse_text_frame_contents(
     mut frame: TextFrame,
     state: &mut NestedSpreadParseState<'_>,
 ) -> Result<TextFrame> {
-    parse_page_item_path_contents(reader, "TextFrame", state, &mut frame.path_geometry)?;
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                if e.name().as_ref() == b"PathGeometry" {
+                    assign_path_geometry(
+                        &mut frame.path_geometry,
+                        parse_path_geometry_contents(reader, state)?,
+                    );
+                } else if e.name().as_ref() == b"TextPath" {
+                    push_text_frame_index_limited(
+                        state.text_frames,
+                        TextFrame::from_text_path_xml_event(
+                            &e,
+                            reader,
+                            state.options.max_attribute_bytes,
+                        )?,
+                        state.options.max_text_frames,
+                    )?;
+                } else if e.name().as_ref() == b"TextFramePreference" {
+                    let preference = TextFramePreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    frame.preference = Some(parse_text_frame_preference_contents(
+                        reader, preference, state,
+                    )?);
+                }
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                if e.name().as_ref() == b"PathGeometry" {
+                    assign_path_geometry(
+                        &mut frame.path_geometry,
+                        PathGeometry { paths: Vec::new() },
+                    );
+                } else if e.name().as_ref() == b"TextPath" {
+                    push_text_frame_index_limited(
+                        state.text_frames,
+                        TextFrame::from_text_path_xml_event(
+                            &e,
+                            reader,
+                            state.options.max_attribute_bytes,
+                        )?,
+                        state.options.max_text_frames,
+                    )?;
+                } else if e.name().as_ref() == b"TextFramePreference" {
+                    frame.preference = Some(TextFramePreference::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                }
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"TextFrame" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "TextFrame".to_owned(),
+                    reason: "unclosed page item element",
+                });
+            }
+            _ => {}
+        }
+    }
     Ok(frame)
+}
+
+fn parse_text_frame_preference_contents(
+    reader: &mut Reader<&[u8]>,
+    mut preference: TextFramePreference,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<TextFramePreference> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                if e.name().as_ref() == b"InsetSpacing" {
+                    preference.inset_spacing = Some(parse_spread_list_property_contents(
+                        reader,
+                        SpreadListProperty::from_xml_event(
+                            &e,
+                            reader,
+                            state.options.max_attribute_bytes,
+                        )?,
+                        "InsetSpacing",
+                        state,
+                    )?);
+                }
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                if e.name().as_ref() == b"InsetSpacing" {
+                    preference.inset_spacing = Some(SpreadListProperty::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                }
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"TextFramePreference" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "TextFramePreference".to_owned(),
+                    reason: "unclosed TextFramePreference element",
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(preference)
+}
+
+fn parse_spread_list_property_contents(
+    reader: &mut Reader<&[u8]>,
+    mut property: SpreadListProperty,
+    end_tag: &'static str,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<SpreadListProperty> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                if e.name().as_ref() == b"ListItem" {
+                    let item = SpreadListItem::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    push_spread_list_item_limited(
+                        &mut property.items,
+                        parse_spread_list_item_contents(reader, item, state)?,
+                    )?;
+                }
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                if e.name().as_ref() == b"ListItem" {
+                    push_spread_list_item_limited(
+                        &mut property.items,
+                        SpreadListItem::from_xml_event(
+                            &e,
+                            reader,
+                            state.options.max_attribute_bytes,
+                        )?,
+                    )?;
+                }
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == end_tag.as_bytes() {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: end_tag.to_owned(),
+                    reason: "unclosed spread list property",
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(property)
+}
+
+fn parse_spread_list_item_contents(
+    reader: &mut Reader<&[u8]>,
+    mut item: SpreadListItem,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<SpreadListItem> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                return Err(IdmlError::InvalidElement {
+                    element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                    reason: "nested spread list item",
+                });
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                return Err(IdmlError::InvalidElement {
+                    element: String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                    reason: "nested spread list item",
+                });
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"ListItem" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+                let decoded = e.decode()?;
+                push_spread_list_item_value_limited(
+                    &mut item.value,
+                    decoded.as_ref(),
+                    state.options.max_attribute_bytes,
+                )?;
+            }
+            Event::CData(e) => {
+                state.root.visit_cdata()?;
+                let decoded = e.xml_content(XmlVersion::Implicit1_0)?;
+                push_spread_list_item_value_limited(
+                    &mut item.value,
+                    decoded.as_ref(),
+                    state.options.max_attribute_bytes,
+                )?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "ListItem".to_owned(),
+                    reason: "unclosed spread list item",
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(item)
+}
+
+fn push_spread_list_item_limited(
+    items: &mut Vec<SpreadListItem>,
+    item: SpreadListItem,
+) -> Result<()> {
+    let next_len = items.len().checked_add(1).ok_or(IdmlError::LimitExceeded {
+        what: "spread list item count",
+        limit: DEFAULT_MAX_SPREAD_LIST_ITEMS as u64,
+        actual: u64::MAX,
+    })?;
+    if next_len > DEFAULT_MAX_SPREAD_LIST_ITEMS {
+        return Err(IdmlError::LimitExceeded {
+            what: "spread list item count",
+            limit: DEFAULT_MAX_SPREAD_LIST_ITEMS as u64,
+            actual: next_len as u64,
+        });
+    }
+    items.push(item);
+    Ok(())
+}
+
+fn push_spread_list_item_value_limited(
+    output: &mut String,
+    text: &str,
+    max_attribute_bytes: usize,
+) -> Result<()> {
+    let next_len = output
+        .len()
+        .checked_add(text.len())
+        .ok_or(IdmlError::LimitExceeded {
+            what: "Spread XML attribute bytes",
+            limit: max_attribute_bytes as u64,
+            actual: u64::MAX,
+        })?;
+    if next_len > max_attribute_bytes {
+        return Err(IdmlError::LimitExceeded {
+            what: "Spread XML attribute bytes",
+            limit: max_attribute_bytes as u64,
+            actual: next_len as u64,
+        });
+    }
+    output.push_str(text);
+    Ok(())
 }
 
 fn parse_oval_contents(
@@ -2775,6 +3439,115 @@ fn validate_text_frame(frame: &TextFrame) -> Result<()> {
     if let Some(path_geometry) = &frame.path_geometry {
         validate_path_geometry(path_geometry)?;
     }
+    if let Some(preference) = &frame.preference {
+        validate_text_frame_preference(preference)?;
+    }
+    Ok(())
+}
+
+fn validate_text_frame_preference(preference: &TextFramePreference) -> Result<()> {
+    for (name, value) in [
+        ("TextColumnCount", preference.text_column_count.as_deref()),
+        ("TextColumnGutter", preference.text_column_gutter.as_deref()),
+        (
+            "TextColumnFixedWidth",
+            preference.text_column_fixed_width.as_deref(),
+        ),
+        (
+            "TextColumnMaxWidth",
+            preference.text_column_max_width.as_deref(),
+        ),
+        (
+            "FirstBaselineOffset",
+            preference.first_baseline_offset.as_deref(),
+        ),
+        (
+            "MinimumFirstBaselineOffset",
+            preference.minimum_first_baseline_offset.as_deref(),
+        ),
+        (
+            "VerticalJustification",
+            preference.vertical_justification.as_deref(),
+        ),
+        (
+            "VerticalThreshold",
+            preference.vertical_threshold.as_deref(),
+        ),
+        ("AutoSizingType", preference.auto_sizing_type.as_deref()),
+        (
+            "AutoSizingReferencePoint",
+            preference.auto_sizing_reference_point.as_deref(),
+        ),
+        (
+            "MinimumHeightForAutoSizing",
+            preference.minimum_height_for_auto_sizing.as_deref(),
+        ),
+        (
+            "MinimumWidthForAutoSizing",
+            preference.minimum_width_for_auto_sizing.as_deref(),
+        ),
+        (
+            "FootnotesMinimumSpacing",
+            preference.footnotes_minimum_spacing.as_deref(),
+        ),
+        (
+            "FootnotesSpaceBetween",
+            preference.footnotes_space_between.as_deref(),
+        ),
+        ("ColumnRuleOffset", preference.column_rule_offset.as_deref()),
+        (
+            "ColumnRuleTopInset",
+            preference.column_rule_top_inset.as_deref(),
+        ),
+        (
+            "ColumnRuleBottomInset",
+            preference.column_rule_bottom_inset.as_deref(),
+        ),
+        (
+            "ColumnRuleStrokeWidth",
+            preference.column_rule_stroke_width.as_deref(),
+        ),
+        (
+            "ColumnRuleStrokeColor",
+            preference.column_rule_stroke_color.as_deref(),
+        ),
+        (
+            "ColumnRuleStrokeType",
+            preference.column_rule_stroke_type.as_deref(),
+        ),
+        (
+            "ColumnRuleStrokeTint",
+            preference.column_rule_stroke_tint.as_deref(),
+        ),
+    ] {
+        validate_optional_attr("TextFramePreference", name, value)?;
+    }
+    if let Some(inset_spacing) = &preference.inset_spacing {
+        validate_spread_list_property("InsetSpacing", inset_spacing)?;
+    }
+    Ok(())
+}
+
+fn validate_spread_list_property(
+    element: &'static str,
+    property: &SpreadListProperty,
+) -> Result<()> {
+    validate_optional_attr(element, "type", property.value_type.as_deref())?;
+    enforce_serialized_spread_count(
+        property.items.len(),
+        DEFAULT_MAX_SPREAD_LIST_ITEMS,
+        "spread list item count",
+    )?;
+    for item in &property.items {
+        validate_spread_list_item(item)?;
+    }
+    Ok(())
+}
+
+fn validate_spread_list_item(item: &SpreadListItem) -> Result<()> {
+    validate_optional_attr("ListItem", "type", item.value_type.as_deref())?;
+    enforce_spread_attribute_bytes(item.value.len(), DEFAULT_MAX_SPREAD_ATTRIBUTE_BYTES)?;
+    validate_xml_text("spread list item value", &item.value)?;
     Ok(())
 }
 
@@ -3157,14 +3930,290 @@ fn serialize_text_frame_with_indent(
         let bounds = format_geometric_bounds("TextFrame", bounds)?;
         push_attr(xml, "TextFrame", "GeometricBounds", &bounds)?;
     }
-    if let Some(path_geometry) = &frame.path_geometry {
+    if frame.path_geometry.is_some() || frame.preference.is_some() {
         xml.push_str(">\n");
-        serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        if let Some(path_geometry) = &frame.path_geometry {
+            serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        }
+        if let Some(preference) = &frame.preference {
+            serialize_text_frame_preference(xml, preference, indent + 2)?;
+        }
         push_indent(xml, indent);
         xml.push_str("</TextFrame>\n");
         return Ok(());
     }
     xml.push_str(" />\n");
+    Ok(())
+}
+
+fn serialize_text_frame_preference(
+    xml: &mut String,
+    preference: &TextFramePreference,
+    indent: usize,
+) -> Result<()> {
+    validate_text_frame_preference(preference)?;
+    push_indent(xml, indent);
+    xml.push_str("<TextFramePreference");
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "TextColumnCount",
+        preference.text_column_count.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "TextColumnGutter",
+        preference.text_column_gutter.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "TextColumnFixedWidth",
+        preference.text_column_fixed_width.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "TextColumnMaxWidth",
+        preference.text_column_max_width.as_deref(),
+    )?;
+    push_optional_bool_serialized_attr(
+        xml,
+        "UseFixedColumnWidth",
+        preference.use_fixed_column_width,
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "FirstBaselineOffset",
+        preference.first_baseline_offset.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "MinimumFirstBaselineOffset",
+        preference.minimum_first_baseline_offset.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "VerticalJustification",
+        preference.vertical_justification.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "VerticalThreshold",
+        preference.vertical_threshold.as_deref(),
+    )?;
+    push_optional_bool_serialized_attr(xml, "IgnoreWrap", preference.ignore_wrap)?;
+    push_optional_bool_serialized_attr(
+        xml,
+        "UseFlexibleColumnWidth",
+        preference.use_flexible_column_width,
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "AutoSizingType",
+        preference.auto_sizing_type.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "AutoSizingReferencePoint",
+        preference.auto_sizing_reference_point.as_deref(),
+    )?;
+    push_optional_bool_serialized_attr(
+        xml,
+        "UseMinimumHeightForAutoSizing",
+        preference.use_minimum_height_for_auto_sizing,
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "MinimumHeightForAutoSizing",
+        preference.minimum_height_for_auto_sizing.as_deref(),
+    )?;
+    push_optional_bool_serialized_attr(
+        xml,
+        "UseMinimumWidthForAutoSizing",
+        preference.use_minimum_width_for_auto_sizing,
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "MinimumWidthForAutoSizing",
+        preference.minimum_width_for_auto_sizing.as_deref(),
+    )?;
+    push_optional_bool_serialized_attr(
+        xml,
+        "UseNoLineBreaksForAutoSizing",
+        preference.use_no_line_breaks_for_auto_sizing,
+    )?;
+    push_optional_bool_serialized_attr(
+        xml,
+        "FootnotesEnableOverrides",
+        preference.footnotes_enable_overrides,
+    )?;
+    push_optional_bool_serialized_attr(
+        xml,
+        "FootnotesSpanAcrossColumns",
+        preference.footnotes_span_across_columns,
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "FootnotesMinimumSpacing",
+        preference.footnotes_minimum_spacing.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "FootnotesSpaceBetween",
+        preference.footnotes_space_between.as_deref(),
+    )?;
+    push_optional_bool_serialized_attr(
+        xml,
+        "VerticalBalanceColumns",
+        preference.vertical_balance_columns,
+    )?;
+    push_optional_bool_serialized_attr(xml, "ColumnRuleOverride", preference.column_rule_override)?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "ColumnRuleOffset",
+        preference.column_rule_offset.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "ColumnRuleTopInset",
+        preference.column_rule_top_inset.as_deref(),
+    )?;
+    push_optional_bool_serialized_attr(
+        xml,
+        "ColumnRuleInsetChainOverride",
+        preference.column_rule_inset_chain_override,
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "ColumnRuleBottomInset",
+        preference.column_rule_bottom_inset.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "ColumnRuleStrokeWidth",
+        preference.column_rule_stroke_width.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "ColumnRuleStrokeColor",
+        preference.column_rule_stroke_color.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "ColumnRuleStrokeType",
+        preference.column_rule_stroke_type.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "TextFramePreference",
+        "ColumnRuleStrokeTint",
+        preference.column_rule_stroke_tint.as_deref(),
+    )?;
+    push_optional_bool_serialized_attr(
+        xml,
+        "ColumnRuleOverprintOverride",
+        preference.column_rule_overprint_override,
+    )?;
+
+    let Some(inset_spacing) = &preference.inset_spacing else {
+        xml.push_str(" />\n");
+        return Ok(());
+    };
+
+    xml.push_str(">\n");
+    push_indent(xml, indent + 2);
+    xml.push_str("<Properties>\n");
+    serialize_spread_list_property(xml, "InsetSpacing", inset_spacing, indent + 4)?;
+    push_indent(xml, indent + 2);
+    xml.push_str("</Properties>\n");
+    push_indent(xml, indent);
+    xml.push_str("</TextFramePreference>\n");
+    Ok(())
+}
+
+fn serialize_spread_list_property(
+    xml: &mut String,
+    element: &'static str,
+    property: &SpreadListProperty,
+    indent: usize,
+) -> Result<()> {
+    validate_spread_list_property(element, property)?;
+    push_indent(xml, indent);
+    xml.push('<');
+    xml.push_str(element);
+    push_optional_serialized_attr(xml, element, "type", property.value_type.as_deref())?;
+    if property.items.is_empty() {
+        xml.push_str(" />\n");
+        return Ok(());
+    }
+    xml.push_str(">\n");
+    for item in &property.items {
+        serialize_spread_list_item(xml, item, indent + 2)?;
+    }
+    push_indent(xml, indent);
+    xml.push_str("</");
+    xml.push_str(element);
+    xml.push_str(">\n");
+    Ok(())
+}
+
+fn serialize_spread_list_item(
+    xml: &mut String,
+    item: &SpreadListItem,
+    indent: usize,
+) -> Result<()> {
+    validate_spread_list_item(item)?;
+    push_indent(xml, indent);
+    xml.push_str("<ListItem");
+    push_optional_serialized_attr(xml, "ListItem", "type", item.value_type.as_deref())?;
+    if item.value.is_empty() {
+        xml.push_str(" />\n");
+        return Ok(());
+    }
+    xml.push('>');
+    xml.push_str(escape(&item.value).as_ref());
+    xml.push_str("</ListItem>\n");
+    Ok(())
+}
+
+fn push_optional_serialized_attr(
+    xml: &mut String,
+    element: &'static str,
+    name: &'static str,
+    value: Option<&str>,
+) -> Result<()> {
+    if let Some(value) = value {
+        push_attr(xml, element, name, value)?;
+    }
+    Ok(())
+}
+
+fn push_optional_bool_serialized_attr(
+    xml: &mut String,
+    name: &'static str,
+    value: Option<bool>,
+) -> Result<()> {
+    if let Some(value) = value {
+        push_attr(xml, "TextFramePreference", name, bool_str(value))?;
+    }
     Ok(())
 }
 
@@ -3818,7 +4867,8 @@ fn push_optional_attr(xml: &mut String, name: &'static str, value: Option<&str>)
 mod tests {
     use super::{
         GeometryPath, GraphicLine, Group, Guide, Image, Oval, Page, PageItem, PathGeometry,
-        PathPoint, Point, Polygon, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame,
+        PathPoint, Point, Polygon, Rect, Rectangle, Spread, SpreadListItem, SpreadListProperty,
+        SpreadParseOptions, TextFrame,
     };
     use crate::IdmlError;
     use crate::core::units::Points;
@@ -4978,6 +6028,7 @@ mod tests {
                     Points::new(216.25),
                 )),
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             }],
             page_items: Vec::new(),
@@ -4995,6 +6046,66 @@ mod tests {
     }
 
     #[test]
+    fn preserves_text_frame_preferences_and_inset_spacing() {
+        let xml = r#"<Spread Self="s1">
+  <TextFrame Self="tf1" ParentStory="u1">
+    <TextFramePreference TextColumnCount="2" TextColumnGutter="12" TextColumnFixedWidth="100" TextColumnMaxWidth="0" UseFixedColumnWidth="false" FirstBaselineOffset="AscentOffset" MinimumFirstBaselineOffset="0" VerticalJustification="TopAlign" VerticalThreshold="0" IgnoreWrap="false" UseFlexibleColumnWidth="false" AutoSizingType="Off" AutoSizingReferencePoint="CenterPoint" UseMinimumHeightForAutoSizing="false" MinimumHeightForAutoSizing="0" UseMinimumWidthForAutoSizing="false" MinimumWidthForAutoSizing="0" UseNoLineBreaksForAutoSizing="false" FootnotesEnableOverrides="false" FootnotesSpanAcrossColumns="false" FootnotesMinimumSpacing="12" FootnotesSpaceBetween="6" VerticalBalanceColumns="false" ColumnRuleOverride="false" ColumnRuleOffset="0" ColumnRuleTopInset="0" ColumnRuleInsetChainOverride="true" ColumnRuleBottomInset="0" ColumnRuleStrokeWidth="1" ColumnRuleStrokeColor="Color/Black" ColumnRuleStrokeType="StrokeStyle/$ID/Solid" ColumnRuleStrokeTint="100" ColumnRuleOverprintOverride="false">
+      <Properties>
+        <InsetSpacing type="list">
+          <ListItem type="unit">1</ListItem>
+          <ListItem type="unit">2</ListItem>
+          <ListItem type="unit">3</ListItem>
+          <ListItem type="unit">4</ListItem>
+        </InsetSpacing>
+      </Properties>
+    </TextFramePreference>
+  </TextFrame>
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+        let frame = &spread.text_frames[0];
+        let preference = frame.preference.as_ref().unwrap();
+        let inset_spacing = preference.inset_spacing.as_ref().unwrap();
+
+        assert_eq!(preference.text_column_count.as_deref(), Some("2"));
+        assert_eq!(preference.use_fixed_column_width, Some(false));
+        assert_eq!(
+            preference.column_rule_stroke_type.as_deref(),
+            Some("StrokeStyle/$ID/Solid")
+        );
+        assert_eq!(
+            inset_spacing,
+            &SpreadListProperty {
+                value_type: Some("list".to_owned()),
+                items: vec![
+                    SpreadListItem {
+                        value_type: Some("unit".to_owned()),
+                        value: "1".to_owned(),
+                    },
+                    SpreadListItem {
+                        value_type: Some("unit".to_owned()),
+                        value: "2".to_owned(),
+                    },
+                    SpreadListItem {
+                        value_type: Some("unit".to_owned()),
+                        value: "3".to_owned(),
+                    },
+                    SpreadListItem {
+                        value_type: Some("unit".to_owned()),
+                        value: "4".to_owned(),
+                    },
+                ],
+            }
+        );
+
+        let serialized = spread.to_xml().unwrap();
+        assert!(serialized.contains("<TextFramePreference"));
+        assert!(serialized.contains("<InsetSpacing type=\"list\">"));
+        assert!(serialized.contains("<ListItem type=\"unit\">1</ListItem>"));
+        assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
+    }
+
+    #[test]
     fn serializer_writes_pages_before_page_items() {
         let text_frame = TextFrame {
             id: Some("tf1".to_owned()),
@@ -5004,6 +6115,7 @@ mod tests {
             next_text_frame: None,
             geometric_bounds: None,
             metadata: Default::default(),
+            preference: None,
             path_geometry: None,
         };
         let spread = Spread {
@@ -5047,6 +6159,7 @@ mod tests {
                 Points::new(72.0),
             )),
             metadata: Default::default(),
+            preference: None,
             path_geometry: None,
         };
         let spread = Spread {
@@ -5092,6 +6205,7 @@ mod tests {
             next_text_frame: None,
             geometric_bounds: None,
             metadata: Default::default(),
+            preference: None,
             path_geometry: None,
         };
         let spread = Spread {
@@ -5144,6 +6258,7 @@ mod tests {
             next_text_frame: None,
             geometric_bounds: None,
             metadata: Default::default(),
+            preference: None,
             path_geometry: None,
         };
         let spread = Spread {
@@ -5354,6 +6469,7 @@ mod tests {
                     next_text_frame: None,
                     geometric_bounds: None,
                     metadata: Default::default(),
+                    preference: None,
                     path_geometry: None,
                 })
                 .collect(),
@@ -5422,6 +6538,7 @@ mod tests {
                 next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             }],
             page_items: vec![PageItem::TextFrame(TextFrame {
@@ -5432,6 +6549,7 @@ mod tests {
                 next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             })],
         };
@@ -5462,6 +6580,7 @@ mod tests {
                 next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             }],
             page_items: vec![PageItem::TextFrame(TextFrame {
@@ -5472,6 +6591,7 @@ mod tests {
                 next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             })],
         };
@@ -5568,6 +6688,7 @@ mod tests {
                     Points::new(216.0),
                 )),
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             }],
             page_items: Vec::new(),
@@ -5599,6 +6720,7 @@ mod tests {
                 next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             }],
             page_items: Vec::new(),

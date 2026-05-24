@@ -271,7 +271,58 @@ struct TextFrameSummary {
     next_text_frame: Option<String>,
     bounds: Option<[u64; 4]>,
     metadata: MetadataSummary,
+    preference: Option<TextFramePreferenceSummary>,
     path_geometry: Option<PathGeometrySummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct TextFramePreferenceSummary {
+    text_column_count: Option<String>,
+    text_column_gutter: Option<String>,
+    text_column_fixed_width: Option<String>,
+    text_column_max_width: Option<String>,
+    use_fixed_column_width: Option<bool>,
+    first_baseline_offset: Option<String>,
+    minimum_first_baseline_offset: Option<String>,
+    vertical_justification: Option<String>,
+    vertical_threshold: Option<String>,
+    ignore_wrap: Option<bool>,
+    use_flexible_column_width: Option<bool>,
+    auto_sizing_type: Option<String>,
+    auto_sizing_reference_point: Option<String>,
+    use_minimum_height_for_auto_sizing: Option<bool>,
+    minimum_height_for_auto_sizing: Option<String>,
+    use_minimum_width_for_auto_sizing: Option<bool>,
+    minimum_width_for_auto_sizing: Option<String>,
+    use_no_line_breaks_for_auto_sizing: Option<bool>,
+    footnotes_enable_overrides: Option<bool>,
+    footnotes_span_across_columns: Option<bool>,
+    footnotes_minimum_spacing: Option<String>,
+    footnotes_space_between: Option<String>,
+    vertical_balance_columns: Option<bool>,
+    column_rule_override: Option<bool>,
+    column_rule_offset: Option<String>,
+    column_rule_top_inset: Option<String>,
+    column_rule_inset_chain_override: Option<bool>,
+    column_rule_bottom_inset: Option<String>,
+    column_rule_stroke_width: Option<String>,
+    column_rule_stroke_color: Option<String>,
+    column_rule_stroke_type: Option<String>,
+    column_rule_stroke_tint: Option<String>,
+    column_rule_overprint_override: Option<bool>,
+    inset_spacing: Option<SpreadListPropertySummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SpreadListPropertySummary {
+    value_type: Option<String>,
+    items: Vec<SpreadListItemSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SpreadListItemSummary {
+    value_type: Option<String>,
+    value: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -513,6 +564,10 @@ impl Snapshot {
                                 next_text_frame: frame.next_text_frame.clone(),
                                 bounds: frame.geometric_bounds.map(rect_bits),
                                 metadata: summarize_metadata(&frame.metadata),
+                                preference: frame
+                                    .preference
+                                    .as_ref()
+                                    .map(summarize_text_frame_preference),
                                 path_geometry: frame
                                     .path_geometry
                                     .as_ref()
@@ -745,6 +800,62 @@ fn summarize_incopy_export_option(option: &InCopyExportOption) -> InCopyExportOp
     InCopyExportOptionSummary {
         include_graphic_proxies: option.include_graphic_proxies,
         include_all_resources: option.include_all_resources,
+    }
+}
+
+fn summarize_text_frame_preference(preference: &TextFramePreference) -> TextFramePreferenceSummary {
+    TextFramePreferenceSummary {
+        text_column_count: preference.text_column_count.clone(),
+        text_column_gutter: preference.text_column_gutter.clone(),
+        text_column_fixed_width: preference.text_column_fixed_width.clone(),
+        text_column_max_width: preference.text_column_max_width.clone(),
+        use_fixed_column_width: preference.use_fixed_column_width,
+        first_baseline_offset: preference.first_baseline_offset.clone(),
+        minimum_first_baseline_offset: preference.minimum_first_baseline_offset.clone(),
+        vertical_justification: preference.vertical_justification.clone(),
+        vertical_threshold: preference.vertical_threshold.clone(),
+        ignore_wrap: preference.ignore_wrap,
+        use_flexible_column_width: preference.use_flexible_column_width,
+        auto_sizing_type: preference.auto_sizing_type.clone(),
+        auto_sizing_reference_point: preference.auto_sizing_reference_point.clone(),
+        use_minimum_height_for_auto_sizing: preference.use_minimum_height_for_auto_sizing,
+        minimum_height_for_auto_sizing: preference.minimum_height_for_auto_sizing.clone(),
+        use_minimum_width_for_auto_sizing: preference.use_minimum_width_for_auto_sizing,
+        minimum_width_for_auto_sizing: preference.minimum_width_for_auto_sizing.clone(),
+        use_no_line_breaks_for_auto_sizing: preference.use_no_line_breaks_for_auto_sizing,
+        footnotes_enable_overrides: preference.footnotes_enable_overrides,
+        footnotes_span_across_columns: preference.footnotes_span_across_columns,
+        footnotes_minimum_spacing: preference.footnotes_minimum_spacing.clone(),
+        footnotes_space_between: preference.footnotes_space_between.clone(),
+        vertical_balance_columns: preference.vertical_balance_columns,
+        column_rule_override: preference.column_rule_override,
+        column_rule_offset: preference.column_rule_offset.clone(),
+        column_rule_top_inset: preference.column_rule_top_inset.clone(),
+        column_rule_inset_chain_override: preference.column_rule_inset_chain_override,
+        column_rule_bottom_inset: preference.column_rule_bottom_inset.clone(),
+        column_rule_stroke_width: preference.column_rule_stroke_width.clone(),
+        column_rule_stroke_color: preference.column_rule_stroke_color.clone(),
+        column_rule_stroke_type: preference.column_rule_stroke_type.clone(),
+        column_rule_stroke_tint: preference.column_rule_stroke_tint.clone(),
+        column_rule_overprint_override: preference.column_rule_overprint_override,
+        inset_spacing: preference
+            .inset_spacing
+            .as_ref()
+            .map(summarize_spread_list_property),
+    }
+}
+
+fn summarize_spread_list_property(property: &SpreadListProperty) -> SpreadListPropertySummary {
+    SpreadListPropertySummary {
+        value_type: property.value_type.clone(),
+        items: property
+            .items
+            .iter()
+            .map(|item| SpreadListItemSummary {
+                value_type: item.value_type.clone(),
+                value: item.value.clone(),
+            })
+            .collect(),
     }
 }
 

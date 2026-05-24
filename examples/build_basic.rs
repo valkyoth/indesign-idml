@@ -49,6 +49,7 @@ fn main() -> Result<()> {
                     Points::new(360.0),
                 )),
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             }],
             page_items: Vec::new(),

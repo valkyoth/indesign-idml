@@ -1585,6 +1585,7 @@ mod tests {
                         next_text_frame: None,
                         geometric_bounds: None,
                         metadata: Default::default(),
+                        preference: None,
                         path_geometry: None,
                     }],
                     page_items: Vec::new(),
@@ -2430,6 +2431,7 @@ mod tests {
                     Points::new(180.0),
                 )),
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             });
 
@@ -2484,6 +2486,7 @@ mod tests {
                 next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             });
 
@@ -2524,6 +2527,7 @@ mod tests {
                     Points::new(240.0),
                 )),
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             });
 
@@ -2949,6 +2953,7 @@ mod tests {
             next_text_frame: None,
             geometric_bounds: None,
             metadata: Default::default(),
+            preference: None,
             path_geometry: None,
         }));
 
@@ -3076,6 +3081,7 @@ mod tests {
             next_text_frame: None,
             geometric_bounds: None,
             metadata: Default::default(),
+            preference: None,
             path_geometry: None,
         });
 
@@ -3400,6 +3406,7 @@ mod tests {
                 next_text_frame: None,
                 geometric_bounds: None,
                 metadata: Default::default(),
+                preference: None,
                 path_geometry: None,
             });
 
@@ -3723,6 +3730,7 @@ mod tests {
                         Points::new(144.0),
                     )),
                     metadata: Default::default(),
+                    preference: None,
                     path_geometry: None,
                 }],
                 page_items: Vec::new(),
