@@ -45,14 +45,22 @@ struct Snapshot {
 #[derive(Debug, Eq, PartialEq)]
 struct SpreadSummary {
     id: String,
-    page_count: usize,
+    pages: Vec<PageSummary>,
     text_frames: Vec<TextFrameSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PageSummary {
+    id: Option<String>,
+    bounds: Option<[u64; 4]>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 struct TextFrameSummary {
     id: Option<String>,
+    layer_id: Option<String>,
     parent_story: Option<String>,
+    bounds: Option<[u64; 4]>,
 }
 
 impl Snapshot {
@@ -75,13 +83,22 @@ impl Snapshot {
                     })?;
                     Ok(SpreadSummary {
                         id: spread_id.to_owned(),
-                        page_count: spread.pages.len(),
+                        pages: spread
+                            .pages
+                            .iter()
+                            .map(|page| PageSummary {
+                                id: page.id.clone(),
+                                bounds: page.geometric_bounds.map(rect_bits),
+                            })
+                            .collect(),
                         text_frames: spread
                             .text_frames
                             .iter()
                             .map(|frame| TextFrameSummary {
                                 id: frame.id.clone(),
+                                layer_id: frame.layer_id.clone(),
                                 parent_story: frame.parent_story.clone(),
+                                bounds: frame.geometric_bounds.map(rect_bits),
                             })
                             .collect(),
                     })
@@ -96,4 +113,13 @@ impl Snapshot {
             spread_summaries,
         })
     }
+}
+
+fn rect_bits(rect: Rect) -> [u64; 4] {
+    [
+        rect.top.as_f64().to_bits(),
+        rect.left.as_f64().to_bits(),
+        rect.bottom.as_f64().to_bits(),
+        rect.right.as_f64().to_bits(),
+    ]
 }
