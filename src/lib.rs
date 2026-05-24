@@ -48,6 +48,10 @@ mod tests {
         let _: Option<crate::prelude::Rectangle> = None;
         let _: Option<crate::prelude::Image> = None;
         let _: Option<crate::prelude::ImageLink> = None;
+        let _: Option<crate::prelude::PathGeometry> = None;
+        let _: Option<crate::prelude::GeometryPath> = None;
+        let _: Option<crate::prelude::PathPoint> = None;
+        let _: Option<crate::prelude::Point> = None;
         let _: Option<crate::prelude::Oval> = None;
         let _: Option<crate::prelude::GraphicLine> = None;
         let _: Option<crate::prelude::Polygon> = None;

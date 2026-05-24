@@ -1525,6 +1525,7 @@ mod tests {
                         layer_id: None,
                         parent_story: Some("u1".to_owned()),
                         geometric_bounds: None,
+                        path_geometry: None,
                     }],
                     page_items: Vec::new(),
                 },
@@ -2333,6 +2334,7 @@ mod tests {
                     Points::new(180.0),
                     Points::new(180.0),
                 )),
+                path_geometry: None,
             });
 
         let mut visited = Vec::new();
@@ -2379,6 +2381,7 @@ mod tests {
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
+                path_geometry: None,
             });
 
         let mut visited = Vec::new();
@@ -2415,6 +2418,7 @@ mod tests {
                     Points::new(240.0),
                     Points::new(240.0),
                 )),
+                path_geometry: None,
             });
 
         let mut visited = Vec::new();
@@ -2588,6 +2592,7 @@ mod tests {
                 id: Some("u6".to_owned()),
                 layer_id: None,
                 geometric_bounds: None,
+                path_geometry: None,
                 images: vec![Image {
                     id: Some("u7".to_owned()),
                     image_type_name: Some("$ID/JPEG".to_owned()),
@@ -2833,6 +2838,7 @@ mod tests {
             layer_id: None,
             parent_story: Some("u1".to_owned()),
             geometric_bounds: None,
+            path_geometry: None,
         }));
 
         let err = document.validate().unwrap_err();
@@ -3034,6 +3040,7 @@ mod tests {
                     id: Some("rect1".to_owned()),
                     layer_id: Some("missing".to_owned()),
                     geometric_bounds: None,
+                    path_geometry: None,
                     images: Vec::new(),
                 })],
             }));
@@ -3070,6 +3077,7 @@ mod tests {
                 id: Some("oval1".to_owned()),
                 layer_id: Some("layer1".to_owned()),
                 geometric_bounds: None,
+                path_geometry: None,
             })],
         }));
 
@@ -3116,6 +3124,7 @@ mod tests {
                 id: Some("line1".to_owned()),
                 layer_id: Some("layer1".to_owned()),
                 geometric_bounds: None,
+                path_geometry: None,
             })],
         }));
 
@@ -3162,6 +3171,7 @@ mod tests {
                 id: Some("polygon1".to_owned()),
                 layer_id: Some("layer1".to_owned()),
                 geometric_bounds: None,
+                path_geometry: None,
             })],
         }));
 
@@ -3200,6 +3210,7 @@ mod tests {
                 layer_id: None,
                 parent_story: Some("u1".to_owned()),
                 geometric_bounds: None,
+                path_geometry: None,
             });
 
         let err = document.validate().unwrap_err();
@@ -3224,6 +3235,7 @@ mod tests {
             id: Some("tf1".to_owned()),
             layer_id: None,
             geometric_bounds: None,
+            path_geometry: None,
             images: Vec::new(),
         }));
 
@@ -3246,6 +3258,7 @@ mod tests {
             id: Some("rect1".to_owned()),
             layer_id: None,
             geometric_bounds: None,
+            path_geometry: None,
             images: vec![Image {
                 id: Some("tf1".to_owned()),
                 image_type_name: Some("$ID/JPEG".to_owned()),
@@ -3274,6 +3287,7 @@ mod tests {
             id: Some("rect1".to_owned()),
             layer_id: None,
             geometric_bounds: None,
+            path_geometry: None,
             images: vec![Image {
                 id: Some("image1".to_owned()),
                 image_type_name: None,
@@ -3342,6 +3356,7 @@ mod tests {
                 id: Some("page1".to_owned()),
                 layer_id: None,
                 geometric_bounds: None,
+                path_geometry: None,
                 images: Vec::new(),
             })],
         }));
@@ -3505,6 +3520,7 @@ mod tests {
                         Points::new(72.0),
                         Points::new(144.0),
                     )),
+                    path_geometry: None,
                 }],
                 page_items: Vec::new(),
             },

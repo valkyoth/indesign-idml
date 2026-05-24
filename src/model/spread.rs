@@ -56,6 +56,9 @@ pub const DEFAULT_MAX_GUIDES_PER_SPREAD: usize = 100_000;
 /// Default maximum nested images accepted in one spread.
 pub const DEFAULT_MAX_IMAGES_PER_SPREAD: usize = 100_000;
 
+/// Default maximum path points accepted in one spread.
+pub const DEFAULT_MAX_PATH_POINTS_PER_SPREAD: usize = 100_000;
+
 /// Default maximum raw bytes accepted for one spread XML attribute value.
 pub const DEFAULT_MAX_SPREAD_ATTRIBUTE_BYTES: usize = 256 * 1024;
 
@@ -70,6 +73,8 @@ pub struct SpreadParseOptions {
     pub max_guides: usize,
     /// Maximum nested `Image` elements collected from one spread.
     pub max_images: usize,
+    /// Maximum `PathPointType` elements collected from one spread.
+    pub max_path_points: usize,
     /// Maximum `TextFrame` elements collected from one spread.
     pub max_text_frames: usize,
     /// Maximum supported page items collected from one spread.
@@ -87,6 +92,7 @@ impl Default for SpreadParseOptions {
             max_pages: DEFAULT_MAX_PAGES_PER_SPREAD,
             max_guides: DEFAULT_MAX_GUIDES_PER_SPREAD,
             max_images: DEFAULT_MAX_IMAGES_PER_SPREAD,
+            max_path_points: DEFAULT_MAX_PATH_POINTS_PER_SPREAD,
             max_text_frames: DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD,
             max_page_items: DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD,
             max_attribute_bytes: DEFAULT_MAX_SPREAD_ATTRIBUTE_BYTES,
@@ -102,6 +108,7 @@ struct NestedSpreadParseState<'a> {
     text_frames: &'a mut Vec<TextFrame>,
     page_item_count: &'a mut usize,
     image_count: &'a mut usize,
+    path_point_count: &'a mut usize,
 }
 
 impl Spread {
@@ -123,6 +130,7 @@ impl Spread {
         let mut root_name = None;
         let mut page_item_count = 0usize;
         let mut image_count = 0usize;
+        let mut path_point_count = 0usize;
         let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "Spread XML depth");
         let mut root = AnyRootTracker::default();
 
@@ -151,10 +159,23 @@ impl Spread {
                             options.max_guides,
                         )?;
                     } else if e.name().as_ref() == b"TextFrame" {
+                        let text_frame =
+                            TextFrame::from_xml_event(&e, &reader, options.max_attribute_bytes)?;
+                        let mut state = NestedSpreadParseState {
+                            options,
+                            xml_depth: &mut xml_depth,
+                            root: &mut root,
+                            text_frames: &mut spread.text_frames,
+                            page_item_count: &mut page_item_count,
+                            image_count: &mut image_count,
+                            path_point_count: &mut path_point_count,
+                        };
+                        let text_frame =
+                            parse_text_frame_contents(&mut reader, text_frame, &mut state)?;
                         push_text_frame_page_item_limited(
                             &mut spread.text_frames,
                             &mut spread.page_items,
-                            TextFrame::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
+                            text_frame,
                             options,
                             &mut page_item_count,
                         )?;
@@ -178,6 +199,7 @@ impl Spread {
                             text_frames: &mut spread.text_frames,
                             page_item_count: &mut page_item_count,
                             image_count: &mut image_count,
+                            path_point_count: &mut path_point_count,
                         };
                         let rectangle =
                             parse_rectangle_contents(&mut reader, rectangle, &mut state)?;
@@ -188,35 +210,58 @@ impl Spread {
                             options.max_page_items,
                         )?;
                     } else if e.name().as_ref() == b"Oval" {
+                        let oval = Oval::from_xml_event(&e, &reader, options.max_attribute_bytes)?;
+                        let mut state = NestedSpreadParseState {
+                            options,
+                            xml_depth: &mut xml_depth,
+                            root: &mut root,
+                            text_frames: &mut spread.text_frames,
+                            page_item_count: &mut page_item_count,
+                            image_count: &mut image_count,
+                            path_point_count: &mut path_point_count,
+                        };
+                        let oval = parse_oval_contents(&mut reader, oval, &mut state)?;
                         push_page_item_limited(
                             &mut spread.page_items,
-                            PageItem::Oval(Oval::from_xml_event(
-                                &e,
-                                &reader,
-                                options.max_attribute_bytes,
-                            )?),
+                            PageItem::Oval(oval),
                             &mut page_item_count,
                             options.max_page_items,
                         )?;
                     } else if e.name().as_ref() == b"GraphicLine" {
+                        let line =
+                            GraphicLine::from_xml_event(&e, &reader, options.max_attribute_bytes)?;
+                        let mut state = NestedSpreadParseState {
+                            options,
+                            xml_depth: &mut xml_depth,
+                            root: &mut root,
+                            text_frames: &mut spread.text_frames,
+                            page_item_count: &mut page_item_count,
+                            image_count: &mut image_count,
+                            path_point_count: &mut path_point_count,
+                        };
+                        let line = parse_graphic_line_contents(&mut reader, line, &mut state)?;
                         push_page_item_limited(
                             &mut spread.page_items,
-                            PageItem::GraphicLine(GraphicLine::from_xml_event(
-                                &e,
-                                &reader,
-                                options.max_attribute_bytes,
-                            )?),
+                            PageItem::GraphicLine(line),
                             &mut page_item_count,
                             options.max_page_items,
                         )?;
                     } else if e.name().as_ref() == b"Polygon" {
+                        let polygon =
+                            Polygon::from_xml_event(&e, &reader, options.max_attribute_bytes)?;
+                        let mut state = NestedSpreadParseState {
+                            options,
+                            xml_depth: &mut xml_depth,
+                            root: &mut root,
+                            text_frames: &mut spread.text_frames,
+                            page_item_count: &mut page_item_count,
+                            image_count: &mut image_count,
+                            path_point_count: &mut path_point_count,
+                        };
+                        let polygon = parse_polygon_contents(&mut reader, polygon, &mut state)?;
                         push_page_item_limited(
                             &mut spread.page_items,
-                            PageItem::Polygon(Polygon::from_xml_event(
-                                &e,
-                                &reader,
-                                options.max_attribute_bytes,
-                            )?),
+                            PageItem::Polygon(polygon),
                             &mut page_item_count,
                             options.max_page_items,
                         )?;
@@ -230,6 +275,7 @@ impl Spread {
                             text_frames: &mut spread.text_frames,
                             page_item_count: &mut page_item_count,
                             image_count: &mut image_count,
+                            path_point_count: &mut path_point_count,
                         };
                         let group = parse_group_contents(&mut reader, group, &mut state)?;
                         push_page_item_limited(
@@ -486,6 +532,8 @@ pub struct TextFrame {
     pub parent_story: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Vector path geometry in local point coordinates, when present.
+    pub path_geometry: Option<PathGeometry>,
 }
 
 /// Rectangle geometry.
@@ -497,6 +545,8 @@ pub struct Rectangle {
     pub layer_id: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Vector path geometry in local point coordinates, when present.
+    pub path_geometry: Option<PathGeometry>,
     /// Nested image graphics in XML order.
     pub images: Vec<Image>,
 }
@@ -518,7 +568,101 @@ impl Rectangle {
             id,
             layer_id,
             geometric_bounds,
+            path_geometry: None,
             images: Vec::new(),
+        })
+    }
+}
+
+/// Vector path geometry for page items.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathGeometry {
+    /// Geometry paths in XML order.
+    pub paths: Vec<GeometryPath>,
+}
+
+/// One IDML geometry path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeometryPath {
+    /// Whether the path is open, from `PathOpen`, when present.
+    pub path_open: Option<bool>,
+    /// Path points in XML order.
+    pub points: Vec<PathPoint>,
+}
+
+/// One IDML path point with anchor and Bezier handle coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathPoint {
+    /// Anchor coordinate.
+    pub anchor: Point,
+    /// Left handle coordinate.
+    pub left_direction: Point,
+    /// Right handle coordinate.
+    pub right_direction: Point,
+}
+
+/// Two-dimensional point in IDML point coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Point {
+    /// X coordinate.
+    pub x: Points,
+    /// Y coordinate.
+    pub y: Points,
+}
+
+impl Point {
+    /// Creates a point coordinate.
+    #[must_use]
+    pub const fn new(x: Points, y: Points) -> Self {
+        Self { x, y }
+    }
+}
+
+impl GeometryPath {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let path_open = optional_attr(event, "PathOpen", reader, max_attribute_bytes)?
+            .map(|value| parse_bool_attribute("GeometryPathType", "PathOpen", &value))
+            .transpose()?;
+
+        Ok(Self {
+            path_open,
+            points: Vec::new(),
+        })
+    }
+}
+
+impl PathPoint {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            anchor: required_point_pair_attr(
+                event,
+                "PathPointType",
+                "Anchor",
+                reader,
+                max_attribute_bytes,
+            )?,
+            left_direction: required_point_pair_attr(
+                event,
+                "PathPointType",
+                "LeftDirection",
+                reader,
+                max_attribute_bytes,
+            )?,
+            right_direction: required_point_pair_attr(
+                event,
+                "PathPointType",
+                "RightDirection",
+                reader,
+                max_attribute_bytes,
+            )?,
         })
     }
 }
@@ -597,6 +741,8 @@ pub struct Oval {
     pub layer_id: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Vector path geometry in local point coordinates, when present.
+    pub path_geometry: Option<PathGeometry>,
 }
 
 impl Oval {
@@ -616,6 +762,7 @@ impl Oval {
             id,
             layer_id,
             geometric_bounds,
+            path_geometry: None,
         })
     }
 }
@@ -629,6 +776,8 @@ pub struct GraphicLine {
     pub layer_id: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Vector path geometry in local point coordinates, when present.
+    pub path_geometry: Option<PathGeometry>,
 }
 
 impl GraphicLine {
@@ -648,6 +797,7 @@ impl GraphicLine {
             id,
             layer_id,
             geometric_bounds,
+            path_geometry: None,
         })
     }
 }
@@ -661,6 +811,8 @@ pub struct Polygon {
     pub layer_id: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Vector path geometry in local point coordinates, when present.
+    pub path_geometry: Option<PathGeometry>,
 }
 
 impl Polygon {
@@ -680,6 +832,7 @@ impl Polygon {
             id,
             layer_id,
             geometric_bounds,
+            path_geometry: None,
         })
     }
 }
@@ -772,6 +925,7 @@ impl TextFrame {
             layer_id,
             parent_story,
             geometric_bounds,
+            path_geometry: None,
         })
     }
 }
@@ -1004,6 +1158,44 @@ fn required_point_attr(
         .and_then(|value| parse_point_attribute(element, attribute, &value))
 }
 
+fn required_point_pair_attr(
+    event: &BytesStart<'_>,
+    element: &'static str,
+    attribute: &'static str,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<Point> {
+    optional_attr(event, attribute, reader, max_attribute_bytes)?
+        .ok_or_else(|| IdmlError::MissingAttribute {
+            element: element.to_owned(),
+            attribute,
+        })
+        .and_then(|value| parse_point_pair_attribute(element, attribute, &value))
+}
+
+fn parse_point_pair_attribute(
+    element: &'static str,
+    attribute: &'static str,
+    value: &str,
+) -> Result<Point> {
+    let values = value
+        .split_whitespace()
+        .map(str::parse::<f64>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let [x, y] = values.as_slice() else {
+        return Err(IdmlError::InvalidAttribute {
+            element: element.to_owned(),
+            attribute,
+            reason: "expected two point coordinates",
+        });
+    };
+
+    let point = Point::new(Points::new(*x), Points::new(*y));
+    validate_finite_point(element, attribute, point)?;
+    Ok(point)
+}
+
 fn parse_point_attribute(
     element: &'static str,
     attribute: &'static str,
@@ -1015,6 +1207,22 @@ fn parse_point_attribute(
         return Err(non_finite_point_error(element, attribute));
     }
     Ok(point)
+}
+
+fn parse_bool_attribute(
+    element: &'static str,
+    attribute: &'static str,
+    value: &str,
+) -> Result<bool> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(IdmlError::InvalidAttribute {
+            element: element.to_owned(),
+            attribute,
+            reason: "expected boolean",
+        }),
+    }
 }
 
 fn parse_i32_attribute(element: &'static str, attribute: &'static str, value: &str) -> Result<i32> {
@@ -1156,6 +1364,277 @@ fn reserve_image_limited(image_count: &mut usize, max_images: usize) -> Result<(
     Ok(())
 }
 
+fn reserve_path_point_limited(path_point_count: &mut usize, max_path_points: usize) -> Result<()> {
+    let next_len = path_point_count
+        .checked_add(1)
+        .ok_or(IdmlError::LimitExceeded {
+            what: "spread path point count",
+            limit: max_path_points as u64,
+            actual: u64::MAX,
+        })?;
+
+    if next_len > max_path_points {
+        return Err(IdmlError::LimitExceeded {
+            what: "spread path point count",
+            limit: max_path_points as u64,
+            actual: next_len as u64,
+        });
+    }
+
+    *path_point_count = next_len;
+    Ok(())
+}
+
+fn parse_text_frame_contents(
+    reader: &mut Reader<&[u8]>,
+    mut frame: TextFrame,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<TextFrame> {
+    parse_page_item_path_contents(reader, "TextFrame", state, &mut frame.path_geometry)?;
+    Ok(frame)
+}
+
+fn parse_oval_contents(
+    reader: &mut Reader<&[u8]>,
+    mut oval: Oval,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<Oval> {
+    parse_page_item_path_contents(reader, "Oval", state, &mut oval.path_geometry)?;
+    Ok(oval)
+}
+
+fn parse_graphic_line_contents(
+    reader: &mut Reader<&[u8]>,
+    mut line: GraphicLine,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<GraphicLine> {
+    parse_page_item_path_contents(reader, "GraphicLine", state, &mut line.path_geometry)?;
+    Ok(line)
+}
+
+fn parse_polygon_contents(
+    reader: &mut Reader<&[u8]>,
+    mut polygon: Polygon,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<Polygon> {
+    parse_page_item_path_contents(reader, "Polygon", state, &mut polygon.path_geometry)?;
+    Ok(polygon)
+}
+
+fn parse_page_item_path_contents(
+    reader: &mut Reader<&[u8]>,
+    end_tag: &'static str,
+    state: &mut NestedSpreadParseState<'_>,
+    path_geometry: &mut Option<PathGeometry>,
+) -> Result<()> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                if e.name().as_ref() == b"PathGeometry" {
+                    assign_path_geometry(
+                        path_geometry,
+                        parse_path_geometry_contents(reader, state)?,
+                    );
+                } else if e.name().as_ref() == b"TextPath" {
+                    push_text_frame_index_limited(
+                        state.text_frames,
+                        TextFrame::from_text_path_xml_event(
+                            &e,
+                            reader,
+                            state.options.max_attribute_bytes,
+                        )?,
+                        state.options.max_text_frames,
+                    )?;
+                }
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                if e.name().as_ref() == b"PathGeometry" {
+                    assign_path_geometry(path_geometry, PathGeometry { paths: Vec::new() });
+                } else if e.name().as_ref() == b"TextPath" {
+                    push_text_frame_index_limited(
+                        state.text_frames,
+                        TextFrame::from_text_path_xml_event(
+                            &e,
+                            reader,
+                            state.options.max_attribute_bytes,
+                        )?,
+                        state.options.max_text_frames,
+                    )?;
+                }
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == end_tag.as_bytes() {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: end_tag.to_owned(),
+                    reason: "unclosed page item element",
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn assign_path_geometry(path_geometry: &mut Option<PathGeometry>, value: PathGeometry) {
+    if path_geometry.is_none() {
+        *path_geometry = Some(value);
+    }
+}
+
+fn parse_path_geometry_contents(
+    reader: &mut Reader<&[u8]>,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<PathGeometry> {
+    let mut geometry = PathGeometry { paths: Vec::new() };
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                if e.name().as_ref() == b"GeometryPathType" {
+                    let path = GeometryPath::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    geometry
+                        .paths
+                        .push(parse_geometry_path_contents(reader, path, state)?);
+                }
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                if e.name().as_ref() == b"GeometryPathType" {
+                    geometry.paths.push(GeometryPath::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                }
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"PathGeometry" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "PathGeometry".to_owned(),
+                    reason: "unclosed PathGeometry element",
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(geometry)
+}
+
+fn parse_geometry_path_contents(
+    reader: &mut Reader<&[u8]>,
+    mut path: GeometryPath,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<GeometryPath> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                if e.name().as_ref() == b"PathPointType" {
+                    reserve_path_point_limited(
+                        state.path_point_count,
+                        state.options.max_path_points,
+                    )?;
+                    path.points.push(PathPoint::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                }
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                if e.name().as_ref() == b"PathPointType" {
+                    reserve_path_point_limited(
+                        state.path_point_count,
+                        state.options.max_path_points,
+                    )?;
+                    path.points.push(PathPoint::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                }
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"GeometryPathType" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "GeometryPathType".to_owned(),
+                    reason: "unclosed GeometryPathType element",
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(path)
+}
+
 fn parse_rectangle_contents(
     reader: &mut Reader<&[u8]>,
     mut rectangle: Rectangle,
@@ -1173,6 +1652,11 @@ fn parse_rectangle_contents(
                     rectangle
                         .images
                         .push(parse_image_contents(reader, image, state)?);
+                } else if e.name().as_ref() == b"PathGeometry" {
+                    assign_path_geometry(
+                        &mut rectangle.path_geometry,
+                        parse_path_geometry_contents(reader, state)?,
+                    );
                 } else if e.name().as_ref() == b"GraphicBounds" {
                     rectangle
                         .images
@@ -1198,6 +1682,11 @@ fn parse_rectangle_contents(
                         reader,
                         state.options.max_attribute_bytes,
                     )?);
+                } else if e.name().as_ref() == b"PathGeometry" {
+                    assign_path_geometry(
+                        &mut rectangle.path_geometry,
+                        PathGeometry { paths: Vec::new() },
+                    );
                 }
             }
             Event::End(e) => {
@@ -1314,10 +1803,13 @@ fn parse_group_contents(
                 state.root.enter(e.name().as_ref())?;
                 state.xml_depth.enter()?;
                 if e.name().as_ref() == b"TextFrame" {
+                    let text_frame =
+                        TextFrame::from_xml_event(&e, reader, state.options.max_attribute_bytes)?;
+                    let text_frame = parse_text_frame_contents(reader, text_frame, state)?;
                     push_text_frame_page_item_limited(
                         state.text_frames,
                         &mut group.page_items,
-                        TextFrame::from_xml_event(&e, reader, state.options.max_attribute_bytes)?,
+                        text_frame,
                         state.options,
                         state.page_item_count,
                     )?;
@@ -1342,35 +1834,31 @@ fn parse_group_contents(
                         state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"Oval" {
+                    let oval = Oval::from_xml_event(&e, reader, state.options.max_attribute_bytes)?;
+                    let oval = parse_oval_contents(reader, oval, state)?;
                     push_page_item_limited(
                         &mut group.page_items,
-                        PageItem::Oval(Oval::from_xml_event(
-                            &e,
-                            reader,
-                            state.options.max_attribute_bytes,
-                        )?),
+                        PageItem::Oval(oval),
                         state.page_item_count,
                         state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"GraphicLine" {
+                    let line =
+                        GraphicLine::from_xml_event(&e, reader, state.options.max_attribute_bytes)?;
+                    let line = parse_graphic_line_contents(reader, line, state)?;
                     push_page_item_limited(
                         &mut group.page_items,
-                        PageItem::GraphicLine(GraphicLine::from_xml_event(
-                            &e,
-                            reader,
-                            state.options.max_attribute_bytes,
-                        )?),
+                        PageItem::GraphicLine(line),
                         state.page_item_count,
                         state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"Polygon" {
+                    let polygon =
+                        Polygon::from_xml_event(&e, reader, state.options.max_attribute_bytes)?;
+                    let polygon = parse_polygon_contents(reader, polygon, state)?;
                     push_page_item_limited(
                         &mut group.page_items,
-                        PageItem::Polygon(Polygon::from_xml_event(
-                            &e,
-                            reader,
-                            state.options.max_attribute_bytes,
-                        )?),
+                        PageItem::Polygon(polygon),
                         state.page_item_count,
                         state.options.max_page_items,
                     )?;
@@ -1567,11 +2055,72 @@ fn validate_serialized_spread_counts(spread: &Spread) -> Result<()> {
         "spread image count",
     )?;
     enforce_serialized_spread_count(
+        serialized_path_point_count(spread)?,
+        DEFAULT_MAX_PATH_POINTS_PER_SPREAD,
+        "spread path point count",
+    )?;
+    enforce_serialized_spread_count(
         serialized_page_item_count(spread)?,
         DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD,
         "spread page item count",
     )?;
     Ok(())
+}
+
+fn serialized_path_point_count(spread: &Spread) -> Result<usize> {
+    if spread.page_items.is_empty() {
+        return spread
+            .text_frames
+            .iter()
+            .try_fold(0usize, count_path_points_in_text_frame);
+    }
+
+    let count = spread
+        .page_items
+        .iter()
+        .try_fold(0usize, count_path_points_in_page_item)?;
+    unrepresented_text_frames(spread)?
+        .into_iter()
+        .try_fold(count, count_path_points_in_text_frame)
+}
+
+fn count_path_points_in_page_item(count: usize, page_item: &PageItem) -> Result<usize> {
+    match page_item {
+        PageItem::TextFrame(frame) => count_path_points_in_text_frame(count, frame),
+        PageItem::Rectangle(rectangle) => {
+            count_path_points_in_geometry(count, rectangle.path_geometry.as_ref())
+        }
+        PageItem::Oval(oval) => count_path_points_in_geometry(count, oval.path_geometry.as_ref()),
+        PageItem::GraphicLine(line) => {
+            count_path_points_in_geometry(count, line.path_geometry.as_ref())
+        }
+        PageItem::Polygon(polygon) => {
+            count_path_points_in_geometry(count, polygon.path_geometry.as_ref())
+        }
+        PageItem::Group(group) => group
+            .page_items
+            .iter()
+            .try_fold(count, count_path_points_in_page_item),
+    }
+}
+
+fn count_path_points_in_text_frame(count: usize, frame: &TextFrame) -> Result<usize> {
+    count_path_points_in_geometry(count, frame.path_geometry.as_ref())
+}
+
+fn count_path_points_in_geometry(count: usize, geometry: Option<&PathGeometry>) -> Result<usize> {
+    let Some(geometry) = geometry else {
+        return Ok(count);
+    };
+    geometry.paths.iter().try_fold(count, |count, path| {
+        count
+            .checked_add(path.points.len())
+            .ok_or(IdmlError::LimitExceeded {
+                what: "spread path point count",
+                limit: DEFAULT_MAX_PATH_POINTS_PER_SPREAD as u64,
+                actual: u64::MAX,
+            })
+    })
 }
 
 fn serialized_image_count(spread: &Spread) -> Result<usize> {
@@ -1828,6 +2377,9 @@ fn validate_text_frame(frame: &TextFrame) -> Result<()> {
     if let Some(bounds) = frame.geometric_bounds {
         validate_finite_bounds("TextFrame", bounds)?;
     }
+    if let Some(path_geometry) = &frame.path_geometry {
+        validate_path_geometry(path_geometry)?;
+    }
     Ok(())
 }
 
@@ -1847,6 +2399,9 @@ fn validate_rectangle(rectangle: &Rectangle) -> Result<()> {
     validate_optional_attr("Rectangle", "ItemLayer", rectangle.layer_id.as_deref())?;
     if let Some(bounds) = rectangle.geometric_bounds {
         validate_finite_bounds("Rectangle", bounds)?;
+    }
+    if let Some(path_geometry) = &rectangle.path_geometry {
+        validate_path_geometry(path_geometry)?;
     }
     for image in &rectangle.images {
         validate_image(image)?;
@@ -1884,6 +2439,9 @@ fn validate_oval(oval: &Oval) -> Result<()> {
     if let Some(bounds) = oval.geometric_bounds {
         validate_finite_bounds("Oval", bounds)?;
     }
+    if let Some(path_geometry) = &oval.path_geometry {
+        validate_path_geometry(path_geometry)?;
+    }
     Ok(())
 }
 
@@ -1893,6 +2451,9 @@ fn validate_graphic_line(line: &GraphicLine) -> Result<()> {
     if let Some(bounds) = line.geometric_bounds {
         validate_finite_bounds("GraphicLine", bounds)?;
     }
+    if let Some(path_geometry) = &line.path_geometry {
+        validate_path_geometry(path_geometry)?;
+    }
     Ok(())
 }
 
@@ -1901,6 +2462,9 @@ fn validate_polygon(polygon: &Polygon) -> Result<()> {
     validate_optional_attr("Polygon", "ItemLayer", polygon.layer_id.as_deref())?;
     if let Some(bounds) = polygon.geometric_bounds {
         validate_finite_bounds("Polygon", bounds)?;
+    }
+    if let Some(path_geometry) = &polygon.path_geometry {
+        validate_path_geometry(path_geometry)?;
     }
     Ok(())
 }
@@ -1915,6 +2479,26 @@ fn validate_group(group: &Group) -> Result<()> {
         validate_page_item(child)?;
     }
     Ok(())
+}
+
+fn validate_path_geometry(path_geometry: &PathGeometry) -> Result<()> {
+    for path in &path_geometry.paths {
+        validate_geometry_path(path)?;
+    }
+    Ok(())
+}
+
+fn validate_geometry_path(path: &GeometryPath) -> Result<()> {
+    for point in &path.points {
+        validate_path_point(point)?;
+    }
+    Ok(())
+}
+
+fn validate_path_point(point: &PathPoint) -> Result<()> {
+    validate_finite_point("PathPointType", "Anchor", point.anchor)?;
+    validate_finite_point("PathPointType", "LeftDirection", point.left_direction)?;
+    validate_finite_point("PathPointType", "RightDirection", point.right_direction)
 }
 
 fn validate_optional_attr(
@@ -1998,6 +2582,13 @@ fn serialize_text_frame_with_indent(
         let bounds = format_geometric_bounds("TextFrame", bounds)?;
         push_attr(xml, "TextFrame", "GeometricBounds", &bounds)?;
     }
+    if let Some(path_geometry) = &frame.path_geometry {
+        xml.push_str(">\n");
+        serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        push_indent(xml, indent);
+        xml.push_str("</TextFrame>\n");
+        return Ok(());
+    }
     xml.push_str(" />\n");
     Ok(())
 }
@@ -2019,11 +2610,14 @@ fn serialize_rectangle_with_indent(
         let bounds = format_geometric_bounds("Rectangle", bounds)?;
         push_attr(xml, "Rectangle", "GeometricBounds", &bounds)?;
     }
-    if rectangle.images.is_empty() {
+    if rectangle.path_geometry.is_none() && rectangle.images.is_empty() {
         xml.push_str(" />\n");
         return Ok(());
     }
     xml.push_str(">\n");
+    if let Some(path_geometry) = &rectangle.path_geometry {
+        serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+    }
     for image in &rectangle.images {
         serialize_image(xml, image, indent + 2)?;
     }
@@ -2062,6 +2656,95 @@ fn serialize_image(xml: &mut String, image: &Image, indent: usize) -> Result<()>
     }
     push_indent(xml, indent);
     xml.push_str("</Image>\n");
+    Ok(())
+}
+
+fn serialize_path_geometry_properties(
+    xml: &mut String,
+    path_geometry: &PathGeometry,
+    indent: usize,
+) -> Result<()> {
+    push_indent(xml, indent);
+    xml.push_str("<Properties>\n");
+    serialize_path_geometry(xml, path_geometry, indent + 2)?;
+    push_indent(xml, indent);
+    xml.push_str("</Properties>\n");
+    Ok(())
+}
+
+fn serialize_path_geometry(
+    xml: &mut String,
+    path_geometry: &PathGeometry,
+    indent: usize,
+) -> Result<()> {
+    validate_path_geometry(path_geometry)?;
+    push_indent(xml, indent);
+    if path_geometry.paths.is_empty() {
+        xml.push_str("<PathGeometry />\n");
+        return Ok(());
+    }
+
+    xml.push_str("<PathGeometry>\n");
+    for path in &path_geometry.paths {
+        serialize_geometry_path(xml, path, indent + 2)?;
+    }
+    push_indent(xml, indent);
+    xml.push_str("</PathGeometry>\n");
+    Ok(())
+}
+
+fn serialize_geometry_path(xml: &mut String, path: &GeometryPath, indent: usize) -> Result<()> {
+    push_indent(xml, indent);
+    xml.push_str("<GeometryPathType");
+    if let Some(path_open) = path.path_open {
+        push_attr(
+            xml,
+            "GeometryPathType",
+            "PathOpen",
+            if path_open { "true" } else { "false" },
+        )?;
+    }
+    if path.points.is_empty() {
+        xml.push_str(" />\n");
+        return Ok(());
+    }
+
+    xml.push_str(">\n");
+    push_indent(xml, indent + 2);
+    xml.push_str("<PathPointArray>\n");
+    for point in &path.points {
+        serialize_path_point(xml, point, indent + 4)?;
+    }
+    push_indent(xml, indent + 2);
+    xml.push_str("</PathPointArray>\n");
+    push_indent(xml, indent);
+    xml.push_str("</GeometryPathType>\n");
+    Ok(())
+}
+
+fn serialize_path_point(xml: &mut String, point: &PathPoint, indent: usize) -> Result<()> {
+    validate_path_point(point)?;
+    push_indent(xml, indent);
+    xml.push_str("<PathPointType");
+    push_attr(
+        xml,
+        "PathPointType",
+        "Anchor",
+        &format_point_pair(point.anchor),
+    )?;
+    push_attr(
+        xml,
+        "PathPointType",
+        "LeftDirection",
+        &format_point_pair(point.left_direction),
+    )?;
+    push_attr(
+        xml,
+        "PathPointType",
+        "RightDirection",
+        &format_point_pair(point.right_direction),
+    )?;
+    xml.push_str(" />\n");
     Ok(())
 }
 
@@ -2106,6 +2789,13 @@ fn serialize_oval_with_indent(xml: &mut String, oval: &Oval, indent: usize) -> R
         let bounds = format_geometric_bounds("Oval", bounds)?;
         push_attr(xml, "Oval", "GeometricBounds", &bounds)?;
     }
+    if let Some(path_geometry) = &oval.path_geometry {
+        xml.push_str(">\n");
+        serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        push_indent(xml, indent);
+        xml.push_str("</Oval>\n");
+        return Ok(());
+    }
     xml.push_str(" />\n");
     Ok(())
 }
@@ -2127,6 +2817,13 @@ fn serialize_graphic_line_with_indent(
         let bounds = format_geometric_bounds("GraphicLine", bounds)?;
         push_attr(xml, "GraphicLine", "GeometricBounds", &bounds)?;
     }
+    if let Some(path_geometry) = &line.path_geometry {
+        xml.push_str(">\n");
+        serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        push_indent(xml, indent);
+        xml.push_str("</GraphicLine>\n");
+        return Ok(());
+    }
     xml.push_str(" />\n");
     Ok(())
 }
@@ -2143,6 +2840,13 @@ fn serialize_polygon_with_indent(xml: &mut String, polygon: &Polygon, indent: us
     if let Some(bounds) = polygon.geometric_bounds {
         let bounds = format_geometric_bounds("Polygon", bounds)?;
         push_attr(xml, "Polygon", "GeometricBounds", &bounds)?;
+    }
+    if let Some(path_geometry) = &polygon.path_geometry {
+        xml.push_str(">\n");
+        serialize_path_geometry_properties(xml, path_geometry, indent + 2)?;
+        push_indent(xml, indent);
+        xml.push_str("</Polygon>\n");
+        return Ok(());
     }
     xml.push_str(" />\n");
     Ok(())
@@ -2200,6 +2904,17 @@ fn validate_finite_bounds(element: &'static str, bounds: Rect) -> Result<()> {
     Ok(())
 }
 
+fn validate_finite_point(
+    element: &'static str,
+    attribute: &'static str,
+    point: Point,
+) -> Result<()> {
+    if !point.x.as_f64().is_finite() || !point.y.as_f64().is_finite() {
+        return Err(non_finite_point_error(element, attribute));
+    }
+    Ok(())
+}
+
 fn non_finite_bounds_error(element: &'static str) -> IdmlError {
     IdmlError::InvalidAttribute {
         element: element.to_owned(),
@@ -2214,6 +2929,10 @@ fn format_point(point: Points) -> String {
         return "0".to_owned();
     }
     value.to_string()
+}
+
+fn format_point_pair(point: Point) -> String {
+    format!("{} {}", format_point(point.x), format_point(point.y))
 }
 
 fn format_point_attr(
@@ -2263,8 +2982,8 @@ fn push_optional_attr(xml: &mut String, name: &'static str, value: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::{
-        GraphicLine, Group, Guide, Image, Oval, Page, PageItem, Polygon, Rect, Rectangle, Spread,
-        SpreadParseOptions, TextFrame,
+        GeometryPath, GraphicLine, Group, Guide, Image, Oval, Page, PageItem, PathGeometry,
+        PathPoint, Point, Polygon, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame,
     };
     use crate::IdmlError;
     use crate::core::units::Points;
@@ -2603,6 +3322,58 @@ mod tests {
     }
 
     #[test]
+    fn parses_path_geometry_for_page_items_and_text_frames() {
+        let xml = r#"<Spread Self="u10">
+  <TextFrame Self="tf1" ParentStory="u2">
+    <Properties>
+      <PathGeometry>
+        <GeometryPathType PathOpen="false">
+          <PathPointArray>
+            <PathPointType Anchor="0 1" LeftDirection="2 3" RightDirection="4 5" />
+          </PathPointArray>
+        </GeometryPathType>
+      </PathGeometry>
+    </Properties>
+  </TextFrame>
+  <Polygon Self="poly1">
+    <Properties>
+      <PathGeometry>
+        <GeometryPathType PathOpen="true">
+          <PathPointArray>
+            <PathPointType Anchor="10 11" LeftDirection="12 13" RightDirection="14 15" />
+          </PathPointArray>
+        </GeometryPathType>
+      </PathGeometry>
+    </Properties>
+  </Polygon>
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.text_frames.len(), 1);
+        let frame_geometry = spread.text_frames[0].path_geometry.as_ref().unwrap();
+        assert_eq!(frame_geometry.paths[0].path_open, Some(false));
+        assert_eq!(
+            frame_geometry.paths[0].points[0].anchor,
+            Point::new(Points::new(0.0), Points::new(1.0))
+        );
+
+        let PageItem::Polygon(polygon) = &spread.page_items[1] else {
+            panic!("expected polygon page item");
+        };
+        let polygon_geometry = polygon.path_geometry.as_ref().unwrap();
+        assert_eq!(polygon_geometry.paths[0].path_open, Some(true));
+        assert_eq!(
+            polygon_geometry.paths[0].points[0].right_direction,
+            Point::new(Points::new(14.0), Points::new(15.0))
+        );
+
+        let serialized = spread.to_xml().unwrap();
+        let parsed = Spread::from_xml(&serialized).unwrap();
+        assert_eq!(parsed, spread);
+    }
+
+    #[test]
     fn parses_ovals_and_preserves_page_item_order() {
         let xml = r#"<Spread Self="u10">
   <Oval Self="o1" ItemLayer="layer1" GeometricBounds="0 0 72 72" />
@@ -2620,6 +3391,7 @@ mod tests {
                 id,
                 layer_id,
                 geometric_bounds: Some(_),
+                ..
             }) if id.as_deref() == Some("o1") && layer_id.as_deref() == Some("layer1")
         ));
         assert!(matches!(
@@ -2654,6 +3426,7 @@ mod tests {
                 id,
                 layer_id,
                 geometric_bounds: Some(_),
+                ..
             }) if id.as_deref() == Some("l1") && layer_id.as_deref() == Some("layer1")
         ));
         assert!(matches!(
@@ -2699,6 +3472,7 @@ mod tests {
                 id,
                 layer_id,
                 geometric_bounds: Some(_),
+                ..
             }) if id.as_deref() == Some("poly1") && layer_id.as_deref() == Some("layer1")
         ));
 
@@ -2872,6 +3646,40 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_path_point_coordinates() {
+        let err = Spread::from_xml(
+            r#"<Spread><Polygon><Properties><PathGeometry><GeometryPathType><PathPointArray><PathPointType Anchor="0 NaN" LeftDirection="0 0" RightDirection="0 0" /></PathPointArray></GeometryPathType></PathGeometry></Properties></Polygon></Spread>"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Anchor",
+                reason: "coordinate must be finite",
+            } if element == "PathPointType"
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_path_open_boolean() {
+        let err = Spread::from_xml(
+            r#"<Spread><Polygon><Properties><PathGeometry><GeometryPathType PathOpen="maybe" /></PathGeometry></Properties></Polygon></Spread>"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "PathOpen",
+                reason: "expected boolean",
+            } if element == "GeometryPathType"
+        ));
+    }
+
+    #[test]
     fn rejects_duplicate_text_frame_parent_story_attributes() {
         let err =
             Spread::from_xml(r#"<Spread><TextFrame ParentStory="u1" ParentStory="u2" /></Spread>"#)
@@ -2996,6 +3804,27 @@ mod tests {
             err,
             IdmlError::LimitExceeded {
                 what: "spread image count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_path_point_count_limit() {
+        let err = Spread::from_xml_with_options(
+            r#"<Spread><Polygon><Properties><PathGeometry><GeometryPathType><PathPointArray><PathPointType Anchor="0 0" LeftDirection="0 0" RightDirection="0 0" /><PathPointType Anchor="1 1" LeftDirection="1 1" RightDirection="1 1" /></PathPointArray></GeometryPathType></PathGeometry></Properties></Polygon></Spread>"#,
+            SpreadParseOptions {
+                max_path_points: 1,
+                ..SpreadParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread path point count",
                 limit: 1,
                 actual: 2,
             }
@@ -3148,6 +3977,7 @@ mod tests {
                     Points::new(144.0),
                     Points::new(216.25),
                 )),
+                path_geometry: None,
             }],
             page_items: Vec::new(),
         };
@@ -3168,6 +3998,7 @@ mod tests {
             layer_id: None,
             parent_story: Some("u2".to_owned()),
             geometric_bounds: None,
+            path_geometry: None,
         };
         let spread = Spread {
             id: Some("u10".to_owned()),
@@ -3207,6 +4038,7 @@ mod tests {
                 Points::new(144.0),
                 Points::new(72.0),
             )),
+            path_geometry: None,
         };
         let spread = Spread {
             id: Some("u10".to_owned()),
@@ -3223,6 +4055,7 @@ mod tests {
                         Points::new(72.0),
                         Points::new(72.0),
                     )),
+                    path_geometry: None,
                     images: Vec::new(),
                 }),
                 PageItem::TextFrame(text_frame),
@@ -3246,6 +4079,7 @@ mod tests {
             layer_id: None,
             parent_story: Some("u2".to_owned()),
             geometric_bounds: None,
+            path_geometry: None,
         };
         let spread = Spread {
             id: Some("u10".to_owned()),
@@ -3266,6 +4100,7 @@ mod tests {
                         id: Some("r1".to_owned()),
                         layer_id: None,
                         geometric_bounds: None,
+                        path_geometry: None,
                         images: Vec::new(),
                     }),
                     PageItem::TextFrame(text_frame),
@@ -3291,6 +4126,7 @@ mod tests {
             layer_id: Some("layer1".to_owned()),
             parent_story: Some("u2".to_owned()),
             geometric_bounds: None,
+            path_geometry: None,
         };
         let spread = Spread {
             id: Some("u10".to_owned()),
@@ -3303,6 +4139,7 @@ mod tests {
                     id: Some("r1".to_owned()),
                     layer_id: Some("layer2".to_owned()),
                     geometric_bounds: None,
+                    path_geometry: None,
                     images: Vec::new(),
                 }),
                 PageItem::Oval(Oval {
@@ -3314,6 +4151,7 @@ mod tests {
                         Points::new(20.0),
                         Points::new(20.0),
                     )),
+                    path_geometry: None,
                 }),
                 PageItem::GraphicLine(GraphicLine {
                     id: Some("l1".to_owned()),
@@ -3324,6 +4162,7 @@ mod tests {
                         Points::new(40.0),
                         Points::new(40.0),
                     )),
+                    path_geometry: None,
                 }),
                 PageItem::Polygon(Polygon {
                     id: Some("poly1".to_owned()),
@@ -3334,6 +4173,7 @@ mod tests {
                         Points::new(60.0),
                         Points::new(60.0),
                     )),
+                    path_geometry: None,
                 }),
                 PageItem::Group(Group {
                     id: Some("g1".to_owned()),
@@ -3417,6 +4257,7 @@ mod tests {
                 id: Some("r1".to_owned()),
                 layer_id: None,
                 geometric_bounds: None,
+                path_geometry: None,
                 images: (0..=super::DEFAULT_MAX_IMAGES_PER_SPREAD)
                     .map(|index| Image {
                         id: Some(format!("img{index}")),
@@ -3443,6 +4284,40 @@ mod tests {
     }
 
     #[test]
+    fn serializer_enforces_path_point_count_limit() {
+        let point = PathPoint {
+            anchor: Point::new(Points::new(0.0), Points::new(0.0)),
+            left_direction: Point::new(Points::new(0.0), Points::new(0.0)),
+            right_direction: Point::new(Points::new(0.0), Points::new(0.0)),
+        };
+        let spread = Spread {
+            page_items: vec![PageItem::Polygon(Polygon {
+                id: Some("poly1".to_owned()),
+                layer_id: None,
+                geometric_bounds: None,
+                path_geometry: Some(PathGeometry {
+                    paths: vec![GeometryPath {
+                        path_open: Some(false),
+                        points: vec![point; super::DEFAULT_MAX_PATH_POINTS_PER_SPREAD + 1],
+                    }],
+                }),
+            })],
+            ..Spread::default()
+        };
+
+        let err = spread.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread path point count",
+                limit: 100_000,
+                actual: 100_001,
+            }
+        ));
+    }
+
+    #[test]
     fn serializer_enforces_text_frame_count_limit() {
         let spread = Spread {
             text_frames: (0..=super::DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD)
@@ -3451,6 +4326,7 @@ mod tests {
                     layer_id: None,
                     parent_story: None,
                     geometric_bounds: None,
+                    path_geometry: None,
                 })
                 .collect(),
             ..Spread::default()
@@ -3481,6 +4357,7 @@ mod tests {
                             id: Some(format!("r{index}")),
                             layer_id: None,
                             geometric_bounds: None,
+                            path_geometry: None,
                             images: Vec::new(),
                         })
                     })
@@ -3512,12 +4389,14 @@ mod tests {
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
+                path_geometry: None,
             }],
             page_items: vec![PageItem::TextFrame(TextFrame {
                 id: Some("tf2".to_owned()),
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
+                path_geometry: None,
             })],
         };
 
@@ -3544,12 +4423,14 @@ mod tests {
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
+                path_geometry: None,
             }],
             page_items: vec![PageItem::TextFrame(TextFrame {
                 id: Some("tf2".to_owned()),
                 layer_id: None,
                 parent_story: Some("u2".to_owned()),
                 geometric_bounds: None,
+                path_geometry: None,
             })],
         };
 
@@ -3640,6 +4521,7 @@ mod tests {
                     Points::new(144.0),
                     Points::new(216.0),
                 )),
+                path_geometry: None,
             }],
             page_items: Vec::new(),
         };
@@ -3667,6 +4549,7 @@ mod tests {
                 layer_id: None,
                 parent_story: Some("u1".to_owned()),
                 geometric_bounds: None,
+                path_geometry: None,
             }],
             page_items: Vec::new(),
         };

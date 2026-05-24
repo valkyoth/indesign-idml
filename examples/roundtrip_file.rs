@@ -101,6 +101,7 @@ struct TextFrameSummary {
     layer_id: Option<String>,
     parent_story: Option<String>,
     bounds: Option<[u64; 4]>,
+    path_geometry: Option<PathGeometrySummary>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -109,22 +110,26 @@ enum PageItemSummary {
         id: Option<String>,
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
+        path_geometry: Option<PathGeometrySummary>,
         images: Vec<ImageSummary>,
     },
     Oval {
         id: Option<String>,
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
+        path_geometry: Option<PathGeometrySummary>,
     },
     GraphicLine {
         id: Option<String>,
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
+        path_geometry: Option<PathGeometrySummary>,
     },
     Polygon {
         id: Option<String>,
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
+        path_geometry: Option<PathGeometrySummary>,
     },
     Group {
         id: Option<String>,
@@ -132,6 +137,24 @@ enum PageItemSummary {
         bounds: Option<[u64; 4]>,
         page_items: Vec<PageItemSummary>,
     },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PathGeometrySummary {
+    paths: Vec<GeometryPathSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct GeometryPathSummary {
+    path_open: Option<bool>,
+    points: Vec<PathPointSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PathPointSummary {
+    anchor: [u64; 2],
+    left_direction: [u64; 2],
+    right_direction: [u64; 2],
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -228,6 +251,10 @@ impl Snapshot {
                                 layer_id: frame.layer_id.clone(),
                                 parent_story: frame.parent_story.clone(),
                                 bounds: frame.geometric_bounds.map(rect_bits),
+                                path_geometry: frame
+                                    .path_geometry
+                                    .as_ref()
+                                    .map(summarize_path_geometry),
                             })
                             .collect(),
                         page_items: summarize_page_items(&spread.page_items),
@@ -258,6 +285,10 @@ fn summarize_page_items(page_items: &[PageItem]) -> Vec<PageItemSummary> {
                 id: rectangle.id.clone(),
                 layer_id: rectangle.layer_id.clone(),
                 bounds: rectangle.geometric_bounds.map(rect_bits),
+                path_geometry: rectangle
+                    .path_geometry
+                    .as_ref()
+                    .map(summarize_path_geometry),
                 images: rectangle
                     .images
                     .iter()
@@ -282,16 +313,19 @@ fn summarize_page_items(page_items: &[PageItem]) -> Vec<PageItemSummary> {
                 id: oval.id.clone(),
                 layer_id: oval.layer_id.clone(),
                 bounds: oval.geometric_bounds.map(rect_bits),
+                path_geometry: oval.path_geometry.as_ref().map(summarize_path_geometry),
             }),
             PageItem::GraphicLine(line) => Some(PageItemSummary::GraphicLine {
                 id: line.id.clone(),
                 layer_id: line.layer_id.clone(),
                 bounds: line.geometric_bounds.map(rect_bits),
+                path_geometry: line.path_geometry.as_ref().map(summarize_path_geometry),
             }),
             PageItem::Polygon(polygon) => Some(PageItemSummary::Polygon {
                 id: polygon.id.clone(),
                 layer_id: polygon.layer_id.clone(),
                 bounds: polygon.geometric_bounds.map(rect_bits),
+                path_geometry: polygon.path_geometry.as_ref().map(summarize_path_geometry),
             }),
             PageItem::Group(group) => Some(PageItemSummary::Group {
                 id: group.id.clone(),
@@ -303,6 +337,27 @@ fn summarize_page_items(page_items: &[PageItem]) -> Vec<PageItemSummary> {
         .collect()
 }
 
+fn summarize_path_geometry(path_geometry: &PathGeometry) -> PathGeometrySummary {
+    PathGeometrySummary {
+        paths: path_geometry
+            .paths
+            .iter()
+            .map(|path| GeometryPathSummary {
+                path_open: path.path_open,
+                points: path
+                    .points
+                    .iter()
+                    .map(|point| PathPointSummary {
+                        anchor: point_bits(point.anchor),
+                        left_direction: point_bits(point.left_direction),
+                        right_direction: point_bits(point.right_direction),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 fn rect_bits(rect: Rect) -> [u64; 4] {
     [
         rect.top.as_f64().to_bits(),
@@ -310,6 +365,10 @@ fn rect_bits(rect: Rect) -> [u64; 4] {
         rect.bottom.as_f64().to_bits(),
         rect.right.as_f64().to_bits(),
     ]
+}
+
+fn point_bits(point: Point) -> [u64; 2] {
+    [point.x.as_f64().to_bits(), point.y.as_f64().to_bits()]
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {

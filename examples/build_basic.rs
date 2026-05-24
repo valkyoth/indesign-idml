@@ -42,6 +42,7 @@ fn main() -> Result<()> {
                     Points::new(144.0),
                     Points::new(360.0),
                 )),
+                path_geometry: None,
             }],
             page_items: Vec::new(),
         },
