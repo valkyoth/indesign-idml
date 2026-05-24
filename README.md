@@ -27,6 +27,8 @@ stories as they are visited.
 For loss-aware workflows, `IdmlDocument::try_for_each_preserved_entry` exposes
 master spreads and untyped resource entries in manifest order without requiring
 callers to depend on internal map ordering.
+For loaded document models, `IdmlDocument::try_for_each_story_text` visits
+borrowed story text in manifest order without cloning every story into a map.
 
 ## Examples
 

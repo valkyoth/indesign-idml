@@ -495,6 +495,23 @@ impl IdmlDocument {
     /// Returns all story text in `designmap.xml` order.
     pub fn story_texts(&self) -> Result<IndexMap<String, String>> {
         let mut texts = IndexMap::with_capacity(self.design_map.story_srcs.len());
+        self.try_for_each_story_text(|story_id, text| {
+            texts.insert(story_id.to_owned(), text.to_owned());
+            Ok::<(), IdmlError>(())
+        })?;
+        Ok(texts)
+    }
+
+    /// Visits all loaded story text in `designmap.xml` order without collecting it.
+    ///
+    /// The visitor receives the manifest-derived story ID and borrowed story
+    /// text from this document. Returning an error from the visitor stops
+    /// iteration immediately.
+    pub fn try_for_each_story_text<E, F>(&self, mut visit: F) -> std::result::Result<(), E>
+    where
+        E: From<IdmlError>,
+        F: FnMut(&str, &str) -> std::result::Result<(), E>,
+    {
         for story_id in self.design_map.story_srcs.keys() {
             let story = self
                 .stories
@@ -502,10 +519,11 @@ impl IdmlDocument {
                 .ok_or_else(|| IdmlError::MissingReference {
                     kind: "story model",
                     id: story_id.clone(),
-                })?;
-            texts.insert(story_id.clone(), story.text.clone());
+                })
+                .map_err(E::from)?;
+            visit(story_id, &story.text)?;
         }
-        Ok(texts)
+        Ok(())
     }
 
     /// Resolves all text frames on a spread into owned story text records.
@@ -1969,6 +1987,81 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("u1", "Generated")]
         );
+    }
+
+    #[test]
+    fn visits_story_texts_in_designmap_order_without_collecting() {
+        let mut document = make_document();
+        document
+            .add_story(
+                "u2",
+                IdmlPath::new("Stories/Story_u2.xml").unwrap(),
+                Story {
+                    id: Some("u2".to_owned()),
+                    text: "Second".to_owned(),
+                },
+            )
+            .unwrap();
+
+        let mut visited = Vec::new();
+        document
+            .try_for_each_story_text(|story_id, text| {
+                visited.push((story_id.to_owned(), text.to_owned()));
+                Ok::<(), IdmlError>(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            visited,
+            [
+                ("u1".to_owned(), "Generated".to_owned()),
+                ("u2".to_owned(), "Second".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn story_text_visitor_can_stop_iteration() {
+        let mut document = make_document();
+        document
+            .add_story(
+                "u2",
+                IdmlPath::new("Stories/Story_u2.xml").unwrap(),
+                Story {
+                    id: Some("u2".to_owned()),
+                    text: "Second".to_owned(),
+                },
+            )
+            .unwrap();
+
+        let mut visited = Vec::new();
+        let err = document
+            .try_for_each_story_text(|story_id, _| {
+                visited.push(story_id.to_owned());
+                Err::<(), IdmlError>(IdmlError::InvalidPackage("stop"))
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, IdmlError::InvalidPackage("stop")));
+        assert_eq!(visited, ["u1".to_owned()]);
+    }
+
+    #[test]
+    fn story_text_visitor_reports_missing_story_model() {
+        let mut document = make_document();
+        document.stories.shift_remove("u1");
+
+        let err = document
+            .try_for_each_story_text(|_, _| Ok::<(), IdmlError>(()))
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingReference {
+                kind: "story model",
+                id,
+            } if id == "u1"
+        ));
     }
 
     #[test]

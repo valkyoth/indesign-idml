@@ -5,7 +5,7 @@ use std::io::Cursor;
 
 fn main() -> Result<()> {
     let mut package = IdmlPackage::new(Cursor::new(sample_package()?))?;
-    let mut document = IdmlDocument::read_from_package(&mut package)?;
+    let mut document = package.read_document()?;
 
     let story = document
         .stories
@@ -18,9 +18,9 @@ fn main() -> Result<()> {
 
     let edited = document.write_to(Cursor::new(Vec::new()))?.into_inner();
     let mut package = IdmlPackage::new(Cursor::new(edited))?;
-    let design_map = package.read_designmap()?;
+    let document = package.read_document()?;
 
-    package.try_for_each_story_text(&design_map, |story_id, text| {
+    document.try_for_each_story_text(|story_id, text| {
         println!("{story_id}: {text}");
         Ok::<(), IdmlError>(())
     })?;
