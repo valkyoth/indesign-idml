@@ -49,6 +49,53 @@ pub struct Story {
     pub id: Option<String>,
     /// Visible text extracted from `Content`, `Br`, and `Tab` elements.
     pub text: String,
+    /// Story root metadata, when present.
+    pub metadata: StoryMetadata,
+    /// Story preference metadata, when present.
+    pub preference: Option<StoryPreference>,
+    /// InCopy export option metadata, when present.
+    pub incopy_export_option: Option<InCopyExportOption>,
+}
+
+/// Common metadata on the `Story` root element.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StoryMetadata {
+    /// Applied table-of-contents style reference, when present.
+    pub applied_toc_style: Option<String>,
+    /// Track changes flag, when present.
+    pub track_changes: Option<bool>,
+    /// Story title, when present.
+    pub story_title: Option<String>,
+    /// Applied named grid reference, when present.
+    pub applied_named_grid: Option<String>,
+    /// User text flag, when present.
+    pub user_text: Option<bool>,
+    /// Endnote story flag, when present.
+    pub is_endnote_story: Option<bool>,
+}
+
+/// Metadata from the `StoryPreference` child element.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StoryPreference {
+    /// Optical margin alignment flag, when present.
+    pub optical_margin_alignment: Option<bool>,
+    /// Optical margin size, preserved as an IDML string.
+    pub optical_margin_size: Option<String>,
+    /// Frame type, preserved as an IDML string.
+    pub frame_type: Option<String>,
+    /// Story orientation, preserved as an IDML string.
+    pub story_orientation: Option<String>,
+    /// Story direction, preserved as an IDML string.
+    pub story_direction: Option<String>,
+}
+
+/// Metadata from the `InCopyExportOption` child element.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InCopyExportOption {
+    /// Include graphic proxies flag, when present.
+    pub include_graphic_proxies: Option<bool>,
+    /// Include all resources flag, when present.
+    pub include_all_resources: Option<bool>,
 }
 
 impl Story {
@@ -66,6 +113,9 @@ impl Story {
 
         let mut id = None;
         let mut text = String::new();
+        let mut metadata = StoryMetadata::default();
+        let mut preference = None;
+        let mut incopy_export_option = None;
         let mut content_depth = 0usize;
         let mut story_depth = 0usize;
         let mut seen_story = false;
@@ -88,8 +138,26 @@ impl Story {
                     if e.name().as_ref() == b"Story" {
                         enter_story_element(&mut seen_story, &mut story_depth)?;
                         id = optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?;
+                        metadata = StoryMetadata::from_xml_event(
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?;
                     } else if story_depth > 0 {
                         story_depth = increment_story_depth(story_depth)?;
+                    }
+                    if story_depth > 0 && e.name().as_ref() == b"StoryPreference" {
+                        preference = Some(StoryPreference::from_xml_event(
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?);
+                    } else if story_depth > 0 && e.name().as_ref() == b"InCopyExportOption" {
+                        incopy_export_option = Some(InCopyExportOption::from_xml_event(
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?);
                     }
                     if story_depth > 0 && e.name().as_ref() == b"Content" {
                         content_depth = 1;
@@ -156,6 +224,23 @@ impl Story {
                     if e.name().as_ref() == b"Story" {
                         enter_empty_story_element(&mut seen_story)?;
                         id = optional_attr(&e, "Self", &reader, options.max_attribute_bytes)?;
+                        metadata = StoryMetadata::from_xml_event(
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?;
+                    } else if story_depth > 0 && e.name().as_ref() == b"StoryPreference" {
+                        preference = Some(StoryPreference::from_xml_event(
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?);
+                    } else if story_depth > 0 && e.name().as_ref() == b"InCopyExportOption" {
+                        incopy_export_option = Some(InCopyExportOption::from_xml_event(
+                            &e,
+                            &reader,
+                            options.max_attribute_bytes,
+                        )?);
                     } else if story_depth > 0 && e.name().as_ref() == b"Br" {
                         push_limited(&mut text, "\n", options.max_text_bytes)?;
                     } else if story_depth > 0 && e.name().as_ref() == b"Tab" {
@@ -178,7 +263,13 @@ impl Story {
                 reason: "missing Story element",
             });
         }
-        Ok(Self { id, text })
+        Ok(Self {
+            id,
+            text,
+            metadata,
+            preference,
+            incopy_export_option,
+        })
     }
 
     /// Serializes this story into a minimal standalone story XML document.
@@ -196,6 +287,92 @@ impl XmlLoadable for Story {
 impl XmlSaveable for Story {
     fn to_xml(&self) -> Result<String> {
         serialize_story(self)
+    }
+}
+
+impl StoryMetadata {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            applied_toc_style: optional_attr(
+                event,
+                "AppliedTOCStyle",
+                reader,
+                max_attribute_bytes,
+            )?,
+            track_changes: optional_bool_attr(event, "TrackChanges", reader, max_attribute_bytes)?,
+            story_title: optional_attr(event, "StoryTitle", reader, max_attribute_bytes)?,
+            applied_named_grid: optional_attr(
+                event,
+                "AppliedNamedGrid",
+                reader,
+                max_attribute_bytes,
+            )?,
+            user_text: optional_bool_attr(event, "UserText", reader, max_attribute_bytes)?,
+            is_endnote_story: optional_bool_attr(
+                event,
+                "IsEndnoteStory",
+                reader,
+                max_attribute_bytes,
+            )?,
+        })
+    }
+}
+
+impl StoryPreference {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            optical_margin_alignment: optional_bool_attr(
+                event,
+                "OpticalMarginAlignment",
+                reader,
+                max_attribute_bytes,
+            )?,
+            optical_margin_size: optional_attr(
+                event,
+                "OpticalMarginSize",
+                reader,
+                max_attribute_bytes,
+            )?,
+            frame_type: optional_attr(event, "FrameType", reader, max_attribute_bytes)?,
+            story_orientation: optional_attr(
+                event,
+                "StoryOrientation",
+                reader,
+                max_attribute_bytes,
+            )?,
+            story_direction: optional_attr(event, "StoryDirection", reader, max_attribute_bytes)?,
+        })
+    }
+}
+
+impl InCopyExportOption {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            include_graphic_proxies: optional_bool_attr(
+                event,
+                "IncludeGraphicProxies",
+                reader,
+                max_attribute_bytes,
+            )?,
+            include_all_resources: optional_bool_attr(
+                event,
+                "IncludeAllResources",
+                reader,
+                max_attribute_bytes,
+            )?,
+        })
     }
 }
 
@@ -229,6 +406,29 @@ fn optional_attr(
         }
     }
     Ok(value)
+}
+
+fn optional_bool_attr(
+    event: &BytesStart<'_>,
+    attribute: &'static str,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<Option<bool>> {
+    optional_attr(event, attribute, reader, max_attribute_bytes)?
+        .map(|value| parse_bool_attr(event, attribute, &value))
+        .transpose()
+}
+
+fn parse_bool_attr(event: &BytesStart<'_>, attribute: &'static str, value: &str) -> Result<bool> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(IdmlError::InvalidAttribute {
+            element: String::from_utf8_lossy(event.name().as_ref()).into_owned(),
+            attribute,
+            reason: "expected boolean",
+        }),
+    }
 }
 
 fn enforce_story_attribute_bytes(actual: usize, max_attribute_bytes: usize) -> Result<()> {
@@ -352,6 +552,7 @@ fn serialize_story(story: &Story) -> Result<String> {
     if let Some(id) = &story.id {
         push_attr(&mut xml, "Story", "Self", id)?;
     }
+    push_story_metadata(&mut xml, &story.metadata)?;
     xml.push_str(">\n  <ParagraphStyleRange>\n    <CharacterStyleRange>");
 
     let mut content = String::new();
@@ -370,7 +571,14 @@ fn serialize_story(story: &Story) -> Result<String> {
     }
     push_content_if_needed(&mut xml, &mut content);
 
-    xml.push_str("</CharacterStyleRange>\n  </ParagraphStyleRange>\n</Story>\n");
+    xml.push_str("</CharacterStyleRange>\n  </ParagraphStyleRange>\n");
+    if let Some(preference) = &story.preference {
+        serialize_story_preference(&mut xml, preference)?;
+    }
+    if let Some(option) = &story.incopy_export_option {
+        serialize_incopy_export_option(&mut xml, option)?;
+    }
+    xml.push_str("</Story>\n");
     Ok(xml)
 }
 
@@ -378,7 +586,67 @@ fn validate_serialized_story_limits(story: &Story) -> Result<()> {
     if let Some(id) = &story.id {
         enforce_story_attribute_bytes(id.len(), DEFAULT_MAX_STORY_ATTRIBUTE_BYTES)?;
     }
+    validate_story_metadata(&story.metadata)?;
+    if let Some(preference) = &story.preference {
+        validate_story_preference(preference)?;
+    }
+    if let Some(option) = &story.incopy_export_option {
+        validate_incopy_export_option(option)?;
+    }
     enforce_serialized_story_text_bytes(story.text.len())?;
+    Ok(())
+}
+
+fn validate_story_metadata(metadata: &StoryMetadata) -> Result<()> {
+    validate_optional_story_attr(
+        "Story",
+        "AppliedTOCStyle",
+        metadata.applied_toc_style.as_deref(),
+    )?;
+    validate_optional_story_attr("Story", "StoryTitle", metadata.story_title.as_deref())?;
+    validate_optional_story_attr(
+        "Story",
+        "AppliedNamedGrid",
+        metadata.applied_named_grid.as_deref(),
+    )
+}
+
+fn validate_story_preference(preference: &StoryPreference) -> Result<()> {
+    validate_optional_story_attr(
+        "StoryPreference",
+        "OpticalMarginSize",
+        preference.optical_margin_size.as_deref(),
+    )?;
+    validate_optional_story_attr(
+        "StoryPreference",
+        "FrameType",
+        preference.frame_type.as_deref(),
+    )?;
+    validate_optional_story_attr(
+        "StoryPreference",
+        "StoryOrientation",
+        preference.story_orientation.as_deref(),
+    )?;
+    validate_optional_story_attr(
+        "StoryPreference",
+        "StoryDirection",
+        preference.story_direction.as_deref(),
+    )
+}
+
+fn validate_incopy_export_option(_: &InCopyExportOption) -> Result<()> {
+    Ok(())
+}
+
+fn validate_optional_story_attr(
+    element: &'static str,
+    attribute: &'static str,
+    value: Option<&str>,
+) -> Result<()> {
+    if let Some(value) = value {
+        enforce_story_attribute_bytes(value.len(), DEFAULT_MAX_STORY_ATTRIBUTE_BYTES)?;
+        validate_xml_attribute(element, attribute, value)?;
+    }
     Ok(())
 }
 
@@ -403,6 +671,90 @@ fn push_content_if_needed(xml: &mut String, content: &mut String) {
     content.clear();
 }
 
+fn push_story_metadata(xml: &mut String, metadata: &StoryMetadata) -> Result<()> {
+    if let Some(applied_toc_style) = &metadata.applied_toc_style {
+        push_attr(xml, "Story", "AppliedTOCStyle", applied_toc_style)?;
+    }
+    if let Some(track_changes) = metadata.track_changes {
+        push_attr(xml, "Story", "TrackChanges", bool_str(track_changes))?;
+    }
+    if let Some(story_title) = &metadata.story_title {
+        push_attr(xml, "Story", "StoryTitle", story_title)?;
+    }
+    if let Some(applied_named_grid) = &metadata.applied_named_grid {
+        push_attr(xml, "Story", "AppliedNamedGrid", applied_named_grid)?;
+    }
+    if let Some(user_text) = metadata.user_text {
+        push_attr(xml, "Story", "UserText", bool_str(user_text))?;
+    }
+    if let Some(is_endnote_story) = metadata.is_endnote_story {
+        push_attr(xml, "Story", "IsEndnoteStory", bool_str(is_endnote_story))?;
+    }
+    Ok(())
+}
+
+fn serialize_story_preference(xml: &mut String, preference: &StoryPreference) -> Result<()> {
+    xml.push_str("  <StoryPreference");
+    if let Some(optical_margin_alignment) = preference.optical_margin_alignment {
+        push_attr(
+            xml,
+            "StoryPreference",
+            "OpticalMarginAlignment",
+            bool_str(optical_margin_alignment),
+        )?;
+    }
+    if let Some(optical_margin_size) = &preference.optical_margin_size {
+        push_attr(
+            xml,
+            "StoryPreference",
+            "OpticalMarginSize",
+            optical_margin_size,
+        )?;
+    }
+    if let Some(frame_type) = &preference.frame_type {
+        push_attr(xml, "StoryPreference", "FrameType", frame_type)?;
+    }
+    if let Some(story_orientation) = &preference.story_orientation {
+        push_attr(
+            xml,
+            "StoryPreference",
+            "StoryOrientation",
+            story_orientation,
+        )?;
+    }
+    if let Some(story_direction) = &preference.story_direction {
+        push_attr(xml, "StoryPreference", "StoryDirection", story_direction)?;
+    }
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn serialize_incopy_export_option(xml: &mut String, option: &InCopyExportOption) -> Result<()> {
+    xml.push_str("  <InCopyExportOption");
+    if let Some(include_graphic_proxies) = option.include_graphic_proxies {
+        push_attr(
+            xml,
+            "InCopyExportOption",
+            "IncludeGraphicProxies",
+            bool_str(include_graphic_proxies),
+        )?;
+    }
+    if let Some(include_all_resources) = option.include_all_resources {
+        push_attr(
+            xml,
+            "InCopyExportOption",
+            "IncludeAllResources",
+            bool_str(include_all_resources),
+        )?;
+    }
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn bool_str(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
 fn push_attr(
     xml: &mut String,
     element: &'static str,
@@ -420,7 +772,7 @@ fn push_attr(
 
 #[cfg(test)]
 mod tests {
-    use super::{Story, StoryParseOptions};
+    use super::{InCopyExportOption, Story, StoryMetadata, StoryParseOptions, StoryPreference};
     use crate::IdmlError;
 
     #[test]
@@ -456,6 +808,49 @@ mod tests {
 
         assert_eq!(story.id.as_deref(), Some("u2"));
         assert_eq!(story.text, "Wrapped\nStory");
+    }
+
+    #[test]
+    fn parses_and_serializes_story_metadata() {
+        let xml = r#"<Story Self="u2" AppliedTOCStyle="n" TrackChanges="false" StoryTitle="$ID/" AppliedNamedGrid="n" UserText="true" IsEndnoteStory="false">
+  <StoryPreference OpticalMarginAlignment="true" OpticalMarginSize="12" FrameType="TextFrameType" StoryOrientation="Horizontal" StoryDirection="LeftToRightDirection" />
+  <InCopyExportOption IncludeGraphicProxies="true" IncludeAllResources="false" />
+  <ParagraphStyleRange>
+    <CharacterStyleRange>
+      <Content>Styled metadata</Content>
+    </CharacterStyleRange>
+  </ParagraphStyleRange>
+</Story>"#;
+
+        let story = Story::from_xml(xml).unwrap();
+
+        assert_eq!(story.metadata.applied_toc_style.as_deref(), Some("n"));
+        assert_eq!(story.metadata.track_changes, Some(false));
+        assert_eq!(story.metadata.story_title.as_deref(), Some("$ID/"));
+        assert_eq!(story.metadata.applied_named_grid.as_deref(), Some("n"));
+        assert_eq!(story.metadata.user_text, Some(true));
+        assert_eq!(story.metadata.is_endnote_story, Some(false));
+        let preference = story.preference.as_ref().unwrap();
+        assert_eq!(preference.optical_margin_alignment, Some(true));
+        assert_eq!(preference.optical_margin_size.as_deref(), Some("12"));
+        assert_eq!(preference.frame_type.as_deref(), Some("TextFrameType"));
+        assert_eq!(preference.story_orientation.as_deref(), Some("Horizontal"));
+        assert_eq!(
+            preference.story_direction.as_deref(),
+            Some("LeftToRightDirection")
+        );
+        let incopy = story.incopy_export_option.as_ref().unwrap();
+        assert_eq!(incopy.include_graphic_proxies, Some(true));
+        assert_eq!(incopy.include_all_resources, Some(false));
+
+        let serialized = story.to_xml().unwrap();
+        assert!(serialized.contains("AppliedTOCStyle=\"n\""));
+        assert!(serialized.contains("TrackChanges=\"false\""));
+        assert!(serialized.contains("StoryTitle=\"$ID/\""));
+        assert!(serialized.contains("OpticalMarginAlignment=\"true\""));
+        assert!(serialized.contains("StoryDirection=\"LeftToRightDirection\""));
+        assert!(serialized.contains("IncludeGraphicProxies=\"true\""));
+        assert_eq!(Story::from_xml(&serialized).unwrap(), story);
     }
 
     #[test]
@@ -762,12 +1157,34 @@ mod tests {
         let story = Story {
             id: Some("u&\"2".to_owned()),
             text: "Hello & <world>\nNext\tCell".to_owned(),
+            metadata: StoryMetadata {
+                applied_toc_style: Some("n".to_owned()),
+                track_changes: Some(false),
+                story_title: Some("$ID/".to_owned()),
+                applied_named_grid: Some("n".to_owned()),
+                user_text: Some(true),
+                is_endnote_story: Some(false),
+            },
+            preference: Some(StoryPreference {
+                optical_margin_alignment: Some(false),
+                optical_margin_size: Some("12".to_owned()),
+                frame_type: Some("TextFrameType".to_owned()),
+                story_orientation: Some("Horizontal".to_owned()),
+                story_direction: Some("LeftToRightDirection".to_owned()),
+            }),
+            incopy_export_option: Some(InCopyExportOption {
+                include_graphic_proxies: Some(true),
+                include_all_resources: Some(false),
+            }),
         };
 
         let xml = <Story as crate::XmlSaveable>::to_xml(&story).unwrap();
         let parsed = <Story as crate::XmlLoadable>::from_xml(&xml).unwrap();
 
         assert!(xml.contains("Self=\"u&amp;&quot;2\""));
+        assert!(xml.contains("AppliedTOCStyle=\"n\""));
+        assert!(xml.contains("StoryPreference"));
+        assert!(xml.contains("InCopyExportOption"));
         assert!(xml.contains("<Content>Hello &amp; &lt;world&gt;</Content><Br/>"));
         assert!(xml.contains("<Tab/><Content>Cell</Content>"));
         assert_eq!(parsed, story);
@@ -778,6 +1195,9 @@ mod tests {
         let story = Story {
             id: None,
             text: "a".repeat(super::DEFAULT_MAX_STORY_TEXT_BYTES + 1),
+            metadata: Default::default(),
+            preference: None,
+            incopy_export_option: None,
         };
 
         let err = story.to_xml().unwrap_err();
@@ -797,6 +1217,9 @@ mod tests {
         let story = Story {
             id: Some("u".repeat(super::DEFAULT_MAX_STORY_ATTRIBUTE_BYTES + 1)),
             text: "valid".to_owned(),
+            metadata: Default::default(),
+            preference: None,
+            incopy_export_option: None,
         };
 
         let err = story.to_xml().unwrap_err();
@@ -816,6 +1239,9 @@ mod tests {
         let story = Story {
             id: Some("u1".to_owned()),
             text: "bad\u{0}".to_owned(),
+            metadata: Default::default(),
+            preference: None,
+            incopy_export_option: None,
         };
 
         let err = story.to_xml().unwrap_err();
@@ -834,6 +1260,9 @@ mod tests {
         let story = Story {
             id: Some("u\u{0}".to_owned()),
             text: "valid".to_owned(),
+            metadata: Default::default(),
+            preference: None,
+            incopy_export_option: None,
         };
 
         let err = story.to_xml().unwrap_err();

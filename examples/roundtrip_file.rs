@@ -43,6 +43,7 @@ struct Snapshot {
     preserved_entry_count: usize,
     preserved_entries: Vec<PreservedEntrySummary>,
     story_texts: Vec<(String, String)>,
+    story_summaries: Vec<StorySummary>,
     spread_summaries: Vec<SpreadSummary>,
 }
 
@@ -69,6 +70,41 @@ struct PreservedEntrySummary {
     compression: String,
     byte_len: usize,
     byte_hash: u64,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StorySummary {
+    id: String,
+    self_id: Option<String>,
+    text: String,
+    metadata: StoryMetadataSummary,
+    preference: Option<StoryPreferenceSummary>,
+    incopy_export_option: Option<InCopyExportOptionSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StoryMetadataSummary {
+    applied_toc_style: Option<String>,
+    track_changes: Option<bool>,
+    story_title: Option<String>,
+    applied_named_grid: Option<String>,
+    user_text: Option<bool>,
+    is_endnote_story: Option<bool>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StoryPreferenceSummary {
+    optical_margin_alignment: Option<bool>,
+    optical_margin_size: Option<String>,
+    frame_type: Option<String>,
+    story_orientation: Option<String>,
+    story_direction: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct InCopyExportOptionSummary {
+    include_graphic_proxies: Option<bool>,
+    include_all_resources: Option<bool>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -278,6 +314,29 @@ impl Snapshot {
             });
             Ok::<(), IdmlError>(())
         })?;
+        let story_summaries =
+            design_map
+                .story_ids()
+                .map(|story_id| {
+                    let story = document.stories.get(story_id).ok_or_else(|| {
+                        IdmlError::MissingReference {
+                            kind: "story model",
+                            id: story_id.to_owned(),
+                        }
+                    })?;
+                    Ok(StorySummary {
+                        id: story_id.to_owned(),
+                        self_id: story.id.clone(),
+                        text: story.text.clone(),
+                        metadata: summarize_story_metadata(&story.metadata),
+                        preference: story.preference.as_ref().map(summarize_story_preference),
+                        incopy_export_option: story
+                            .incopy_export_option
+                            .as_ref()
+                            .map(summarize_incopy_export_option),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
         let spread_summaries =
             design_map
                 .spread_ids()
@@ -340,8 +399,37 @@ impl Snapshot {
             preserved_entry_count: document.preserved_entries.len(),
             preserved_entries,
             story_texts,
+            story_summaries,
             spread_summaries,
         })
+    }
+}
+
+fn summarize_story_metadata(metadata: &StoryMetadata) -> StoryMetadataSummary {
+    StoryMetadataSummary {
+        applied_toc_style: metadata.applied_toc_style.clone(),
+        track_changes: metadata.track_changes,
+        story_title: metadata.story_title.clone(),
+        applied_named_grid: metadata.applied_named_grid.clone(),
+        user_text: metadata.user_text,
+        is_endnote_story: metadata.is_endnote_story,
+    }
+}
+
+fn summarize_story_preference(preference: &StoryPreference) -> StoryPreferenceSummary {
+    StoryPreferenceSummary {
+        optical_margin_alignment: preference.optical_margin_alignment,
+        optical_margin_size: preference.optical_margin_size.clone(),
+        frame_type: preference.frame_type.clone(),
+        story_orientation: preference.story_orientation.clone(),
+        story_direction: preference.story_direction.clone(),
+    }
+}
+
+fn summarize_incopy_export_option(option: &InCopyExportOption) -> InCopyExportOptionSummary {
+    InCopyExportOptionSummary {
+        include_graphic_proxies: option.include_graphic_proxies,
+        include_all_resources: option.include_all_resources,
     }
 }
 

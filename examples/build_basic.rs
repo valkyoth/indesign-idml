@@ -15,6 +15,9 @@ fn main() -> Result<()> {
         Story {
             id: Some("u1".to_owned()),
             text: "Catalog entry".to_owned(),
+            metadata: Default::default(),
+            preference: None,
+            incopy_export_option: None,
         },
     )?;
     document.add_spread(

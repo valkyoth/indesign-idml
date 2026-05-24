@@ -2885,6 +2885,9 @@ mod tests {
         let story = Story {
             id: Some("u1".to_owned()),
             text: "Generated & safe\nline".to_owned(),
+            metadata: Default::default(),
+            preference: None,
+            incopy_export_option: None,
         };
         let mut writer = IdmlPackageWriter::new(Cursor::new(Vec::new())).unwrap();
         writer.add_file("designmap.xml", designmap).unwrap();

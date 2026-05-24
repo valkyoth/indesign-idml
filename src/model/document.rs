@@ -1562,6 +1562,9 @@ mod tests {
                 Story {
                     id: Some("u1".to_owned()),
                     text: "Generated".to_owned(),
+                    metadata: Default::default(),
+                    preference: None,
+                    incopy_export_option: None,
                 },
             )
             .unwrap();
@@ -1627,6 +1630,9 @@ mod tests {
                 Story {
                     id: Some("u10".to_owned()),
                     text: "duplicate".to_owned(),
+                    metadata: Default::default(),
+                    preference: None,
+                    incopy_export_option: None,
                 },
             )
             .unwrap_err();
@@ -1657,6 +1663,9 @@ mod tests {
                 Story {
                     id: Some("u1".to_owned()),
                     text: "not inserted".to_owned(),
+                    metadata: Default::default(),
+                    preference: None,
+                    incopy_export_option: None,
                 },
             )
             .unwrap_err();
@@ -1691,6 +1700,9 @@ mod tests {
                 Story {
                     id: Some("layer1".to_owned()),
                     text: "duplicate".to_owned(),
+                    metadata: Default::default(),
+                    preference: None,
+                    incopy_export_option: None,
                 },
             )
             .unwrap_err();
@@ -1729,6 +1741,9 @@ mod tests {
                 Story {
                     id: Some("group1".to_owned()),
                     text: "duplicate".to_owned(),
+                    metadata: Default::default(),
+                    preference: None,
+                    incopy_export_option: None,
                 },
             )
             .unwrap_err();
@@ -1783,6 +1798,9 @@ mod tests {
                 Story {
                     id: Some("wrong".to_owned()),
                     text: "bad".to_owned(),
+                    metadata: Default::default(),
+                    preference: None,
+                    incopy_export_option: None,
                 },
             )
             .unwrap_err();
@@ -2286,6 +2304,9 @@ mod tests {
                 Story {
                     id: Some("u2".to_owned()),
                     text: "Second".to_owned(),
+                    metadata: Default::default(),
+                    preference: None,
+                    incopy_export_option: None,
                 },
             )
             .unwrap();
@@ -2317,6 +2338,9 @@ mod tests {
                 Story {
                     id: Some("u2".to_owned()),
                     text: "Second".to_owned(),
+                    metadata: Default::default(),
+                    preference: None,
+                    incopy_export_option: None,
                 },
             )
             .unwrap();
@@ -2373,6 +2397,9 @@ mod tests {
                 Story {
                     id: Some("u2".to_owned()),
                     text: "Second".to_owned(),
+                    metadata: Default::default(),
+                    preference: None,
+                    incopy_export_option: None,
                 },
             )
             .unwrap();
@@ -2428,6 +2455,9 @@ mod tests {
                 Story {
                     id: Some("u2".to_owned()),
                     text: "Second".to_owned(),
+                    metadata: Default::default(),
+                    preference: None,
+                    incopy_export_option: None,
                 },
             )
             .unwrap();
@@ -2970,6 +3000,9 @@ mod tests {
             Story {
                 id: Some("u2".to_owned()),
                 text: "extra".to_owned(),
+                metadata: Default::default(),
+                preference: None,
+                incopy_export_option: None,
             },
         );
 
@@ -3654,6 +3687,9 @@ mod tests {
             Story {
                 id: Some("u1".to_owned()),
                 text: "Generated".to_owned(),
+                metadata: Default::default(),
+                preference: None,
+                incopy_export_option: None,
             },
         );
         document.insert_spread(

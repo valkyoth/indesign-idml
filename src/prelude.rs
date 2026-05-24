@@ -23,5 +23,7 @@ pub use crate::model::spread::{
     PageItemMetadata, PathGeometry, PathPoint, Point, Polygon, Rect, RectMm, Rectangle, Spread,
     SpreadParseOptions, TextFrame,
 };
-pub use crate::model::story::{Story, StoryParseOptions};
+pub use crate::model::story::{
+    InCopyExportOption, Story, StoryMetadata, StoryParseOptions, StoryPreference,
+};
 pub use crate::traits::{XmlLoadable, XmlSaveable};
