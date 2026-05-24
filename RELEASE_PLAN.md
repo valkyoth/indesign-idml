@@ -13,6 +13,7 @@ Every release candidate must pass:
 - `cargo audit`
 - `cargo license`
 - SBOM generation in SPDX and CycloneDX formats
+- `cargo package --locked` verification
 - reproducible release artifact check
 - review of new public APIs for panic-free behavior on untrusted input
 - dependency review against current crates.io versions

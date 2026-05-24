@@ -61,3 +61,5 @@ do
         exit 1
     fi
 done
+
+cargo package --locked --allow-dirty
