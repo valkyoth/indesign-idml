@@ -27,8 +27,16 @@ fn main() -> Result<()> {
     writer.add_file(
         "designmap.xml",
         br#"<Document Self="d1">
+  <idPkg:Spread src="Spreads/Spread_u10.xml" />
   <idPkg:Story src="Stories/Story_u1.xml" />
 </Document>"#,
+    )?;
+    writer.add_file(
+        "Spreads/Spread_u10.xml",
+        br#"<Spread Self="u10">
+  <Page Self="p1" GeometricBounds="0 0 100 100" />
+  <TextFrame Self="tf1" ParentStory="u1" GeometricBounds="10 10 20 20" />
+</Spread>"#,
     )?;
     writer.add_file(
         "Stories/Story_u1.xml",
@@ -39,6 +47,15 @@ fn main() -> Result<()> {
     let mut package = IdmlPackage::new(Cursor::new(bytes.clone()))?;
     let document = package.read_document()?;
     assert_eq!(document.stories["u1"].text, "Downstream");
+    let mut frame_seen = false;
+    document.try_for_each_spread_text_on_page("u10", "p1", |frame| {
+        assert_eq!(frame.frame.id.as_deref(), Some("tf1"));
+        assert_eq!(frame.story_id, "u1");
+        assert_eq!(frame.text, "Downstream");
+        frame_seen = true;
+        Ok::<(), IdmlError>(())
+    })?;
+    assert!(frame_seen);
 
     let mut package = IdmlPackage::new(Cursor::new(bytes))?;
     let design_map = package.read_designmap()?;
