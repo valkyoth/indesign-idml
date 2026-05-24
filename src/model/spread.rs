@@ -148,6 +148,17 @@ impl Spread {
                             &mut page_item_count,
                             options.max_page_items,
                         )?;
+                    } else if e.name().as_ref() == b"Oval" {
+                        push_page_item_limited(
+                            &mut spread.page_items,
+                            PageItem::Oval(Oval::from_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?),
+                            &mut page_item_count,
+                            options.max_page_items,
+                        )?;
                     } else if e.name().as_ref() == b"Group" {
                         let group =
                             Group::from_xml_event(&e, &reader, options.max_attribute_bytes)?;
@@ -206,6 +217,17 @@ impl Spread {
                         push_page_item_limited(
                             &mut spread.page_items,
                             PageItem::Rectangle(Rectangle::from_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?),
+                            &mut page_item_count,
+                            options.max_page_items,
+                        )?;
+                    } else if e.name().as_ref() == b"Oval" {
+                        push_page_item_limited(
+                            &mut spread.page_items,
+                            PageItem::Oval(Oval::from_xml_event(
                                 &e,
                                 &reader,
                                 options.max_attribute_bytes,
@@ -368,6 +390,38 @@ impl Rectangle {
     }
 }
 
+/// Oval geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Oval {
+    /// Oval `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Layer ID from `ItemLayer`, when present.
+    pub layer_id: Option<String>,
+    /// Geometric bounds in points, when represented directly.
+    pub geometric_bounds: Option<Rect>,
+}
+
+impl Oval {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
+        let layer_id = optional_attr(event, "ItemLayer", reader, max_attribute_bytes)?;
+        let geometric_bounds =
+            optional_attr(event, "GeometricBounds", reader, max_attribute_bytes)?
+                .map(|value| parse_geometric_bounds("Oval", &value))
+                .transpose()?;
+
+        Ok(Self {
+            id,
+            layer_id,
+            geometric_bounds,
+        })
+    }
+}
+
 /// Grouped page items in spread z-order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
@@ -410,6 +464,8 @@ pub enum PageItem {
     TextFrame(TextFrame),
     /// A rectangle page item.
     Rectangle(Rectangle),
+    /// An oval page item.
+    Oval(Oval),
     /// A grouped page item.
     Group(Group),
 }
@@ -778,6 +834,17 @@ fn parse_group_contents(
                         page_item_count,
                         options.max_page_items,
                     )?;
+                } else if e.name().as_ref() == b"Oval" {
+                    push_page_item_limited(
+                        &mut group.page_items,
+                        PageItem::Oval(Oval::from_xml_event(
+                            &e,
+                            reader,
+                            options.max_attribute_bytes,
+                        )?),
+                        page_item_count,
+                        options.max_page_items,
+                    )?;
                 } else if e.name().as_ref() == b"Group" {
                     let child = Group::from_xml_event(&e, reader, options.max_attribute_bytes)?;
                     let child = parse_group_contents(
@@ -822,6 +889,17 @@ fn parse_group_contents(
                     push_page_item_limited(
                         &mut group.page_items,
                         PageItem::Rectangle(Rectangle::from_xml_event(
+                            &e,
+                            reader,
+                            options.max_attribute_bytes,
+                        )?),
+                        page_item_count,
+                        options.max_page_items,
+                    )?;
+                } else if e.name().as_ref() == b"Oval" {
+                    push_page_item_limited(
+                        &mut group.page_items,
+                        PageItem::Oval(Oval::from_xml_event(
                             &e,
                             reader,
                             options.max_attribute_bytes,
@@ -962,7 +1040,7 @@ fn count_serialized_page_item(count: usize, page_item: &PageItem) -> Result<usiz
     })?;
 
     match page_item {
-        PageItem::TextFrame(_) | PageItem::Rectangle(_) => Ok(count),
+        PageItem::TextFrame(_) | PageItem::Rectangle(_) | PageItem::Oval(_) => Ok(count),
         PageItem::Group(group) => group
             .page_items
             .iter()
@@ -1114,7 +1192,7 @@ fn collect_text_frames_from_page_item<'a>(
 ) {
     match page_item {
         PageItem::TextFrame(frame) => frames.push(frame),
-        PageItem::Rectangle(_) => {}
+        PageItem::Rectangle(_) | PageItem::Oval(_) => {}
         PageItem::Group(group) => {
             for child in &group.page_items {
                 collect_text_frames_from_page_item(child, frames);
@@ -1145,6 +1223,7 @@ fn validate_page_item(page_item: &PageItem) -> Result<()> {
     match page_item {
         PageItem::TextFrame(frame) => validate_text_frame(frame),
         PageItem::Rectangle(rectangle) => validate_rectangle(rectangle),
+        PageItem::Oval(oval) => validate_oval(oval),
         PageItem::Group(group) => validate_group(group),
     }
 }
@@ -1154,6 +1233,15 @@ fn validate_rectangle(rectangle: &Rectangle) -> Result<()> {
     validate_optional_attr("Rectangle", "ItemLayer", rectangle.layer_id.as_deref())?;
     if let Some(bounds) = rectangle.geometric_bounds {
         validate_finite_bounds("Rectangle", bounds)?;
+    }
+    Ok(())
+}
+
+fn validate_oval(oval: &Oval) -> Result<()> {
+    validate_optional_attr("Oval", "Self", oval.id.as_deref())?;
+    validate_optional_attr("Oval", "ItemLayer", oval.layer_id.as_deref())?;
+    if let Some(bounds) = oval.geometric_bounds {
+        validate_finite_bounds("Oval", bounds)?;
     }
     Ok(())
 }
@@ -1202,6 +1290,7 @@ fn serialize_page_item(xml: &mut String, page_item: &PageItem, indent: usize) ->
     match page_item {
         PageItem::TextFrame(frame) => serialize_text_frame_with_indent(xml, frame, indent),
         PageItem::Rectangle(rectangle) => serialize_rectangle_with_indent(xml, rectangle, indent),
+        PageItem::Oval(oval) => serialize_oval_with_indent(xml, oval, indent),
         PageItem::Group(group) => serialize_group(xml, group, indent),
     }
 }
@@ -1246,6 +1335,23 @@ fn serialize_rectangle_with_indent(
     if let Some(bounds) = rectangle.geometric_bounds {
         let bounds = format_geometric_bounds("Rectangle", bounds)?;
         push_attr(xml, "Rectangle", "GeometricBounds", &bounds)?;
+    }
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn serialize_oval_with_indent(xml: &mut String, oval: &Oval, indent: usize) -> Result<()> {
+    push_indent(xml, indent);
+    xml.push_str("<Oval");
+    if let Some(id) = &oval.id {
+        push_attr(xml, "Oval", "Self", id)?;
+    }
+    if let Some(layer_id) = &oval.layer_id {
+        push_attr(xml, "Oval", "ItemLayer", layer_id)?;
+    }
+    if let Some(bounds) = oval.geometric_bounds {
+        let bounds = format_geometric_bounds("Oval", bounds)?;
+        push_attr(xml, "Oval", "GeometricBounds", &bounds)?;
     }
     xml.push_str(" />\n");
     Ok(())
@@ -1346,7 +1452,9 @@ fn push_optional_attr(xml: &mut String, name: &'static str, value: Option<&str>)
 
 #[cfg(test)]
 mod tests {
-    use super::{Group, Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame};
+    use super::{
+        Group, Oval, Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions, TextFrame,
+    };
     use crate::IdmlError;
     use crate::core::units::Points;
 
@@ -1586,6 +1694,40 @@ mod tests {
                 geometric_bounds: None,
                 ..
             }) if id.as_deref() == Some("r2")
+        ));
+    }
+
+    #[test]
+    fn parses_ovals_and_preserves_page_item_order() {
+        let xml = r#"<Spread Self="u10">
+  <Oval Self="o1" ItemLayer="layer1" GeometricBounds="0 0 72 72" />
+  <TextFrame Self="tf1" ParentStory="u2" GeometricBounds="72 0 144 72" />
+  <Oval Self="o2" />
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.text_frames.len(), 1);
+        assert_eq!(spread.page_items.len(), 3);
+        assert!(matches!(
+            &spread.page_items[0],
+            PageItem::Oval(Oval {
+                id,
+                layer_id,
+                geometric_bounds: Some(_),
+            }) if id.as_deref() == Some("o1") && layer_id.as_deref() == Some("layer1")
+        ));
+        assert!(matches!(
+            &spread.page_items[1],
+            PageItem::TextFrame(TextFrame { id, .. }) if id.as_deref() == Some("tf1")
+        ));
+        assert!(matches!(
+            &spread.page_items[2],
+            PageItem::Oval(Oval {
+                id,
+                geometric_bounds: None,
+                ..
+            }) if id.as_deref() == Some("o2")
         ));
     }
 
@@ -2092,6 +2234,16 @@ mod tests {
                     layer_id: Some("layer2".to_owned()),
                     geometric_bounds: None,
                 }),
+                PageItem::Oval(Oval {
+                    id: Some("o1".to_owned()),
+                    layer_id: Some("layer4".to_owned()),
+                    geometric_bounds: Some(Rect::new(
+                        Points::new(0.0),
+                        Points::new(0.0),
+                        Points::new(20.0),
+                        Points::new(20.0),
+                    )),
+                }),
                 PageItem::Group(Group {
                     id: Some("g1".to_owned()),
                     layer_id: Some("layer3".to_owned()),
@@ -2107,6 +2259,8 @@ mod tests {
         assert!(xml.contains("ItemLayer=\"layer1\""));
         assert!(xml.contains("ItemLayer=\"layer2\""));
         assert!(xml.contains("ItemLayer=\"layer3\""));
+        assert!(xml.contains("ItemLayer=\"layer4\""));
+        assert!(xml.contains("<Oval"));
         assert_eq!(parsed, spread);
     }
 
