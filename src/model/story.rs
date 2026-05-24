@@ -109,6 +109,18 @@ pub struct ParagraphStyleRange {
     pub justification: Option<String>,
     /// Hyphenation flag, when present.
     pub hyphenation: Option<bool>,
+    /// Rule-above line weight, preserved as an IDML string.
+    pub rule_above_line_weight: Option<String>,
+    /// Rule-below line weight, preserved as an IDML string.
+    pub rule_below_line_weight: Option<String>,
+    /// Hyphenation zone, preserved as an IDML string.
+    pub hyphenation_zone: Option<String>,
+    /// Split-column inside gutter, preserved as an IDML string.
+    pub split_column_inside_gutter: Option<String>,
+    /// Space before, preserved as an IDML string.
+    pub space_before: Option<String>,
+    /// Space after, preserved as an IDML string.
+    pub space_after: Option<String>,
     /// Paragraph style properties, when present.
     pub properties: ParagraphStyleProperties,
     /// Character ranges in this paragraph range.
@@ -141,6 +153,20 @@ pub struct CharacterStyleRange {
     pub tracking: Option<String>,
     /// Stroke weight value, preserved as an IDML string.
     pub stroke_weight: Option<String>,
+    /// Ruby font size value, preserved as an IDML string.
+    pub ruby_font_size: Option<String>,
+    /// Kenten font size value, preserved as an IDML string.
+    pub kenten_font_size: Option<String>,
+    /// Capitalization value, when present.
+    pub capitalization: Option<String>,
+    /// Miter limit value, preserved as an IDML string.
+    pub miter_limit: Option<String>,
+    /// Stroke alignment value, when present.
+    pub stroke_alignment: Option<String>,
+    /// Horizontal scale value, preserved as an IDML string.
+    pub horizontal_scale: Option<String>,
+    /// Vertical scale value, preserved as an IDML string.
+    pub vertical_scale: Option<String>,
     /// Character style properties, when present.
     pub properties: CharacterStyleProperties,
     /// Visible text carried by this character range.
@@ -639,6 +665,27 @@ impl ParagraphStyleRange {
             )?,
             justification: optional_attr(event, "Justification", reader, max_attribute_bytes)?,
             hyphenation: optional_bool_attr(event, "Hyphenation", reader, max_attribute_bytes)?,
+            rule_above_line_weight: optional_attr(
+                event,
+                "RuleAboveLineWeight",
+                reader,
+                max_attribute_bytes,
+            )?,
+            rule_below_line_weight: optional_attr(
+                event,
+                "RuleBelowLineWeight",
+                reader,
+                max_attribute_bytes,
+            )?,
+            hyphenation_zone: optional_attr(event, "HyphenationZone", reader, max_attribute_bytes)?,
+            split_column_inside_gutter: optional_attr(
+                event,
+                "SplitColumnInsideGutter",
+                reader,
+                max_attribute_bytes,
+            )?,
+            space_before: optional_attr(event, "SpaceBefore", reader, max_attribute_bytes)?,
+            space_after: optional_attr(event, "SpaceAfter", reader, max_attribute_bytes)?,
             properties: ParagraphStyleProperties::default(),
             character_style_ranges: Vec::new(),
         })
@@ -663,6 +710,13 @@ impl CharacterStyleRange {
             fill_color: optional_attr(event, "FillColor", reader, max_attribute_bytes)?,
             tracking: optional_attr(event, "Tracking", reader, max_attribute_bytes)?,
             stroke_weight: optional_attr(event, "StrokeWeight", reader, max_attribute_bytes)?,
+            ruby_font_size: optional_attr(event, "RubyFontSize", reader, max_attribute_bytes)?,
+            kenten_font_size: optional_attr(event, "KentenFontSize", reader, max_attribute_bytes)?,
+            capitalization: optional_attr(event, "Capitalization", reader, max_attribute_bytes)?,
+            miter_limit: optional_attr(event, "MiterLimit", reader, max_attribute_bytes)?,
+            stroke_alignment: optional_attr(event, "StrokeAlignment", reader, max_attribute_bytes)?,
+            horizontal_scale: optional_attr(event, "HorizontalScale", reader, max_attribute_bytes)?,
+            vertical_scale: optional_attr(event, "VerticalScale", reader, max_attribute_bytes)?,
             properties: CharacterStyleProperties::default(),
             text: String::new(),
         })
@@ -1193,6 +1247,12 @@ fn normalize_default_style_ranges(ranges: &mut Vec<ParagraphStyleRange>, text: &
     if paragraph.applied_paragraph_style.is_some()
         || paragraph.justification.is_some()
         || paragraph.hyphenation.is_some()
+        || paragraph.rule_above_line_weight.is_some()
+        || paragraph.rule_below_line_weight.is_some()
+        || paragraph.hyphenation_zone.is_some()
+        || paragraph.split_column_inside_gutter.is_some()
+        || paragraph.space_before.is_some()
+        || paragraph.space_after.is_some()
         || paragraph.properties != ParagraphStyleProperties::default()
     {
         return;
@@ -1207,6 +1267,13 @@ fn normalize_default_style_ranges(ranges: &mut Vec<ParagraphStyleRange>, text: &
         && character.fill_color.is_none()
         && character.tracking.is_none()
         && character.stroke_weight.is_none()
+        && character.ruby_font_size.is_none()
+        && character.kenten_font_size.is_none()
+        && character.capitalization.is_none()
+        && character.miter_limit.is_none()
+        && character.stroke_alignment.is_none()
+        && character.horizontal_scale.is_none()
+        && character.vertical_scale.is_none()
         && character.properties == CharacterStyleProperties::default()
         && character.text == text
     {
@@ -1327,6 +1394,36 @@ fn validate_story_style_ranges(story: &Story) -> Result<()> {
             "Justification",
             paragraph.justification.as_deref(),
         )?;
+        validate_optional_story_attr(
+            "ParagraphStyleRange",
+            "RuleAboveLineWeight",
+            paragraph.rule_above_line_weight.as_deref(),
+        )?;
+        validate_optional_story_attr(
+            "ParagraphStyleRange",
+            "RuleBelowLineWeight",
+            paragraph.rule_below_line_weight.as_deref(),
+        )?;
+        validate_optional_story_attr(
+            "ParagraphStyleRange",
+            "HyphenationZone",
+            paragraph.hyphenation_zone.as_deref(),
+        )?;
+        validate_optional_story_attr(
+            "ParagraphStyleRange",
+            "SplitColumnInsideGutter",
+            paragraph.split_column_inside_gutter.as_deref(),
+        )?;
+        validate_optional_story_attr(
+            "ParagraphStyleRange",
+            "SpaceBefore",
+            paragraph.space_before.as_deref(),
+        )?;
+        validate_optional_story_attr(
+            "ParagraphStyleRange",
+            "SpaceAfter",
+            paragraph.space_after.as_deref(),
+        )?;
         validate_paragraph_style_properties(&paragraph.properties)?;
 
         for character in &paragraph.character_style_ranges {
@@ -1359,6 +1456,41 @@ fn validate_story_style_ranges(story: &Story) -> Result<()> {
                 "CharacterStyleRange",
                 "StrokeWeight",
                 character.stroke_weight.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "RubyFontSize",
+                character.ruby_font_size.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "KentenFontSize",
+                character.kenten_font_size.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "Capitalization",
+                character.capitalization.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "MiterLimit",
+                character.miter_limit.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "StrokeAlignment",
+                character.stroke_alignment.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "HorizontalScale",
+                character.horizontal_scale.as_deref(),
+            )?;
+            validate_optional_story_attr(
+                "CharacterStyleRange",
+                "VerticalScale",
+                character.vertical_scale.as_deref(),
             )?;
             validate_character_style_properties(&character.properties)?;
             validate_xml_text("story style range text", &character.text)?;
@@ -1511,6 +1643,44 @@ fn serialize_paragraph_style_ranges(
                 bool_str(hyphenation),
             )?;
         }
+        if let Some(rule_above_line_weight) = &paragraph.rule_above_line_weight {
+            push_attr(
+                xml,
+                "ParagraphStyleRange",
+                "RuleAboveLineWeight",
+                rule_above_line_weight,
+            )?;
+        }
+        if let Some(rule_below_line_weight) = &paragraph.rule_below_line_weight {
+            push_attr(
+                xml,
+                "ParagraphStyleRange",
+                "RuleBelowLineWeight",
+                rule_below_line_weight,
+            )?;
+        }
+        if let Some(hyphenation_zone) = &paragraph.hyphenation_zone {
+            push_attr(
+                xml,
+                "ParagraphStyleRange",
+                "HyphenationZone",
+                hyphenation_zone,
+            )?;
+        }
+        if let Some(split_column_inside_gutter) = &paragraph.split_column_inside_gutter {
+            push_attr(
+                xml,
+                "ParagraphStyleRange",
+                "SplitColumnInsideGutter",
+                split_column_inside_gutter,
+            )?;
+        }
+        if let Some(space_before) = &paragraph.space_before {
+            push_attr(xml, "ParagraphStyleRange", "SpaceBefore", space_before)?;
+        }
+        if let Some(space_after) = &paragraph.space_after {
+            push_attr(xml, "ParagraphStyleRange", "SpaceAfter", space_after)?;
+        }
         if paragraph.character_style_ranges.is_empty()
             && paragraph.properties == ParagraphStyleProperties::default()
         {
@@ -1552,6 +1722,42 @@ fn serialize_character_style_range(xml: &mut String, range: &CharacterStyleRange
     }
     if let Some(stroke_weight) = &range.stroke_weight {
         push_attr(xml, "CharacterStyleRange", "StrokeWeight", stroke_weight)?;
+    }
+    if let Some(ruby_font_size) = &range.ruby_font_size {
+        push_attr(xml, "CharacterStyleRange", "RubyFontSize", ruby_font_size)?;
+    }
+    if let Some(kenten_font_size) = &range.kenten_font_size {
+        push_attr(
+            xml,
+            "CharacterStyleRange",
+            "KentenFontSize",
+            kenten_font_size,
+        )?;
+    }
+    if let Some(capitalization) = &range.capitalization {
+        push_attr(xml, "CharacterStyleRange", "Capitalization", capitalization)?;
+    }
+    if let Some(miter_limit) = &range.miter_limit {
+        push_attr(xml, "CharacterStyleRange", "MiterLimit", miter_limit)?;
+    }
+    if let Some(stroke_alignment) = &range.stroke_alignment {
+        push_attr(
+            xml,
+            "CharacterStyleRange",
+            "StrokeAlignment",
+            stroke_alignment,
+        )?;
+    }
+    if let Some(horizontal_scale) = &range.horizontal_scale {
+        push_attr(
+            xml,
+            "CharacterStyleRange",
+            "HorizontalScale",
+            horizontal_scale,
+        )?;
+    }
+    if let Some(vertical_scale) = &range.vertical_scale {
+        push_attr(xml, "CharacterStyleRange", "VerticalScale", vertical_scale)?;
     }
     xml.push('>');
     serialize_character_style_properties(xml, &range.properties)?;
@@ -2149,8 +2355,8 @@ mod tests {
     #[test]
     fn parses_and_serializes_story_style_ranges() {
         let xml = r##"<Story Self="u2">
-  <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle" Justification="CenterAlign" Hyphenation="false">
-    <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/$ID/[No character style]" PointSize="12" FontStyle="Bold" FillColor="Color/Black" Tracking="15" StrokeWeight="0.5">
+  <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle" Justification="CenterAlign" Hyphenation="false" RuleAboveLineWeight="1" RuleBelowLineWeight="2" HyphenationZone="36" SplitColumnInsideGutter="8" SpaceBefore="4" SpaceAfter="6">
+    <CharacterStyleRange AppliedCharacterStyle="CharacterStyle/$ID/[No character style]" PointSize="12" FontStyle="Bold" FillColor="Color/Black" Tracking="15" StrokeWeight="0.5" RubyFontSize="6" KentenFontSize="7" Capitalization="AllCaps" MiterLimit="4" StrokeAlignment="CenterAlignment" HorizontalScale="98" VerticalScale="102">
       <Properties>
         <Leading type="unit">14</Leading>
         <AppliedFont type="string">Lato &amp; Sans</AppliedFont>
@@ -2177,6 +2383,12 @@ mod tests {
         );
         assert_eq!(paragraph.justification.as_deref(), Some("CenterAlign"));
         assert_eq!(paragraph.hyphenation, Some(false));
+        assert_eq!(paragraph.rule_above_line_weight.as_deref(), Some("1"));
+        assert_eq!(paragraph.rule_below_line_weight.as_deref(), Some("2"));
+        assert_eq!(paragraph.hyphenation_zone.as_deref(), Some("36"));
+        assert_eq!(paragraph.split_column_inside_gutter.as_deref(), Some("8"));
+        assert_eq!(paragraph.space_before.as_deref(), Some("4"));
+        assert_eq!(paragraph.space_after.as_deref(), Some("6"));
         assert_eq!(paragraph.character_style_ranges.len(), 2);
         let character = &paragraph.character_style_ranges[0];
         assert_eq!(
@@ -2188,6 +2400,16 @@ mod tests {
         assert_eq!(character.fill_color.as_deref(), Some("Color/Black"));
         assert_eq!(character.tracking.as_deref(), Some("15"));
         assert_eq!(character.stroke_weight.as_deref(), Some("0.5"));
+        assert_eq!(character.ruby_font_size.as_deref(), Some("6"));
+        assert_eq!(character.kenten_font_size.as_deref(), Some("7"));
+        assert_eq!(character.capitalization.as_deref(), Some("AllCaps"));
+        assert_eq!(character.miter_limit.as_deref(), Some("4"));
+        assert_eq!(
+            character.stroke_alignment.as_deref(),
+            Some("CenterAlignment")
+        );
+        assert_eq!(character.horizontal_scale.as_deref(), Some("98"));
+        assert_eq!(character.vertical_scale.as_deref(), Some("102"));
         assert_eq!(
             character.properties.leading.as_ref(),
             Some(&StoryProperty {
@@ -2219,6 +2441,10 @@ mod tests {
                 .contains("AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\"")
         );
         assert!(serialized.contains("StrokeWeight=\"0.5\""));
+        assert!(serialized.contains("RuleAboveLineWeight=\"1\""));
+        assert!(serialized.contains("SplitColumnInsideGutter=\"8\""));
+        assert!(serialized.contains("RubyFontSize=\"6\""));
+        assert!(serialized.contains("HorizontalScale=\"98\""));
         assert!(serialized.contains("<AppliedFont type=\"string\">Lato &amp; Sans</AppliedFont>"));
         assert!(serialized.contains("<Leading type=\"unit\">14</Leading>"));
         assert_eq!(Story::from_xml(&serialized).unwrap(), story);
