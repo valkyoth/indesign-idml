@@ -13,6 +13,7 @@ fuzz_target!(|data: &[u8]| {
         SpreadParseOptions {
             max_xml_bytes: 1024 * 1024,
             max_pages: 128,
+            max_guides: 1024,
             max_text_frames: 1024,
             max_page_items: 2048,
             max_attribute_bytes: 4096,

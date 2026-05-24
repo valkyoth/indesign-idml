@@ -2906,6 +2906,7 @@ mod tests {
         let spread = Spread {
             id: Some("u10".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
                 layer_id: None,

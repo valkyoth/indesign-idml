@@ -204,6 +204,11 @@ impl IdmlIdAllocator {
                     self.reserve_existing(id);
                 }
             }
+            for guide in &spread.guides {
+                if let Some(id) = &guide.id {
+                    self.reserve_existing(id);
+                }
+            }
             for frame in &spread.text_frames {
                 if let Some(id) = &frame.id {
                     self.reserve_existing(id);
@@ -954,6 +959,11 @@ impl IdmlDocument {
                     remember_object_id(&mut seen, id)?;
                 }
             }
+            for guide in &spread.guides {
+                if let Some(id) = &guide.id {
+                    remember_object_id(&mut seen, id)?;
+                }
+            }
             for frame in &spread.text_frames {
                 if let Some(id) = &frame.id {
                     remember_object_id(&mut seen, id)?;
@@ -980,6 +990,9 @@ impl IdmlDocument {
             .collect::<IndexSet<_>>();
 
         for spread in self.spreads.values() {
+            for guide in &spread.guides {
+                validate_layer_id(guide.layer_id.as_deref(), &layer_ids)?;
+            }
             for frame in &spread.text_frames {
                 validate_layer_id(frame.layer_id.as_deref(), &layer_ids)?;
             }
@@ -1052,6 +1065,10 @@ fn document_contains_object_id(document: &IdmlDocument, id: &str) -> bool {
                     .pages
                     .iter()
                     .any(|page| page.id.as_deref() == Some(id))
+                || spread
+                    .guides
+                    .iter()
+                    .any(|guide| guide.id.as_deref() == Some(id))
                 || spread
                     .text_frames
                     .iter()
@@ -1393,7 +1410,7 @@ mod tests {
     };
     use crate::model::resources::ResourceIntegrityOptions;
     use crate::model::spread::{
-        GraphicLine, Group, Oval, Page, PageItem, Polygon, Rect, Rectangle, Spread,
+        GraphicLine, Group, Guide, Oval, Page, PageItem, Polygon, Rect, Rectangle, Spread,
         SpreadParseOptions, TextFrame,
     };
     use crate::model::story::{Story, StoryParseOptions};
@@ -1456,6 +1473,7 @@ mod tests {
                 Spread {
                     id: Some("u10".to_owned()),
                     pages: Vec::new(),
+                    guides: Vec::new(),
                     text_frames: vec![TextFrame {
                         id: Some("tf1".to_owned()),
                         layer_id: None,
@@ -1633,6 +1651,7 @@ mod tests {
                 Spread {
                     id: Some("u11".to_owned()),
                     pages: Vec::new(),
+                    guides: Vec::new(),
                     text_frames: Vec::new(),
                     page_items: Vec::new(),
                 },
@@ -2508,12 +2527,19 @@ mod tests {
             id: Some("u3".to_owned()),
             geometric_bounds: None,
         });
-        spread.page_items.push(PageItem::Group(Group {
+        spread.guides.push(Guide {
             id: Some("u4".to_owned()),
+            layer_id: None,
+            orientation: Some("Horizontal".to_owned()),
+            location: Some(Points::new(24.0)),
+            page_index: Some(-1),
+        });
+        spread.page_items.push(PageItem::Group(Group {
+            id: Some("u5".to_owned()),
             layer_id: None,
             geometric_bounds: None,
             page_items: vec![PageItem::Rectangle(Rectangle {
-                id: Some("u5".to_owned()),
+                id: Some("u6".to_owned()),
                 layer_id: None,
                 geometric_bounds: None,
             })],
@@ -2521,7 +2547,7 @@ mod tests {
 
         let mut allocator = document.id_allocator().unwrap();
 
-        assert_eq!(allocator.allocate().unwrap(), "u6");
+        assert_eq!(allocator.allocate().unwrap(), "u7");
     }
 
     #[test]
@@ -2875,6 +2901,37 @@ mod tests {
     }
 
     #[test]
+    fn validates_guide_layer_references() {
+        let mut document = make_document();
+        document.design_map.layers.push(Layer {
+            id: Some("layer1".to_owned()),
+            name: Some("Guides".to_owned()),
+            visible: Some(true),
+            locked: Some(false),
+        });
+        document.spreads.get_mut("u10").unwrap().guides.push(Guide {
+            id: Some("guide1".to_owned()),
+            layer_id: Some("layer1".to_owned()),
+            orientation: Some("Horizontal".to_owned()),
+            location: Some(Points::new(12.0)),
+            page_index: Some(-1),
+        });
+
+        document.validate().unwrap();
+
+        document.spreads.get_mut("u10").unwrap().guides[0].layer_id = Some("missing".to_owned());
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::MissingReference {
+                kind: "page item layer",
+                id,
+            } if id == "missing"
+        ));
+    }
+
+    #[test]
     fn rejects_dangling_text_frame_layer_reference() {
         let mut document = make_document();
         document.design_map.layers.push(Layer {
@@ -3211,6 +3268,7 @@ mod tests {
             Spread {
                 id: Some("u1".to_owned()),
                 pages: Vec::new(),
+                guides: Vec::new(),
                 text_frames: Vec::new(),
                 page_items: Vec::new(),
             },
@@ -3316,6 +3374,7 @@ mod tests {
             Spread {
                 id: Some("u10".to_owned()),
                 pages: Vec::new(),
+                guides: Vec::new(),
                 text_frames: vec![TextFrame {
                     id: Some("tf1".to_owned()),
                     layer_id: None,

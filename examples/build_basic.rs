@@ -31,6 +31,7 @@ fn main() -> Result<()> {
                     Points::new(612.0),
                 )),
             }],
+            guides: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
                 layer_id: None,

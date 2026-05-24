@@ -20,6 +20,8 @@ pub struct Spread {
     pub id: Option<String>,
     /// Pages in XML order.
     pub pages: Vec<Page>,
+    /// Layout guides in XML order.
+    pub guides: Vec<Guide>,
     /// Text frames in XML order.
     pub text_frames: Vec<TextFrame>,
     /// Page items in XML order for z-order preservation.
@@ -33,6 +35,7 @@ impl PartialEq for Spread {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
             && compatible_pages(self, other)
+            && compatible_guides(self, other)
             && self.text_frames == other.text_frames
             && compatible_page_items(self, other)
     }
@@ -47,6 +50,9 @@ pub const DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD: usize = 200_000;
 /// Default maximum pages accepted in one spread.
 pub const DEFAULT_MAX_PAGES_PER_SPREAD: usize = 10_000;
 
+/// Default maximum guides accepted in one spread.
+pub const DEFAULT_MAX_GUIDES_PER_SPREAD: usize = 100_000;
+
 /// Default maximum raw bytes accepted for one spread XML attribute value.
 pub const DEFAULT_MAX_SPREAD_ATTRIBUTE_BYTES: usize = 256 * 1024;
 
@@ -57,6 +63,8 @@ pub struct SpreadParseOptions {
     pub max_xml_bytes: usize,
     /// Maximum `Page` elements collected from one spread.
     pub max_pages: usize,
+    /// Maximum `Guide` elements collected from one spread.
+    pub max_guides: usize,
     /// Maximum `TextFrame` elements collected from one spread.
     pub max_text_frames: usize,
     /// Maximum supported page items collected from one spread.
@@ -72,6 +80,7 @@ impl Default for SpreadParseOptions {
         Self {
             max_xml_bytes: DEFAULT_MAX_XML_INPUT_BYTES,
             max_pages: DEFAULT_MAX_PAGES_PER_SPREAD,
+            max_guides: DEFAULT_MAX_GUIDES_PER_SPREAD,
             max_text_frames: DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD,
             max_page_items: DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD,
             max_attribute_bytes: DEFAULT_MAX_SPREAD_ATTRIBUTE_BYTES,
@@ -118,6 +127,12 @@ impl Spread {
                             &mut spread.pages,
                             Page::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
                             options.max_pages,
+                        )?;
+                    } else if e.name().as_ref() == b"Guide" {
+                        push_guide_limited(
+                            &mut spread.guides,
+                            Guide::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
+                            options.max_guides,
                         )?;
                     } else if e.name().as_ref() == b"TextFrame" {
                         push_text_frame_page_item_limited(
@@ -216,6 +231,12 @@ impl Spread {
                             &mut spread.pages,
                             Page::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
                             options.max_pages,
+                        )?;
+                    } else if e.name().as_ref() == b"Guide" {
+                        push_guide_limited(
+                            &mut spread.guides,
+                            Guide::from_xml_event(&e, &reader, options.max_attribute_bytes)?,
+                            options.max_guides,
                         )?;
                     } else if e.name().as_ref() == b"TextFrame" {
                         push_text_frame_page_item_limited(
@@ -385,6 +406,47 @@ impl Page {
         Ok(Self {
             id,
             geometric_bounds,
+        })
+    }
+}
+
+/// Spread ruler guide metadata.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Guide {
+    /// Guide `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Layer ID from `ItemLayer`, when present.
+    pub layer_id: Option<String>,
+    /// Guide orientation, such as `Horizontal` or `Vertical`.
+    pub orientation: Option<String>,
+    /// Guide location in points, when represented directly.
+    pub location: Option<Points>,
+    /// Page index from `PageIndex`, when present.
+    pub page_index: Option<i32>,
+}
+
+impl Guide {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
+        let layer_id = optional_attr(event, "ItemLayer", reader, max_attribute_bytes)?;
+        let orientation = optional_attr(event, "Orientation", reader, max_attribute_bytes)?;
+        let location = optional_attr(event, "Location", reader, max_attribute_bytes)?
+            .map(|value| parse_point_attribute("Guide", "Location", &value))
+            .transpose()?;
+        let page_index = optional_attr(event, "PageIndex", reader, max_attribute_bytes)?
+            .map(|value| parse_i32_attribute("Guide", "PageIndex", &value))
+            .transpose()?;
+
+        Ok(Self {
+            id,
+            layer_id,
+            orientation,
+            location,
+            page_index,
         })
     }
 }
@@ -815,6 +877,29 @@ fn parse_geometric_bounds(element: &'static str, value: &str) -> Result<Rect> {
     Ok(rect)
 }
 
+fn parse_point_attribute(
+    element: &'static str,
+    attribute: &'static str,
+    value: &str,
+) -> Result<Points> {
+    let value = value.parse::<f64>()?;
+    let point = Points::new(value);
+    if !point.as_f64().is_finite() {
+        return Err(non_finite_point_error(element, attribute));
+    }
+    Ok(point)
+}
+
+fn parse_i32_attribute(element: &'static str, attribute: &'static str, value: &str) -> Result<i32> {
+    value
+        .parse::<i32>()
+        .map_err(|_| IdmlError::InvalidAttribute {
+            element: element.to_owned(),
+            attribute,
+            reason: "expected signed integer",
+        })
+}
+
 fn push_page_limited(pages: &mut Vec<Page>, page: Page, max_pages: usize) -> Result<()> {
     let next_len = pages.len().checked_add(1).ok_or(IdmlError::LimitExceeded {
         what: "spread page count",
@@ -831,6 +916,28 @@ fn push_page_limited(pages: &mut Vec<Page>, page: Page, max_pages: usize) -> Res
     }
 
     pages.push(page);
+    Ok(())
+}
+
+fn push_guide_limited(guides: &mut Vec<Guide>, guide: Guide, max_guides: usize) -> Result<()> {
+    let next_len = guides
+        .len()
+        .checked_add(1)
+        .ok_or(IdmlError::LimitExceeded {
+            what: "spread guide count",
+            limit: max_guides as u64,
+            actual: u64::MAX,
+        })?;
+
+    if next_len > max_guides {
+        return Err(IdmlError::LimitExceeded {
+            what: "spread guide count",
+            limit: max_guides as u64,
+            actual: next_len as u64,
+        });
+    }
+
+    guides.push(guide);
     Ok(())
 }
 
@@ -1116,6 +1223,9 @@ fn validate_spread(spread: &Spread) -> Result<()> {
     for page in &spread.pages {
         validate_page(page)?;
     }
+    for guide in &spread.guides {
+        validate_guide(guide)?;
+    }
     for frame in &spread.text_frames {
         validate_text_frame(frame)?;
     }
@@ -1138,6 +1248,9 @@ fn serialize_spread(spread: &Spread) -> Result<String> {
     for page in &spread.pages {
         serialize_page(&mut xml, page)?;
     }
+    for guide in &spread.guides {
+        serialize_guide(&mut xml, guide)?;
+    }
 
     if spread.page_items.is_empty() {
         for frame in &spread.text_frames {
@@ -1156,6 +1269,11 @@ fn validate_serialized_spread_counts(spread: &Spread) -> Result<()> {
         spread.pages.len(),
         DEFAULT_MAX_PAGES_PER_SPREAD,
         "spread page count",
+    )?;
+    enforce_serialized_spread_count(
+        spread.guides.len(),
+        DEFAULT_MAX_GUIDES_PER_SPREAD,
+        "spread guide count",
     )?;
     enforce_serialized_spread_count(
         spread.text_frames.len(),
@@ -1346,6 +1464,10 @@ fn compatible_pages(left: &Spread, right: &Spread) -> bool {
     left.pages.is_empty() || right.pages.is_empty() || left.pages == right.pages
 }
 
+fn compatible_guides(left: &Spread, right: &Spread) -> bool {
+    left.guides.is_empty() || right.guides.is_empty() || left.guides == right.guides
+}
+
 fn collect_text_frames_from_page_item<'a>(
     page_item: &'a PageItem,
     frames: &mut Vec<&'a TextFrame>,
@@ -1368,6 +1490,18 @@ fn validate_page(page: &Page) -> Result<()> {
     validate_optional_attr("Page", "Self", page.id.as_deref())?;
     if let Some(bounds) = page.geometric_bounds {
         validate_finite_bounds("Page", bounds)?;
+    }
+    Ok(())
+}
+
+fn validate_guide(guide: &Guide) -> Result<()> {
+    validate_optional_attr("Guide", "Self", guide.id.as_deref())?;
+    validate_optional_attr("Guide", "ItemLayer", guide.layer_id.as_deref())?;
+    validate_optional_attr("Guide", "Orientation", guide.orientation.as_deref())?;
+    if let Some(location) = guide.location
+        && !location.as_f64().is_finite()
+    {
+        return Err(non_finite_point_error("Guide", "Location"));
     }
     Ok(())
 }
@@ -1460,6 +1594,28 @@ fn serialize_page(xml: &mut String, page: &Page) -> Result<()> {
     if let Some(bounds) = page.geometric_bounds {
         let bounds = format_geometric_bounds("Page", bounds)?;
         push_attr(xml, "Page", "GeometricBounds", &bounds)?;
+    }
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn serialize_guide(xml: &mut String, guide: &Guide) -> Result<()> {
+    xml.push_str("  <Guide");
+    if let Some(id) = &guide.id {
+        push_attr(xml, "Guide", "Self", id)?;
+    }
+    if let Some(layer_id) = &guide.layer_id {
+        push_attr(xml, "Guide", "ItemLayer", layer_id)?;
+    }
+    if let Some(orientation) = &guide.orientation {
+        push_attr(xml, "Guide", "Orientation", orientation)?;
+    }
+    if let Some(location) = guide.location {
+        let location = format_point_attr("Guide", "Location", location)?;
+        push_attr(xml, "Guide", "Location", &location)?;
+    }
+    if let Some(page_index) = guide.page_index {
+        push_attr(xml, "Guide", "PageIndex", &page_index.to_string())?;
     }
     xml.push_str(" />\n");
     Ok(())
@@ -1648,6 +1804,25 @@ fn format_point(point: Points) -> String {
     value.to_string()
 }
 
+fn format_point_attr(
+    element: &'static str,
+    attribute: &'static str,
+    point: Points,
+) -> Result<String> {
+    if !point.as_f64().is_finite() {
+        return Err(non_finite_point_error(element, attribute));
+    }
+    Ok(format_point(point))
+}
+
+fn non_finite_point_error(element: &'static str, attribute: &'static str) -> IdmlError {
+    IdmlError::InvalidAttribute {
+        element: element.to_owned(),
+        attribute,
+        reason: "coordinate must be finite",
+    }
+}
+
 fn push_attr(
     xml: &mut String,
     element: &'static str,
@@ -1676,7 +1851,7 @@ fn push_optional_attr(xml: &mut String, name: &'static str, value: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::{
-        GraphicLine, Group, Oval, Page, PageItem, Polygon, Rect, Rectangle, Spread,
+        GraphicLine, Group, Guide, Oval, Page, PageItem, Polygon, Rect, Rectangle, Spread,
         SpreadParseOptions, TextFrame,
     };
     use crate::IdmlError;
@@ -1889,6 +2064,36 @@ mod tests {
             spread.pages[1].geometric_bounds.unwrap().left.as_f64(),
             612.0
         );
+    }
+
+    #[test]
+    fn parses_guides_with_location_and_page_index() {
+        let xml = r#"<Spread Self="u10">
+  <Page Self="p1" GeometricBounds="0 0 792 612" />
+  <Guide Self="g1" ItemLayer="layer1" Orientation="Horizontal" Location="51.25" PageIndex="-1">
+    <Properties><GuideColor type="enumeration">LightBlue</GuideColor></Properties>
+  </Guide>
+  <TextFrame Self="tf1" ParentStory="u2" />
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.guides.len(), 1);
+        assert_eq!(spread.guides[0].id.as_deref(), Some("g1"));
+        assert_eq!(spread.guides[0].layer_id.as_deref(), Some("layer1"));
+        assert_eq!(spread.guides[0].orientation.as_deref(), Some("Horizontal"));
+        assert_eq!(spread.guides[0].location.unwrap().as_f64(), 51.25);
+        assert_eq!(spread.guides[0].page_index, Some(-1));
+
+        let serialized = spread.to_xml().unwrap();
+        let page = serialized.find("<Page").unwrap();
+        let guide = serialized.find("<Guide").unwrap();
+        let frame = serialized.find("<TextFrame").unwrap();
+        let parsed = Spread::from_xml(&serialized).unwrap();
+
+        assert!(page < guide);
+        assert!(guide < frame);
+        assert_eq!(parsed.guides, spread.guides);
     }
 
     #[test]
@@ -2152,6 +2357,32 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_guide_attributes() {
+        let err = Spread::from_xml(r#"<Spread><Guide Location="NaN" /></Spread>"#).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Location",
+                reason: "coordinate must be finite",
+            } if element == "Guide"
+        ));
+
+        let err =
+            Spread::from_xml(r#"<Spread><Guide PageIndex="page-one" /></Spread>"#).unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "PageIndex",
+                reason: "expected signed integer",
+            } if element == "Guide"
+        ));
+    }
+
+    #[test]
     fn rejects_duplicate_text_frame_parent_story_attributes() {
         let err =
             Spread::from_xml(r#"<Spread><TextFrame ParentStory="u1" ParentStory="u2" /></Spread>"#)
@@ -2234,6 +2465,27 @@ mod tests {
             err,
             IdmlError::LimitExceeded {
                 what: "spread page count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_guide_count_limit() {
+        let err = Spread::from_xml_with_options(
+            r#"<Spread><Guide Self="g1" /><Guide Self="g2" /></Spread>"#,
+            SpreadParseOptions {
+                max_guides: 1,
+                ..SpreadParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread guide count",
                 limit: 1,
                 actual: 2,
             }
@@ -2375,6 +2627,7 @@ mod tests {
         let spread = Spread {
             id: Some("u&\"10".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf&1".to_owned()),
                 layer_id: None,
@@ -2417,6 +2670,7 @@ mod tests {
                     Points::new(612.0),
                 )),
             }],
+            guides: Vec::new(),
             text_frames: vec![text_frame.clone()],
             page_items: vec![PageItem::TextFrame(text_frame)],
         };
@@ -2447,6 +2701,7 @@ mod tests {
         let spread = Spread {
             id: Some("u10".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: vec![text_frame.clone()],
             page_items: vec![
                 PageItem::Rectangle(Rectangle {
@@ -2484,6 +2739,7 @@ mod tests {
         let spread = Spread {
             id: Some("u10".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: vec![text_frame.clone()],
             page_items: vec![PageItem::Group(Group {
                 id: Some("g1".to_owned()),
@@ -2527,6 +2783,7 @@ mod tests {
         let spread = Spread {
             id: Some("u10".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: vec![text_frame.clone()],
             page_items: vec![
                 PageItem::TextFrame(text_frame),
@@ -2614,6 +2871,33 @@ mod tests {
     }
 
     #[test]
+    fn serializer_enforces_guide_count_limit() {
+        let spread = Spread {
+            guides: (0..=super::DEFAULT_MAX_GUIDES_PER_SPREAD)
+                .map(|index| Guide {
+                    id: Some(format!("g{index}")),
+                    layer_id: None,
+                    orientation: Some("Horizontal".to_owned()),
+                    location: None,
+                    page_index: None,
+                })
+                .collect(),
+            ..Spread::default()
+        };
+
+        let err = spread.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread guide count",
+                limit: 100_000,
+                actual: 100_001,
+            }
+        ));
+    }
+
+    #[test]
     fn serializer_enforces_text_frame_count_limit() {
         let spread = Spread {
             text_frames: (0..=super::DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD)
@@ -2676,6 +2960,7 @@ mod tests {
         let spread = Spread {
             id: Some("u10".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
                 layer_id: None,
@@ -2707,6 +2992,7 @@ mod tests {
         let spread = Spread {
             id: Some("u10".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
                 layer_id: None,
@@ -2738,6 +3024,7 @@ mod tests {
         let spread = Spread {
             id: Some("u1".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: Vec::new(),
             page_items: vec![PageItem::Group(Group {
                 id: Some("g1".to_owned()),
@@ -2769,6 +3056,7 @@ mod tests {
         let spread = Spread {
             id: Some("u1".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: Vec::new(),
             page_items: vec![PageItem::Group(Group {
                 id: Some("g\u{0}".to_owned()),
@@ -2795,6 +3083,7 @@ mod tests {
         let spread = Spread {
             id: Some("u1".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf1".to_owned()),
                 layer_id: None,
@@ -2826,6 +3115,7 @@ mod tests {
         let spread = Spread {
             id: Some("u1".to_owned()),
             pages: Vec::new(),
+            guides: Vec::new(),
             text_frames: vec![TextFrame {
                 id: Some("tf\u{0}".to_owned()),
                 layer_id: None,

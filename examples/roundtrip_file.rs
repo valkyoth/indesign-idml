@@ -75,6 +75,7 @@ struct PreservedEntrySummary {
 struct SpreadSummary {
     id: String,
     pages: Vec<PageSummary>,
+    guides: Vec<GuideSummary>,
     text_frames: Vec<TextFrameSummary>,
     page_items: Vec<PageItemSummary>,
 }
@@ -83,6 +84,15 @@ struct SpreadSummary {
 struct PageSummary {
     id: Option<String>,
     bounds: Option<[u64; 4]>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct GuideSummary {
+    id: Option<String>,
+    layer_id: Option<String>,
+    orientation: Option<String>,
+    location: Option<u64>,
+    page_index: Option<i32>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -180,6 +190,17 @@ impl Snapshot {
                             .map(|page| PageSummary {
                                 id: page.id.clone(),
                                 bounds: page.geometric_bounds.map(rect_bits),
+                            })
+                            .collect(),
+                        guides: spread
+                            .guides
+                            .iter()
+                            .map(|guide| GuideSummary {
+                                id: guide.id.clone(),
+                                layer_id: guide.layer_id.clone(),
+                                orientation: guide.orientation.clone(),
+                                location: guide.location.map(|point| point.as_f64().to_bits()),
+                                page_index: guide.page_index,
                             })
                             .collect(),
                         text_frames: spread
