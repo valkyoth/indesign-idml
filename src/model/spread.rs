@@ -563,6 +563,62 @@ pub struct PageItemMetadata {
     pub visible: Option<bool>,
     /// Lock flag, when present.
     pub locked: Option<bool>,
+    /// Fill tint value, preserved as an IDML string.
+    pub fill_tint: Option<String>,
+    /// Stroke tint value, preserved as an IDML string.
+    pub stroke_tint: Option<String>,
+    /// Gap color reference, when present.
+    pub gap_color: Option<String>,
+    /// Gap tint value, preserved as an IDML string.
+    pub gap_tint: Option<String>,
+    /// Stroke type reference, when present.
+    pub stroke_type: Option<String>,
+    /// Stroke alignment, preserved as an IDML string.
+    pub stroke_alignment: Option<String>,
+    /// Stroke miter limit, preserved as an IDML string.
+    pub miter_limit: Option<String>,
+    /// Stroke end cap style, preserved as an IDML string.
+    pub end_cap: Option<String>,
+    /// Stroke end join style, preserved as an IDML string.
+    pub end_join: Option<String>,
+    /// Left line end style, preserved as an IDML string.
+    pub left_line_end: Option<String>,
+    /// Right line end style, preserved as an IDML string.
+    pub right_line_end: Option<String>,
+    /// Legacy lock state field, preserved as an IDML string.
+    pub lock_state: Option<String>,
+    /// Story title metadata, preserved as an IDML string.
+    pub story_title: Option<String>,
+    /// Flex item width mode, preserved as an IDML string.
+    pub flex_item_width_mode: Option<String>,
+    /// Flex item height mode, preserved as an IDML string.
+    pub flex_item_height_mode: Option<String>,
+    /// Nonprinting flag, when present.
+    pub nonprinting: Option<bool>,
+    /// Fill overprint flag, when present.
+    pub overprint_fill: Option<bool>,
+    /// Stroke overprint flag, when present.
+    pub overprint_stroke: Option<bool>,
+    /// Shared corner radius, preserved as an IDML string.
+    pub corner_radius: Option<String>,
+    /// Shared corner option, preserved as an IDML string.
+    pub corner_option: Option<String>,
+    /// Top-left corner option, preserved as an IDML string.
+    pub top_left_corner_option: Option<String>,
+    /// Top-right corner option, preserved as an IDML string.
+    pub top_right_corner_option: Option<String>,
+    /// Bottom-left corner option, preserved as an IDML string.
+    pub bottom_left_corner_option: Option<String>,
+    /// Bottom-right corner option, preserved as an IDML string.
+    pub bottom_right_corner_option: Option<String>,
+    /// Top-left corner radius, preserved as an IDML string.
+    pub top_left_corner_radius: Option<String>,
+    /// Top-right corner radius, preserved as an IDML string.
+    pub top_right_corner_radius: Option<String>,
+    /// Bottom-left corner radius, preserved as an IDML string.
+    pub bottom_left_corner_radius: Option<String>,
+    /// Bottom-right corner radius, preserved as an IDML string.
+    pub bottom_right_corner_radius: Option<String>,
     /// Adobe parent interface change counter, preserved as an IDML string.
     pub parent_interface_change_count: Option<String>,
     /// Adobe target interface change counter, preserved as an IDML string.
@@ -630,6 +686,102 @@ impl PageItemMetadata {
                 event,
                 element.as_str(),
                 "Locked",
+                reader,
+                max_attribute_bytes,
+            )?,
+            fill_tint: optional_attr(event, "FillTint", reader, max_attribute_bytes)?,
+            stroke_tint: optional_attr(event, "StrokeTint", reader, max_attribute_bytes)?,
+            gap_color: optional_attr(event, "GapColor", reader, max_attribute_bytes)?,
+            gap_tint: optional_attr(event, "GapTint", reader, max_attribute_bytes)?,
+            stroke_type: optional_attr(event, "StrokeType", reader, max_attribute_bytes)?,
+            stroke_alignment: optional_attr(event, "StrokeAlignment", reader, max_attribute_bytes)?,
+            miter_limit: optional_attr(event, "MiterLimit", reader, max_attribute_bytes)?,
+            end_cap: optional_attr(event, "EndCap", reader, max_attribute_bytes)?,
+            end_join: optional_attr(event, "EndJoin", reader, max_attribute_bytes)?,
+            left_line_end: optional_attr(event, "LeftLineEnd", reader, max_attribute_bytes)?,
+            right_line_end: optional_attr(event, "RightLineEnd", reader, max_attribute_bytes)?,
+            lock_state: optional_attr(event, "LockState", reader, max_attribute_bytes)?,
+            story_title: optional_attr(event, "StoryTitle", reader, max_attribute_bytes)?,
+            flex_item_width_mode: optional_attr(
+                event,
+                "FlexItemWidthMode",
+                reader,
+                max_attribute_bytes,
+            )?,
+            flex_item_height_mode: optional_attr(
+                event,
+                "FlexItemHeightMode",
+                reader,
+                max_attribute_bytes,
+            )?,
+            nonprinting: optional_bool_attr(
+                event,
+                element.as_str(),
+                "Nonprinting",
+                reader,
+                max_attribute_bytes,
+            )?,
+            overprint_fill: optional_bool_attr(
+                event,
+                element.as_str(),
+                "OverprintFill",
+                reader,
+                max_attribute_bytes,
+            )?,
+            overprint_stroke: optional_bool_attr(
+                event,
+                element.as_str(),
+                "OverprintStroke",
+                reader,
+                max_attribute_bytes,
+            )?,
+            corner_radius: optional_attr(event, "CornerRadius", reader, max_attribute_bytes)?,
+            corner_option: optional_attr(event, "CornerOption", reader, max_attribute_bytes)?,
+            top_left_corner_option: optional_attr(
+                event,
+                "TopLeftCornerOption",
+                reader,
+                max_attribute_bytes,
+            )?,
+            top_right_corner_option: optional_attr(
+                event,
+                "TopRightCornerOption",
+                reader,
+                max_attribute_bytes,
+            )?,
+            bottom_left_corner_option: optional_attr(
+                event,
+                "BottomLeftCornerOption",
+                reader,
+                max_attribute_bytes,
+            )?,
+            bottom_right_corner_option: optional_attr(
+                event,
+                "BottomRightCornerOption",
+                reader,
+                max_attribute_bytes,
+            )?,
+            top_left_corner_radius: optional_attr(
+                event,
+                "TopLeftCornerRadius",
+                reader,
+                max_attribute_bytes,
+            )?,
+            top_right_corner_radius: optional_attr(
+                event,
+                "TopRightCornerRadius",
+                reader,
+                max_attribute_bytes,
+            )?,
+            bottom_left_corner_radius: optional_attr(
+                event,
+                "BottomLeftCornerRadius",
+                reader,
+                max_attribute_bytes,
+            )?,
+            bottom_right_corner_radius: optional_attr(
+                event,
+                "BottomRightCornerRadius",
                 reader,
                 max_attribute_bytes,
             )?,
@@ -2741,6 +2893,75 @@ fn validate_page_item_metadata(element: &'static str, metadata: &PageItemMetadat
     validate_optional_attr(element, "FillColor", metadata.fill_color.as_deref())?;
     validate_optional_attr(element, "StrokeColor", metadata.stroke_color.as_deref())?;
     validate_optional_attr(element, "StrokeWeight", metadata.stroke_weight.as_deref())?;
+    validate_optional_attr(element, "FillTint", metadata.fill_tint.as_deref())?;
+    validate_optional_attr(element, "StrokeTint", metadata.stroke_tint.as_deref())?;
+    validate_optional_attr(element, "GapColor", metadata.gap_color.as_deref())?;
+    validate_optional_attr(element, "GapTint", metadata.gap_tint.as_deref())?;
+    validate_optional_attr(element, "StrokeType", metadata.stroke_type.as_deref())?;
+    validate_optional_attr(
+        element,
+        "StrokeAlignment",
+        metadata.stroke_alignment.as_deref(),
+    )?;
+    validate_optional_attr(element, "MiterLimit", metadata.miter_limit.as_deref())?;
+    validate_optional_attr(element, "EndCap", metadata.end_cap.as_deref())?;
+    validate_optional_attr(element, "EndJoin", metadata.end_join.as_deref())?;
+    validate_optional_attr(element, "LeftLineEnd", metadata.left_line_end.as_deref())?;
+    validate_optional_attr(element, "RightLineEnd", metadata.right_line_end.as_deref())?;
+    validate_optional_attr(element, "LockState", metadata.lock_state.as_deref())?;
+    validate_optional_attr(element, "StoryTitle", metadata.story_title.as_deref())?;
+    validate_optional_attr(
+        element,
+        "FlexItemWidthMode",
+        metadata.flex_item_width_mode.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "FlexItemHeightMode",
+        metadata.flex_item_height_mode.as_deref(),
+    )?;
+    validate_optional_attr(element, "CornerRadius", metadata.corner_radius.as_deref())?;
+    validate_optional_attr(element, "CornerOption", metadata.corner_option.as_deref())?;
+    validate_optional_attr(
+        element,
+        "TopLeftCornerOption",
+        metadata.top_left_corner_option.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "TopRightCornerOption",
+        metadata.top_right_corner_option.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "BottomLeftCornerOption",
+        metadata.bottom_left_corner_option.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "BottomRightCornerOption",
+        metadata.bottom_right_corner_option.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "TopLeftCornerRadius",
+        metadata.top_left_corner_radius.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "TopRightCornerRadius",
+        metadata.top_right_corner_radius.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "BottomLeftCornerRadius",
+        metadata.bottom_left_corner_radius.as_deref(),
+    )?;
+    validate_optional_attr(
+        element,
+        "BottomRightCornerRadius",
+        metadata.bottom_right_corner_radius.as_deref(),
+    )?;
     validate_optional_attr(
         element,
         "ParentInterfaceChangeCount",
@@ -2978,6 +3199,120 @@ fn push_page_item_metadata(
     }
     if let Some(locked) = metadata.locked {
         push_attr(xml, element, "Locked", bool_str(locked))?;
+    }
+    if let Some(fill_tint) = &metadata.fill_tint {
+        push_attr(xml, element, "FillTint", fill_tint)?;
+    }
+    if let Some(stroke_tint) = &metadata.stroke_tint {
+        push_attr(xml, element, "StrokeTint", stroke_tint)?;
+    }
+    if let Some(gap_color) = &metadata.gap_color {
+        push_attr(xml, element, "GapColor", gap_color)?;
+    }
+    if let Some(gap_tint) = &metadata.gap_tint {
+        push_attr(xml, element, "GapTint", gap_tint)?;
+    }
+    if let Some(stroke_type) = &metadata.stroke_type {
+        push_attr(xml, element, "StrokeType", stroke_type)?;
+    }
+    if let Some(stroke_alignment) = &metadata.stroke_alignment {
+        push_attr(xml, element, "StrokeAlignment", stroke_alignment)?;
+    }
+    if let Some(miter_limit) = &metadata.miter_limit {
+        push_attr(xml, element, "MiterLimit", miter_limit)?;
+    }
+    if let Some(end_cap) = &metadata.end_cap {
+        push_attr(xml, element, "EndCap", end_cap)?;
+    }
+    if let Some(end_join) = &metadata.end_join {
+        push_attr(xml, element, "EndJoin", end_join)?;
+    }
+    if let Some(left_line_end) = &metadata.left_line_end {
+        push_attr(xml, element, "LeftLineEnd", left_line_end)?;
+    }
+    if let Some(right_line_end) = &metadata.right_line_end {
+        push_attr(xml, element, "RightLineEnd", right_line_end)?;
+    }
+    if let Some(lock_state) = &metadata.lock_state {
+        push_attr(xml, element, "LockState", lock_state)?;
+    }
+    if let Some(story_title) = &metadata.story_title {
+        push_attr(xml, element, "StoryTitle", story_title)?;
+    }
+    if let Some(flex_item_width_mode) = &metadata.flex_item_width_mode {
+        push_attr(xml, element, "FlexItemWidthMode", flex_item_width_mode)?;
+    }
+    if let Some(flex_item_height_mode) = &metadata.flex_item_height_mode {
+        push_attr(xml, element, "FlexItemHeightMode", flex_item_height_mode)?;
+    }
+    if let Some(nonprinting) = metadata.nonprinting {
+        push_attr(xml, element, "Nonprinting", bool_str(nonprinting))?;
+    }
+    if let Some(overprint_fill) = metadata.overprint_fill {
+        push_attr(xml, element, "OverprintFill", bool_str(overprint_fill))?;
+    }
+    if let Some(overprint_stroke) = metadata.overprint_stroke {
+        push_attr(xml, element, "OverprintStroke", bool_str(overprint_stroke))?;
+    }
+    if let Some(corner_radius) = &metadata.corner_radius {
+        push_attr(xml, element, "CornerRadius", corner_radius)?;
+    }
+    if let Some(corner_option) = &metadata.corner_option {
+        push_attr(xml, element, "CornerOption", corner_option)?;
+    }
+    if let Some(top_left_corner_option) = &metadata.top_left_corner_option {
+        push_attr(xml, element, "TopLeftCornerOption", top_left_corner_option)?;
+    }
+    if let Some(top_right_corner_option) = &metadata.top_right_corner_option {
+        push_attr(
+            xml,
+            element,
+            "TopRightCornerOption",
+            top_right_corner_option,
+        )?;
+    }
+    if let Some(bottom_left_corner_option) = &metadata.bottom_left_corner_option {
+        push_attr(
+            xml,
+            element,
+            "BottomLeftCornerOption",
+            bottom_left_corner_option,
+        )?;
+    }
+    if let Some(bottom_right_corner_option) = &metadata.bottom_right_corner_option {
+        push_attr(
+            xml,
+            element,
+            "BottomRightCornerOption",
+            bottom_right_corner_option,
+        )?;
+    }
+    if let Some(top_left_corner_radius) = &metadata.top_left_corner_radius {
+        push_attr(xml, element, "TopLeftCornerRadius", top_left_corner_radius)?;
+    }
+    if let Some(top_right_corner_radius) = &metadata.top_right_corner_radius {
+        push_attr(
+            xml,
+            element,
+            "TopRightCornerRadius",
+            top_right_corner_radius,
+        )?;
+    }
+    if let Some(bottom_left_corner_radius) = &metadata.bottom_left_corner_radius {
+        push_attr(
+            xml,
+            element,
+            "BottomLeftCornerRadius",
+            bottom_left_corner_radius,
+        )?;
+    }
+    if let Some(bottom_right_corner_radius) = &metadata.bottom_right_corner_radius {
+        push_attr(
+            xml,
+            element,
+            "BottomRightCornerRadius",
+            bottom_right_corner_radius,
+        )?;
     }
     if let Some(parent_interface_change_count) = &metadata.parent_interface_change_count {
         push_attr(
@@ -3773,7 +4108,8 @@ mod tests {
     fn parses_and_serializes_common_page_item_metadata() {
         let xml = r#"<Spread Self="u10">
   <TextFrame Self="tf1" ParentStory="u2" ContentType="TextType" Name="Headline" ItemTransform="1 0 0 1 10 20" AppliedObjectStyle="ObjectStyle/body" FillColor="Color/Black" StrokeColor="Swatch/None" StrokeWeight="0.5" Visible="true" Locked="false" ParentInterfaceChangeCount="1 2" TargetInterfaceChangeCount="" LastUpdatedInterfaceChangeCount="" OverriddenPageItemProps="" HorizontalLayoutConstraints="FlexibleDimension FixedDimension FlexibleDimension" VerticalLayoutConstraints="FlexibleDimension FixedDimension FlexibleDimension" GradientFillStart="0 0" GradientFillLength="0" GradientFillAngle="0" GradientStrokeStart="0 0" GradientStrokeLength="0" GradientStrokeAngle="0" LocalDisplaySetting="Default" GradientFillHiliteLength="0" GradientFillHiliteAngle="0" GradientStrokeHiliteLength="0" GradientStrokeHiliteAngle="0" />
-  <Rectangle Self="r1" ContentType="GraphicType" Name="Logo" ItemTransform="1 0 0 1 30 40" AppliedObjectStyle="ObjectStyle/image" FillColor="Color/Paper" StrokeColor="Color/Black" StrokeWeight="1" Visible="false" Locked="true" />
+  <Rectangle Self="r1" ContentType="GraphicType" Name="Logo" ItemTransform="1 0 0 1 30 40" AppliedObjectStyle="ObjectStyle/image" FillColor="Color/Paper" FillTint="-1" StrokeColor="Color/Black" StrokeWeight="1" StrokeTint="-1" GapColor="Swatch/None" GapTint="-1" StrokeType="StrokeStyle/$ID/Solid" StrokeAlignment="CenterAlignment" MiterLimit="4" EndCap="ButtEndCap" EndJoin="MiterEndJoin" LeftLineEnd="None" RightLineEnd="None" Nonprinting="false" OverprintFill="false" OverprintStroke="true" CornerRadius="12" CornerOption="None" TopLeftCornerOption="None" TopRightCornerOption="None" BottomLeftCornerOption="None" BottomRightCornerOption="None" TopLeftCornerRadius="12" TopRightCornerRadius="12" BottomLeftCornerRadius="12" BottomRightCornerRadius="12" StoryTitle="$ID/" FlexItemWidthMode="FlexFixed" FlexItemHeightMode="FlexFixed" Visible="false" Locked="true" />
+  <GraphicLine Self="gl1" LockState="None" />
 </Spread>"#;
 
         let spread = Spread::from_xml(xml).unwrap();
@@ -3838,14 +4174,52 @@ mod tests {
             Some("Color/Black")
         );
         assert_eq!(rectangle.metadata.stroke_weight.as_deref(), Some("1"));
+        assert_eq!(rectangle.metadata.fill_tint.as_deref(), Some("-1"));
+        assert_eq!(
+            rectangle.metadata.stroke_type.as_deref(),
+            Some("StrokeStyle/$ID/Solid")
+        );
+        assert_eq!(
+            rectangle.metadata.stroke_alignment.as_deref(),
+            Some("CenterAlignment")
+        );
+        assert_eq!(rectangle.metadata.nonprinting, Some(false));
+        assert_eq!(rectangle.metadata.overprint_stroke, Some(true));
+        assert_eq!(rectangle.metadata.corner_radius.as_deref(), Some("12"));
+        assert_eq!(
+            rectangle.metadata.top_left_corner_option.as_deref(),
+            Some("None")
+        );
+        assert_eq!(
+            rectangle.metadata.bottom_right_corner_radius.as_deref(),
+            Some("12")
+        );
+        assert_eq!(rectangle.metadata.story_title.as_deref(), Some("$ID/"));
+        assert_eq!(
+            rectangle.metadata.flex_item_width_mode.as_deref(),
+            Some("FlexFixed")
+        );
         assert_eq!(rectangle.metadata.visible, Some(false));
         assert_eq!(rectangle.metadata.locked, Some(true));
+
+        let PageItem::GraphicLine(line) = &spread.page_items[2] else {
+            panic!("expected graphic line page item");
+        };
+        assert_eq!(line.metadata.lock_state.as_deref(), Some("None"));
 
         let serialized = spread.to_xml().unwrap();
         assert!(serialized.contains("ContentType=\"TextType\""));
         assert!(serialized.contains("AppliedObjectStyle=\"ObjectStyle/image\""));
         assert!(serialized.contains("Visible=\"false\""));
         assert!(serialized.contains("Locked=\"true\""));
+        assert!(serialized.contains("StrokeType=\"StrokeStyle/$ID/Solid\""));
+        assert!(serialized.contains("StrokeAlignment=\"CenterAlignment\""));
+        assert!(serialized.contains("OverprintStroke=\"true\""));
+        assert!(serialized.contains("TopLeftCornerOption=\"None\""));
+        assert!(serialized.contains("BottomRightCornerRadius=\"12\""));
+        assert!(serialized.contains("StoryTitle=\"$ID/\""));
+        assert!(serialized.contains("FlexItemWidthMode=\"FlexFixed\""));
+        assert!(serialized.contains("LockState=\"None\""));
         assert!(serialized.contains(
             "HorizontalLayoutConstraints=\"FlexibleDimension FixedDimension FlexibleDimension\""
         ));
