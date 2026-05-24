@@ -110,6 +110,11 @@ enum PageItemSummary {
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
     },
+    Polygon {
+        id: Option<String>,
+        layer_id: Option<String>,
+        bounds: Option<[u64; 4]>,
+    },
     Group {
         id: Option<String>,
         layer_id: Option<String>,
@@ -225,6 +230,11 @@ fn summarize_page_items(page_items: &[PageItem]) -> Vec<PageItemSummary> {
                 id: line.id.clone(),
                 layer_id: line.layer_id.clone(),
                 bounds: line.geometric_bounds.map(rect_bits),
+            }),
+            PageItem::Polygon(polygon) => Some(PageItemSummary::Polygon {
+                id: polygon.id.clone(),
+                layer_id: polygon.layer_id.clone(),
+                bounds: polygon.geometric_bounds.map(rect_bits),
             }),
             PageItem::Group(group) => Some(PageItemSummary::Group {
                 id: group.id.clone(),

@@ -170,6 +170,17 @@ impl Spread {
                             &mut page_item_count,
                             options.max_page_items,
                         )?;
+                    } else if e.name().as_ref() == b"Polygon" {
+                        push_page_item_limited(
+                            &mut spread.page_items,
+                            PageItem::Polygon(Polygon::from_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?),
+                            &mut page_item_count,
+                            options.max_page_items,
+                        )?;
                     } else if e.name().as_ref() == b"Group" {
                         let group =
                             Group::from_xml_event(&e, &reader, options.max_attribute_bytes)?;
@@ -250,6 +261,17 @@ impl Spread {
                         push_page_item_limited(
                             &mut spread.page_items,
                             PageItem::GraphicLine(GraphicLine::from_xml_event(
+                                &e,
+                                &reader,
+                                options.max_attribute_bytes,
+                            )?),
+                            &mut page_item_count,
+                            options.max_page_items,
+                        )?;
+                    } else if e.name().as_ref() == b"Polygon" {
+                        push_page_item_limited(
+                            &mut spread.page_items,
+                            PageItem::Polygon(Polygon::from_xml_event(
                                 &e,
                                 &reader,
                                 options.max_attribute_bytes,
@@ -476,6 +498,38 @@ impl GraphicLine {
     }
 }
 
+/// Polygon geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Polygon {
+    /// Polygon `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Layer ID from `ItemLayer`, when present.
+    pub layer_id: Option<String>,
+    /// Geometric bounds in points, when represented directly.
+    pub geometric_bounds: Option<Rect>,
+}
+
+impl Polygon {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
+        let layer_id = optional_attr(event, "ItemLayer", reader, max_attribute_bytes)?;
+        let geometric_bounds =
+            optional_attr(event, "GeometricBounds", reader, max_attribute_bytes)?
+                .map(|value| parse_geometric_bounds("Polygon", &value))
+                .transpose()?;
+
+        Ok(Self {
+            id,
+            layer_id,
+            geometric_bounds,
+        })
+    }
+}
+
 /// Grouped page items in spread z-order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
@@ -522,6 +576,8 @@ pub enum PageItem {
     Oval(Oval),
     /// A graphic line page item.
     GraphicLine(GraphicLine),
+    /// A polygon page item.
+    Polygon(Polygon),
     /// A grouped page item.
     Group(Group),
 }
@@ -912,6 +968,17 @@ fn parse_group_contents(
                         page_item_count,
                         options.max_page_items,
                     )?;
+                } else if e.name().as_ref() == b"Polygon" {
+                    push_page_item_limited(
+                        &mut group.page_items,
+                        PageItem::Polygon(Polygon::from_xml_event(
+                            &e,
+                            reader,
+                            options.max_attribute_bytes,
+                        )?),
+                        page_item_count,
+                        options.max_page_items,
+                    )?;
                 } else if e.name().as_ref() == b"Group" {
                     let child = Group::from_xml_event(&e, reader, options.max_attribute_bytes)?;
                     let child = parse_group_contents(
@@ -978,6 +1045,17 @@ fn parse_group_contents(
                     push_page_item_limited(
                         &mut group.page_items,
                         PageItem::GraphicLine(GraphicLine::from_xml_event(
+                            &e,
+                            reader,
+                            options.max_attribute_bytes,
+                        )?),
+                        page_item_count,
+                        options.max_page_items,
+                    )?;
+                } else if e.name().as_ref() == b"Polygon" {
+                    push_page_item_limited(
+                        &mut group.page_items,
+                        PageItem::Polygon(Polygon::from_xml_event(
                             &e,
                             reader,
                             options.max_attribute_bytes,
@@ -1121,7 +1199,8 @@ fn count_serialized_page_item(count: usize, page_item: &PageItem) -> Result<usiz
         PageItem::TextFrame(_)
         | PageItem::Rectangle(_)
         | PageItem::Oval(_)
-        | PageItem::GraphicLine(_) => Ok(count),
+        | PageItem::GraphicLine(_)
+        | PageItem::Polygon(_) => Ok(count),
         PageItem::Group(group) => group
             .page_items
             .iter()
@@ -1273,7 +1352,10 @@ fn collect_text_frames_from_page_item<'a>(
 ) {
     match page_item {
         PageItem::TextFrame(frame) => frames.push(frame),
-        PageItem::Rectangle(_) | PageItem::Oval(_) | PageItem::GraphicLine(_) => {}
+        PageItem::Rectangle(_)
+        | PageItem::Oval(_)
+        | PageItem::GraphicLine(_)
+        | PageItem::Polygon(_) => {}
         PageItem::Group(group) => {
             for child in &group.page_items {
                 collect_text_frames_from_page_item(child, frames);
@@ -1306,6 +1388,7 @@ fn validate_page_item(page_item: &PageItem) -> Result<()> {
         PageItem::Rectangle(rectangle) => validate_rectangle(rectangle),
         PageItem::Oval(oval) => validate_oval(oval),
         PageItem::GraphicLine(line) => validate_graphic_line(line),
+        PageItem::Polygon(polygon) => validate_polygon(polygon),
         PageItem::Group(group) => validate_group(group),
     }
 }
@@ -1333,6 +1416,15 @@ fn validate_graphic_line(line: &GraphicLine) -> Result<()> {
     validate_optional_attr("GraphicLine", "ItemLayer", line.layer_id.as_deref())?;
     if let Some(bounds) = line.geometric_bounds {
         validate_finite_bounds("GraphicLine", bounds)?;
+    }
+    Ok(())
+}
+
+fn validate_polygon(polygon: &Polygon) -> Result<()> {
+    validate_optional_attr("Polygon", "Self", polygon.id.as_deref())?;
+    validate_optional_attr("Polygon", "ItemLayer", polygon.layer_id.as_deref())?;
+    if let Some(bounds) = polygon.geometric_bounds {
+        validate_finite_bounds("Polygon", bounds)?;
     }
     Ok(())
 }
@@ -1383,6 +1475,7 @@ fn serialize_page_item(xml: &mut String, page_item: &PageItem, indent: usize) ->
         PageItem::Rectangle(rectangle) => serialize_rectangle_with_indent(xml, rectangle, indent),
         PageItem::Oval(oval) => serialize_oval_with_indent(xml, oval, indent),
         PageItem::GraphicLine(line) => serialize_graphic_line_with_indent(xml, line, indent),
+        PageItem::Polygon(polygon) => serialize_polygon_with_indent(xml, polygon, indent),
         PageItem::Group(group) => serialize_group(xml, group, indent),
     }
 }
@@ -1465,6 +1558,23 @@ fn serialize_graphic_line_with_indent(
     if let Some(bounds) = line.geometric_bounds {
         let bounds = format_geometric_bounds("GraphicLine", bounds)?;
         push_attr(xml, "GraphicLine", "GeometricBounds", &bounds)?;
+    }
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn serialize_polygon_with_indent(xml: &mut String, polygon: &Polygon, indent: usize) -> Result<()> {
+    push_indent(xml, indent);
+    xml.push_str("<Polygon");
+    if let Some(id) = &polygon.id {
+        push_attr(xml, "Polygon", "Self", id)?;
+    }
+    if let Some(layer_id) = &polygon.layer_id {
+        push_attr(xml, "Polygon", "ItemLayer", layer_id)?;
+    }
+    if let Some(bounds) = polygon.geometric_bounds {
+        let bounds = format_geometric_bounds("Polygon", bounds)?;
+        push_attr(xml, "Polygon", "GeometricBounds", &bounds)?;
     }
     xml.push_str(" />\n");
     Ok(())
@@ -1566,8 +1676,8 @@ fn push_optional_attr(xml: &mut String, name: &'static str, value: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::{
-        GraphicLine, Group, Oval, Page, PageItem, Rect, Rectangle, Spread, SpreadParseOptions,
-        TextFrame,
+        GraphicLine, Group, Oval, Page, PageItem, Polygon, Rect, Rectangle, Spread,
+        SpreadParseOptions, TextFrame,
     };
     use crate::IdmlError;
     use crate::core::units::Points;
@@ -1625,7 +1735,11 @@ mod tests {
         assert_eq!(spread.text_frames[0].id.as_deref(), Some("tp1"));
         assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
         assert!(spread.text_frames[0].geometric_bounds.is_none());
-        assert!(spread.page_items.is_empty());
+        assert_eq!(spread.page_items.len(), 1);
+        assert!(matches!(
+            &spread.page_items[0],
+            PageItem::Polygon(Polygon { id, .. }) if id.as_deref() == Some("poly1")
+        ));
     }
 
     #[test]
@@ -1642,7 +1756,7 @@ mod tests {
         let spread = Spread::from_xml(xml).unwrap();
 
         assert_eq!(spread.text_frames.len(), 3);
-        assert_eq!(spread.page_items.len(), 3);
+        assert_eq!(spread.page_items.len(), 4);
         spread.validate().unwrap();
 
         let serialized = spread.to_xml().unwrap();
@@ -1877,6 +1991,45 @@ mod tests {
                 ..
             }) if id.as_deref() == Some("l2")
         ));
+    }
+
+    #[test]
+    fn parses_polygons_and_preserves_text_path_indexing() {
+        let xml = r#"<Spread Self="u10">
+  <Polygon Self="poly1" ItemLayer="layer1" GeometricBounds="0 0 72 72">
+    <PathGeometry>
+      <GeometryPathType>
+        <PathPointArray>
+          <PathPointType Anchor="0 0" LeftDirection="0 0" RightDirection="0 0" />
+        </PathPointArray>
+      </GeometryPathType>
+    </PathGeometry>
+    <TextPath Self="tp1" ParentStory="u2" />
+  </Polygon>
+  <TextFrame Self="tf1" ParentStory="u3" />
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.text_frames.len(), 2);
+        assert_eq!(spread.text_frames[0].id.as_deref(), Some("tp1"));
+        assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
+        assert_eq!(spread.text_frames[1].id.as_deref(), Some("tf1"));
+        assert_eq!(spread.page_items.len(), 2);
+        assert!(matches!(
+            &spread.page_items[0],
+            PageItem::Polygon(Polygon {
+                id,
+                layer_id,
+                geometric_bounds: Some(_),
+            }) if id.as_deref() == Some("poly1") && layer_id.as_deref() == Some("layer1")
+        ));
+
+        let serialized = spread.to_xml().unwrap();
+        let polygon = serialized.find("<Polygon").unwrap();
+        let text_path_as_frame = serialized.find("Self=\"tp1\"").unwrap();
+
+        assert!(polygon < text_path_as_frame);
     }
 
     #[test]
@@ -2402,6 +2555,16 @@ mod tests {
                         Points::new(40.0),
                     )),
                 }),
+                PageItem::Polygon(Polygon {
+                    id: Some("poly1".to_owned()),
+                    layer_id: Some("layer6".to_owned()),
+                    geometric_bounds: Some(Rect::new(
+                        Points::new(40.0),
+                        Points::new(40.0),
+                        Points::new(60.0),
+                        Points::new(60.0),
+                    )),
+                }),
                 PageItem::Group(Group {
                     id: Some("g1".to_owned()),
                     layer_id: Some("layer3".to_owned()),
@@ -2421,6 +2584,8 @@ mod tests {
         assert!(xml.contains("<Oval"));
         assert!(xml.contains("ItemLayer=\"layer5\""));
         assert!(xml.contains("<GraphicLine"));
+        assert!(xml.contains("ItemLayer=\"layer6\""));
+        assert!(xml.contains("<Polygon"));
         assert_eq!(parsed, spread);
     }
 
