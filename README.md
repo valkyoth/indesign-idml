@@ -41,6 +41,7 @@ The release gate compiles and runs the public examples:
 cargo run --example read_text
 cargo run --example build_basic
 cargo run --example edit_story
+cargo run --example roundtrip_file -- INPUT.idml
 ```
 
 ## CLI
@@ -71,6 +72,18 @@ scripts/build-cli-release.sh
 
 The script writes `dist/idml-text-v<VERSION>-<TARGET>` and a matching
 `.sha256` checksum file.
+
+## Private Fixtures
+
+Private or license-unclear IDML samples can be placed in
+`tests/fixtures/private-idml/`. That directory is ignored by git and blocked
+from the publish package. When present, these optional local checks exercise
+real files without making them part of the crate:
+
+```sh
+scripts/smoke_private_fixtures.sh
+scripts/smoke_private_roundtrip.sh
+```
 
 ## License
 

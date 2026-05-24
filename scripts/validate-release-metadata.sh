@@ -59,6 +59,7 @@ for required_package_file in \
     "examples/build_basic.rs" \
     "examples/edit_story.rs" \
     "examples/read_text.rs" \
+    "examples/roundtrip_file.rs" \
     "tests/idml_text_cli.rs" \
     "tests/fixtures/README.md" \
     "src/lib.rs"

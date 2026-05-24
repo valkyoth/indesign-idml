@@ -913,6 +913,9 @@ fn serialize_spread(spread: &Spread) -> Result<String> {
         for page_item in &spread.page_items {
             serialize_page_item(&mut xml, page_item, 2)?;
         }
+        for frame in unrepresented_text_frames(spread)? {
+            serialize_text_frame(&mut xml, frame)?;
+        }
     }
 
     xml.push_str("</Spread>\n");
@@ -943,10 +946,17 @@ fn serialized_page_item_count(spread: &Spread) -> Result<usize> {
         return Ok(spread.text_frames.len());
     }
 
-    spread
+    let page_item_count = spread
         .page_items
         .iter()
-        .try_fold(0usize, count_serialized_page_item)
+        .try_fold(0usize, count_serialized_page_item)?;
+    page_item_count
+        .checked_add(unrepresented_text_frames(spread)?.len())
+        .ok_or(IdmlError::LimitExceeded {
+            what: "spread page item count",
+            limit: DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD as u64,
+            actual: u64::MAX,
+        })
 }
 
 fn count_serialized_page_item(count: usize, page_item: &PageItem) -> Result<usize> {
@@ -989,17 +999,59 @@ fn validate_page_items(spread: &Spread) -> Result<()> {
             frames
         });
 
-    if page_item_text_frames.len() != spread.text_frames.len() {
-        return Err(stale_page_items_error());
-    }
-
-    for (from_items, from_index) in page_item_text_frames.iter().zip(&spread.text_frames) {
-        if *from_items != from_index {
-            return Err(stale_page_items_error());
+    let mut text_frame_index = 0usize;
+    for from_items in page_item_text_frames {
+        loop {
+            let Some(from_index) = spread.text_frames.get(text_frame_index) else {
+                return Err(stale_page_items_error());
+            };
+            text_frame_index += 1;
+            if from_items == from_index {
+                break;
+            }
+            if text_frame_index == spread.text_frames.len() {
+                return Err(stale_page_items_error());
+            }
         }
     }
 
     Ok(())
+}
+
+fn unrepresented_text_frames(spread: &Spread) -> Result<Vec<&TextFrame>> {
+    let page_item_text_frames = spread
+        .page_items
+        .iter()
+        .fold(Vec::new(), |mut frames, item| {
+            collect_text_frames_from_page_item(item, &mut frames);
+            frames
+        });
+
+    let mut represented = vec![false; spread.text_frames.len()];
+    let mut text_frame_index = 0usize;
+    for from_items in page_item_text_frames {
+        loop {
+            let Some(from_index) = spread.text_frames.get(text_frame_index) else {
+                return Err(stale_page_items_error());
+            };
+            let current = text_frame_index;
+            text_frame_index += 1;
+            if from_items == from_index {
+                represented[current] = true;
+                break;
+            }
+            if text_frame_index == spread.text_frames.len() {
+                return Err(stale_page_items_error());
+            }
+        }
+    }
+
+    Ok(spread
+        .text_frames
+        .iter()
+        .zip(represented)
+        .filter_map(|(frame, represented)| (!represented).then_some(frame))
+        .collect())
 }
 
 fn stale_page_items_error() -> IdmlError {
@@ -1314,6 +1366,33 @@ mod tests {
         assert_eq!(spread.text_frames[0].parent_story.as_deref(), Some("u2"));
         assert!(spread.text_frames[0].geometric_bounds.is_none());
         assert!(spread.page_items.is_empty());
+    }
+
+    #[test]
+    fn validates_and_serializes_text_paths_not_represented_as_page_items() {
+        let xml = r#"<Spread Self="u10">
+  <TextFrame Self="tf1" ParentStory="u1" />
+  <Polygon Self="poly1">
+    <TextPath Self="tp1" ParentStory="u2" />
+  </Polygon>
+  <Rectangle Self="r1" />
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        assert_eq!(spread.text_frames.len(), 2);
+        assert_eq!(spread.page_items.len(), 2);
+        spread.validate().unwrap();
+
+        let serialized = spread.to_xml().unwrap();
+        let parsed = Spread::from_xml(&serialized).unwrap();
+        let story_ids = parsed
+            .text_frames
+            .iter()
+            .filter_map(|frame| frame.parent_story.as_deref())
+            .collect::<Vec<_>>();
+
+        assert_eq!(story_ids, ["u1", "u2"]);
     }
 
     #[test]

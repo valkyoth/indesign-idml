@@ -15,6 +15,7 @@ Every release candidate must pass:
 - SBOM generation in SPDX and CycloneDX formats
 - `cargo package --locked` verification
 - reproducible release artifact check
+- optional private fixture extraction and read-write-read round-trip smoke
 - review of new public APIs for panic-free behavior on untrusted input
 - dependency review against current crates.io versions
 
