@@ -9,9 +9,9 @@ use indesign_idml::model::designmap::DesignMapParseOptions;
 use indesign_idml::model::spread::{Rect, SpreadParseOptions};
 use indesign_idml::model::story::StoryParseOptions;
 use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -289,6 +289,7 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     let Some(input) = input else {
         return Err(CliError::Usage("missing input IDML path"));
     };
+    ensure_output_does_not_overwrite_input(&input, &output)?;
     if all_spreads && spread_id.is_some() {
         return Err(CliError::Usage(
             "--all-spreads cannot be combined with --spread-id",
@@ -383,6 +384,28 @@ fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), CliErro
     })?;
 
     Ok(())
+}
+
+fn ensure_output_does_not_overwrite_input(
+    input: &Path,
+    output: &OutputTarget,
+) -> Result<(), CliError> {
+    let OutputTarget::File(output) = output else {
+        return Ok(());
+    };
+    if input == output {
+        return Err(CliError::Usage("--output must not be the input IDML path"));
+    }
+
+    let input = fs::canonicalize(input)?;
+    match fs::canonicalize(output) {
+        Ok(output) if output == input => {
+            Err(CliError::Usage("--output must not be the input IDML path"))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn with_output_writer(

@@ -114,6 +114,22 @@ fn idml_text_extracts_stories_to_file() {
 }
 
 #[test]
+fn idml_text_rejects_output_over_input() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("sample.idml");
+    fs::write(&input, sample_idml()).unwrap();
+
+    let mut command = Command::cargo_bin("idml-text").unwrap();
+    command.arg("--output").arg(&input).arg(&input);
+
+    command
+        .assert()
+        .failure()
+        .stderr("idml-text: --output must not be the input IDML path\n");
+    assert_eq!(fs::read(&input).unwrap(), sample_idml());
+}
+
+#[test]
 fn idml_text_rejects_missing_input() {
     let mut command = Command::cargo_bin("idml-text").unwrap();
 
