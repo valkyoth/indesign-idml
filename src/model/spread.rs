@@ -685,6 +685,80 @@ pub struct FrameFittingOption {
     pub fitting_alignment: Option<String>,
 }
 
+/// Export behavior and accessibility metadata for a page item.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ObjectExportOption {
+    /// EPUB type token, when present.
+    pub epub_type: Option<String>,
+    /// EPUB ARIA role token, when present.
+    pub epub_aria_role: Option<String>,
+    /// Export size mode, when present.
+    pub size_type: Option<String>,
+    /// Custom export size, preserved as an IDML string.
+    pub custom_size: Option<String>,
+    /// Layout appearance preservation mode, when present.
+    pub preserve_appearance_from_layout: Option<String>,
+    /// Source used for alternate text, when present.
+    pub alt_text_source_type: Option<String>,
+    /// Source used for actual text, when present.
+    pub actual_text_source_type: Option<String>,
+    /// Custom alternate text, when present.
+    pub custom_alt_text: Option<String>,
+    /// Custom actual text, when present.
+    pub custom_actual_text: Option<String>,
+    /// Tagging mode for export, when present.
+    pub apply_tag_type: Option<String>,
+    /// Whether custom image conversion is enabled.
+    pub custom_image_conversion: Option<bool>,
+    /// Image conversion format, when present.
+    pub image_conversion_type: Option<String>,
+    /// Custom image sizing mode, when present.
+    pub custom_image_size_option: Option<String>,
+    /// Image export resolution, when present.
+    pub image_export_resolution: Option<String>,
+    /// GIF palette option, when present.
+    pub gif_options_palette: Option<String>,
+    /// GIF interlace flag, when present.
+    pub gif_options_interlaced: Option<bool>,
+    /// JPEG quality option, when present.
+    pub jpeg_options_quality: Option<String>,
+    /// JPEG encoding option, when present.
+    pub jpeg_options_format: Option<String>,
+    /// Export image alignment, when present.
+    pub image_alignment: Option<String>,
+    /// Spacing before exported image, preserved as an IDML string.
+    pub image_space_before: Option<String>,
+    /// Spacing after exported image, preserved as an IDML string.
+    pub image_space_after: Option<String>,
+    /// Whether an image page break is applied.
+    pub use_image_page_break: Option<bool>,
+    /// Image page break mode, when present.
+    pub image_page_break: Option<String>,
+    /// Whether custom image alignment is enabled.
+    pub custom_image_alignment: Option<bool>,
+    /// Spacing unit for export values, when present.
+    pub space_unit: Option<String>,
+    /// Whether custom layout export settings are enabled.
+    pub custom_layout: Option<bool>,
+    /// Custom layout export mode, when present.
+    pub custom_layout_type: Option<String>,
+    /// Whether the original image is used for export.
+    pub use_original_image: Option<bool>,
+    /// Alternate-text metadata property, when present.
+    pub alt_metadata_property: Option<ObjectExportMetadataProperty>,
+    /// Actual-text metadata property, when present.
+    pub actual_metadata_property: Option<ObjectExportMetadataProperty>,
+}
+
+/// Metadata property reference inside `ObjectExportOption`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ObjectExportMetadataProperty {
+    /// Metadata namespace prefix, when present.
+    pub namespace_prefix: Option<String>,
+    /// Metadata property path, when present.
+    pub property_path: Option<String>,
+}
+
 /// Common page item metadata shared by frames, shapes, and groups.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageItemMetadata {
@@ -800,6 +874,8 @@ pub struct PageItemMetadata {
     pub text_wrap_preference: Option<TextWrapPreference>,
     /// Frame fitting option child element, when present.
     pub frame_fitting_option: Option<FrameFittingOption>,
+    /// Object export option child element, when present.
+    pub object_export_option: Option<ObjectExportOption>,
 }
 
 impl PageItemMetadata {
@@ -1036,6 +1112,7 @@ impl PageItemMetadata {
             )?,
             text_wrap_preference: None,
             frame_fitting_option: None,
+            object_export_option: None,
         })
     }
 }
@@ -1113,6 +1190,161 @@ impl FrameFittingOption {
                 reader,
                 max_attribute_bytes,
             )?,
+        })
+    }
+}
+
+impl ObjectExportOption {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            epub_type: optional_attr(event, "EpubType", reader, max_attribute_bytes)?,
+            epub_aria_role: optional_attr(event, "EpubAriaRole", reader, max_attribute_bytes)?,
+            size_type: optional_attr(event, "SizeType", reader, max_attribute_bytes)?,
+            custom_size: optional_attr(event, "CustomSize", reader, max_attribute_bytes)?,
+            preserve_appearance_from_layout: optional_attr(
+                event,
+                "PreserveAppearanceFromLayout",
+                reader,
+                max_attribute_bytes,
+            )?,
+            alt_text_source_type: optional_attr(
+                event,
+                "AltTextSourceType",
+                reader,
+                max_attribute_bytes,
+            )?,
+            actual_text_source_type: optional_attr(
+                event,
+                "ActualTextSourceType",
+                reader,
+                max_attribute_bytes,
+            )?,
+            custom_alt_text: optional_attr(event, "CustomAltText", reader, max_attribute_bytes)?,
+            custom_actual_text: optional_attr(
+                event,
+                "CustomActualText",
+                reader,
+                max_attribute_bytes,
+            )?,
+            apply_tag_type: optional_attr(event, "ApplyTagType", reader, max_attribute_bytes)?,
+            custom_image_conversion: optional_bool_attr(
+                event,
+                "ObjectExportOption",
+                "CustomImageConversion",
+                reader,
+                max_attribute_bytes,
+            )?,
+            image_conversion_type: optional_attr(
+                event,
+                "ImageConversionType",
+                reader,
+                max_attribute_bytes,
+            )?,
+            custom_image_size_option: optional_attr(
+                event,
+                "CustomImageSizeOption",
+                reader,
+                max_attribute_bytes,
+            )?,
+            image_export_resolution: optional_attr(
+                event,
+                "ImageExportResolution",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gif_options_palette: optional_attr(
+                event,
+                "GIFOptionsPalette",
+                reader,
+                max_attribute_bytes,
+            )?,
+            gif_options_interlaced: optional_bool_attr(
+                event,
+                "ObjectExportOption",
+                "GIFOptionsInterlaced",
+                reader,
+                max_attribute_bytes,
+            )?,
+            jpeg_options_quality: optional_attr(
+                event,
+                "JPEGOptionsQuality",
+                reader,
+                max_attribute_bytes,
+            )?,
+            jpeg_options_format: optional_attr(
+                event,
+                "JPEGOptionsFormat",
+                reader,
+                max_attribute_bytes,
+            )?,
+            image_alignment: optional_attr(event, "ImageAlignment", reader, max_attribute_bytes)?,
+            image_space_before: optional_attr(
+                event,
+                "ImageSpaceBefore",
+                reader,
+                max_attribute_bytes,
+            )?,
+            image_space_after: optional_attr(
+                event,
+                "ImageSpaceAfter",
+                reader,
+                max_attribute_bytes,
+            )?,
+            use_image_page_break: optional_bool_attr(
+                event,
+                "ObjectExportOption",
+                "UseImagePageBreak",
+                reader,
+                max_attribute_bytes,
+            )?,
+            image_page_break: optional_attr(event, "ImagePageBreak", reader, max_attribute_bytes)?,
+            custom_image_alignment: optional_bool_attr(
+                event,
+                "ObjectExportOption",
+                "CustomImageAlignment",
+                reader,
+                max_attribute_bytes,
+            )?,
+            space_unit: optional_attr(event, "SpaceUnit", reader, max_attribute_bytes)?,
+            custom_layout: optional_bool_attr(
+                event,
+                "ObjectExportOption",
+                "CustomLayout",
+                reader,
+                max_attribute_bytes,
+            )?,
+            custom_layout_type: optional_attr(
+                event,
+                "CustomLayoutType",
+                reader,
+                max_attribute_bytes,
+            )?,
+            use_original_image: optional_bool_attr(
+                event,
+                "ObjectExportOption",
+                "UseOriginalImage",
+                reader,
+                max_attribute_bytes,
+            )?,
+            alt_metadata_property: None,
+            actual_metadata_property: None,
+        })
+    }
+}
+
+impl ObjectExportMetadataProperty {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            namespace_prefix: optional_attr(event, "NamespacePrefix", reader, max_attribute_bytes)?,
+            property_path: optional_attr(event, "PropertyPath", reader, max_attribute_bytes)?,
         })
     }
 }
@@ -2290,6 +2522,14 @@ fn parse_text_frame_contents(
                         state.options.max_attribute_bytes,
                     )?);
                     parse_frame_fitting_option_contents(reader, state)?;
+                } else if e.name().as_ref() == b"ObjectExportOption" {
+                    let option = ObjectExportOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    frame.metadata.object_export_option =
+                        Some(parse_object_export_option_contents(reader, option, state)?);
                 }
             }
             Event::Empty(e) => {
@@ -2324,6 +2564,12 @@ fn parse_text_frame_contents(
                     )?);
                 } else if e.name().as_ref() == b"FrameFittingOption" {
                     frame.metadata.frame_fitting_option = Some(FrameFittingOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"ObjectExportOption" {
+                    frame.metadata.object_export_option = Some(ObjectExportOption::from_xml_event(
                         &e,
                         reader,
                         state.options.max_attribute_bytes,
@@ -2523,6 +2769,75 @@ fn parse_frame_fitting_option_contents(
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+fn parse_object_export_option_contents(
+    reader: &mut Reader<&[u8]>,
+    mut option: ObjectExportOption,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<ObjectExportOption> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                parse_object_export_property(&mut option, &e, reader, state)?;
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                parse_object_export_property(&mut option, &e, reader, state)?;
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"ObjectExportOption" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "ObjectExportOption".to_owned(),
+                    reason: "unclosed ObjectExportOption element",
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(option)
+}
+
+fn parse_object_export_property(
+    option: &mut ObjectExportOption,
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    state: &NestedSpreadParseState<'_>,
+) -> Result<()> {
+    if event.name().as_ref() == b"AltMetadataProperty" {
+        option.alt_metadata_property = Some(ObjectExportMetadataProperty::from_xml_event(
+            event,
+            reader,
+            state.options.max_attribute_bytes,
+        )?);
+    } else if event.name().as_ref() == b"ActualMetadataProperty" {
+        option.actual_metadata_property = Some(ObjectExportMetadataProperty::from_xml_event(
+            event,
+            reader,
+            state.options.max_attribute_bytes,
+        )?);
     }
     Ok(())
 }
@@ -2791,6 +3106,14 @@ fn parse_page_item_path_contents(
                         state.options.max_attribute_bytes,
                     )?);
                     parse_frame_fitting_option_contents(reader, state)?;
+                } else if e.name().as_ref() == b"ObjectExportOption" {
+                    let option = ObjectExportOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    metadata.object_export_option =
+                        Some(parse_object_export_option_contents(reader, option, state)?);
                 }
             }
             Event::Empty(e) => {
@@ -2816,6 +3139,12 @@ fn parse_page_item_path_contents(
                     )?);
                 } else if e.name().as_ref() == b"FrameFittingOption" {
                     metadata.frame_fitting_option = Some(FrameFittingOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"ObjectExportOption" {
+                    metadata.object_export_option = Some(ObjectExportOption::from_xml_event(
                         &e,
                         reader,
                         state.options.max_attribute_bytes,
@@ -3043,6 +3372,14 @@ fn parse_rectangle_contents(
                             state.options.max_attribute_bytes,
                         )?);
                     parse_frame_fitting_option_contents(reader, state)?;
+                } else if e.name().as_ref() == b"ObjectExportOption" {
+                    let option = ObjectExportOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    rectangle.metadata.object_export_option =
+                        Some(parse_object_export_option_contents(reader, option, state)?);
                 }
             }
             Event::Empty(e) => {
@@ -3070,6 +3407,13 @@ fn parse_rectangle_contents(
                 } else if e.name().as_ref() == b"FrameFittingOption" {
                     rectangle.metadata.frame_fitting_option =
                         Some(FrameFittingOption::from_xml_event(
+                            &e,
+                            reader,
+                            state.options.max_attribute_bytes,
+                        )?);
+                } else if e.name().as_ref() == b"ObjectExportOption" {
+                    rectangle.metadata.object_export_option =
+                        Some(ObjectExportOption::from_xml_event(
                             &e,
                             reader,
                             state.options.max_attribute_bytes,
@@ -3275,6 +3619,14 @@ fn parse_group_contents(
                         state.options.max_attribute_bytes,
                     )?);
                     parse_frame_fitting_option_contents(reader, state)?;
+                } else if e.name().as_ref() == b"ObjectExportOption" {
+                    let option = ObjectExportOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?;
+                    group.metadata.object_export_option =
+                        Some(parse_object_export_option_contents(reader, option, state)?);
                 }
             }
             Event::Empty(e) => {
@@ -3361,6 +3713,12 @@ fn parse_group_contents(
                     )?);
                 } else if e.name().as_ref() == b"FrameFittingOption" {
                     group.metadata.frame_fitting_option = Some(FrameFittingOption::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"ObjectExportOption" {
+                    group.metadata.object_export_option = Some(ObjectExportOption::from_xml_event(
                         &e,
                         reader,
                         state.options.max_attribute_bytes,
@@ -4193,6 +4551,9 @@ fn validate_page_item_metadata(element: &'static str, metadata: &PageItemMetadat
     if let Some(option) = &metadata.frame_fitting_option {
         validate_frame_fitting_option(option)?;
     }
+    if let Some(option) = &metadata.object_export_option {
+        validate_object_export_option(option)?;
+    }
     Ok(())
 }
 
@@ -4248,6 +4609,70 @@ fn validate_frame_fitting_option(option: &FrameFittingOption) -> Result<()> {
         "FittingAlignment",
         option.fitting_alignment.as_deref(),
     )?;
+    Ok(())
+}
+
+fn validate_object_export_option(option: &ObjectExportOption) -> Result<()> {
+    for (name, value) in [
+        ("EpubType", option.epub_type.as_deref()),
+        ("EpubAriaRole", option.epub_aria_role.as_deref()),
+        ("SizeType", option.size_type.as_deref()),
+        ("CustomSize", option.custom_size.as_deref()),
+        (
+            "PreserveAppearanceFromLayout",
+            option.preserve_appearance_from_layout.as_deref(),
+        ),
+        ("AltTextSourceType", option.alt_text_source_type.as_deref()),
+        (
+            "ActualTextSourceType",
+            option.actual_text_source_type.as_deref(),
+        ),
+        ("CustomAltText", option.custom_alt_text.as_deref()),
+        ("CustomActualText", option.custom_actual_text.as_deref()),
+        ("ApplyTagType", option.apply_tag_type.as_deref()),
+        (
+            "ImageConversionType",
+            option.image_conversion_type.as_deref(),
+        ),
+        (
+            "CustomImageSizeOption",
+            option.custom_image_size_option.as_deref(),
+        ),
+        (
+            "ImageExportResolution",
+            option.image_export_resolution.as_deref(),
+        ),
+        ("GIFOptionsPalette", option.gif_options_palette.as_deref()),
+        ("JPEGOptionsQuality", option.jpeg_options_quality.as_deref()),
+        ("JPEGOptionsFormat", option.jpeg_options_format.as_deref()),
+        ("ImageAlignment", option.image_alignment.as_deref()),
+        ("ImageSpaceBefore", option.image_space_before.as_deref()),
+        ("ImageSpaceAfter", option.image_space_after.as_deref()),
+        ("ImagePageBreak", option.image_page_break.as_deref()),
+        ("SpaceUnit", option.space_unit.as_deref()),
+        ("CustomLayoutType", option.custom_layout_type.as_deref()),
+    ] {
+        validate_optional_attr("ObjectExportOption", name, value)?;
+    }
+    if let Some(property) = &option.alt_metadata_property {
+        validate_object_export_metadata_property("AltMetadataProperty", property)?;
+    }
+    if let Some(property) = &option.actual_metadata_property {
+        validate_object_export_metadata_property("ActualMetadataProperty", property)?;
+    }
+    Ok(())
+}
+
+fn validate_object_export_metadata_property(
+    element: &'static str,
+    property: &ObjectExportMetadataProperty,
+) -> Result<()> {
+    validate_optional_attr(
+        element,
+        "NamespacePrefix",
+        property.namespace_prefix.as_deref(),
+    )?;
+    validate_optional_attr(element, "PropertyPath", property.property_path.as_deref())?;
     Ok(())
 }
 
@@ -4363,6 +4788,7 @@ fn serialize_text_frame_with_indent(
         || frame.preference.is_some()
         || frame.metadata.text_wrap_preference.is_some()
         || frame.metadata.frame_fitting_option.is_some()
+        || frame.metadata.object_export_option.is_some()
     {
         xml.push_str(">\n");
         if let Some(path_geometry) = &frame.path_geometry {
@@ -4662,6 +5088,9 @@ fn serialize_page_item_metadata_children(
     if let Some(option) = &metadata.frame_fitting_option {
         serialize_frame_fitting_option(xml, option, indent)?;
     }
+    if let Some(option) = &metadata.object_export_option {
+        serialize_object_export_option(xml, option, indent)?;
+    }
     Ok(())
 }
 
@@ -4775,6 +5204,233 @@ fn serialize_frame_fitting_option(
         "FrameFittingOption",
         "FittingAlignment",
         option.fitting_alignment.as_deref(),
+    )?;
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn serialize_object_export_option(
+    xml: &mut String,
+    option: &ObjectExportOption,
+    indent: usize,
+) -> Result<()> {
+    validate_object_export_option(option)?;
+    push_indent(xml, indent);
+    xml.push_str("<ObjectExportOption");
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "EpubType",
+        option.epub_type.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "EpubAriaRole",
+        option.epub_aria_role.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "SizeType",
+        option.size_type.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "CustomSize",
+        option.custom_size.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "PreserveAppearanceFromLayout",
+        option.preserve_appearance_from_layout.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "AltTextSourceType",
+        option.alt_text_source_type.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "ActualTextSourceType",
+        option.actual_text_source_type.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "CustomAltText",
+        option.custom_alt_text.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "CustomActualText",
+        option.custom_actual_text.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "ApplyTagType",
+        option.apply_tag_type.as_deref(),
+    )?;
+    push_optional_object_export_bool_attr(
+        xml,
+        "CustomImageConversion",
+        option.custom_image_conversion,
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "ImageConversionType",
+        option.image_conversion_type.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "CustomImageSizeOption",
+        option.custom_image_size_option.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "ImageExportResolution",
+        option.image_export_resolution.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "GIFOptionsPalette",
+        option.gif_options_palette.as_deref(),
+    )?;
+    push_optional_object_export_bool_attr(
+        xml,
+        "GIFOptionsInterlaced",
+        option.gif_options_interlaced,
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "JPEGOptionsQuality",
+        option.jpeg_options_quality.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "JPEGOptionsFormat",
+        option.jpeg_options_format.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "ImageAlignment",
+        option.image_alignment.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "ImageSpaceBefore",
+        option.image_space_before.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "ImageSpaceAfter",
+        option.image_space_after.as_deref(),
+    )?;
+    push_optional_object_export_bool_attr(xml, "UseImagePageBreak", option.use_image_page_break)?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "ImagePageBreak",
+        option.image_page_break.as_deref(),
+    )?;
+    push_optional_object_export_bool_attr(
+        xml,
+        "CustomImageAlignment",
+        option.custom_image_alignment,
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "SpaceUnit",
+        option.space_unit.as_deref(),
+    )?;
+    push_optional_object_export_bool_attr(xml, "CustomLayout", option.custom_layout)?;
+    push_optional_serialized_attr(
+        xml,
+        "ObjectExportOption",
+        "CustomLayoutType",
+        option.custom_layout_type.as_deref(),
+    )?;
+    push_optional_object_export_bool_attr(xml, "UseOriginalImage", option.use_original_image)?;
+
+    if option.alt_metadata_property.is_none() && option.actual_metadata_property.is_none() {
+        xml.push_str(" />\n");
+        return Ok(());
+    }
+
+    xml.push_str(">\n");
+    push_indent(xml, indent + 2);
+    xml.push_str("<Properties>\n");
+    if let Some(property) = &option.alt_metadata_property {
+        serialize_object_export_metadata_property(
+            xml,
+            "AltMetadataProperty",
+            property,
+            indent + 4,
+        )?;
+    }
+    if let Some(property) = &option.actual_metadata_property {
+        serialize_object_export_metadata_property(
+            xml,
+            "ActualMetadataProperty",
+            property,
+            indent + 4,
+        )?;
+    }
+    push_indent(xml, indent + 2);
+    xml.push_str("</Properties>\n");
+    push_indent(xml, indent);
+    xml.push_str("</ObjectExportOption>\n");
+    Ok(())
+}
+
+fn push_optional_object_export_bool_attr(
+    xml: &mut String,
+    name: &'static str,
+    value: Option<bool>,
+) -> Result<()> {
+    if let Some(value) = value {
+        push_attr(xml, "ObjectExportOption", name, bool_str(value))?;
+    }
+    Ok(())
+}
+
+fn serialize_object_export_metadata_property(
+    xml: &mut String,
+    element: &'static str,
+    property: &ObjectExportMetadataProperty,
+    indent: usize,
+) -> Result<()> {
+    validate_object_export_metadata_property(element, property)?;
+    push_indent(xml, indent);
+    xml.push('<');
+    xml.push_str(element);
+    push_optional_serialized_attr(
+        xml,
+        element,
+        "NamespacePrefix",
+        property.namespace_prefix.as_deref(),
+    )?;
+    push_optional_serialized_attr(
+        xml,
+        element,
+        "PropertyPath",
+        property.property_path.as_deref(),
     )?;
     xml.push_str(" />\n");
     Ok(())
@@ -5053,6 +5709,7 @@ fn serialize_rectangle_with_indent(
         && rectangle.images.is_empty()
         && rectangle.metadata.text_wrap_preference.is_none()
         && rectangle.metadata.frame_fitting_option.is_none()
+        && rectangle.metadata.object_export_option.is_none()
     {
         xml.push_str(" />\n");
         return Ok(());
@@ -5237,6 +5894,7 @@ fn serialize_oval_with_indent(xml: &mut String, oval: &Oval, indent: usize) -> R
     if oval.path_geometry.is_some()
         || oval.metadata.text_wrap_preference.is_some()
         || oval.metadata.frame_fitting_option.is_some()
+        || oval.metadata.object_export_option.is_some()
     {
         xml.push_str(">\n");
         if let Some(path_geometry) = &oval.path_geometry {
@@ -5272,6 +5930,7 @@ fn serialize_graphic_line_with_indent(
     if line.path_geometry.is_some()
         || line.metadata.text_wrap_preference.is_some()
         || line.metadata.frame_fitting_option.is_some()
+        || line.metadata.object_export_option.is_some()
     {
         xml.push_str(">\n");
         if let Some(path_geometry) = &line.path_geometry {
@@ -5303,6 +5962,7 @@ fn serialize_polygon_with_indent(xml: &mut String, polygon: &Polygon, indent: us
     if polygon.path_geometry.is_some()
         || polygon.metadata.text_wrap_preference.is_some()
         || polygon.metadata.frame_fitting_option.is_some()
+        || polygon.metadata.object_export_option.is_some()
     {
         xml.push_str(">\n");
         if let Some(path_geometry) = &polygon.path_geometry {
@@ -5334,6 +5994,7 @@ fn serialize_group(xml: &mut String, group: &Group, indent: usize) -> Result<()>
     if group.page_items.is_empty()
         && group.metadata.text_wrap_preference.is_none()
         && group.metadata.frame_fitting_option.is_none()
+        && group.metadata.object_export_option.is_none()
     {
         xml.push_str(" />\n");
         return Ok(());
@@ -6787,6 +7448,74 @@ mod tests {
         assert!(serialized.contains("<FrameFittingOption"));
         assert!(serialized.contains("FittingOnEmptyFrame=\"FillProportionally\""));
         assert!(serialized.contains("FittingOnEmptyFrame=\"ContentToFrame\""));
+        assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
+    }
+
+    #[test]
+    fn preserves_object_export_options_on_page_items() {
+        let xml = r#"<Spread Self="s1">
+  <Rectangle Self="r1">
+    <ObjectExportOption EpubType="Figure" EpubAriaRole="doc-cover" SizeType="CustomSize" CustomSize="100 200" PreserveAppearanceFromLayout="PreserveAppearanceRasterize" AltTextSourceType="Custom" ActualTextSourceType="Custom" CustomAltText="alt" CustomActualText="actual" ApplyTagType="TagArtifact" CustomImageConversion="true" ImageConversionType="PNG" CustomImageSizeOption="SizeRelativeToPageWidth" ImageExportResolution="Ppi300" GIFOptionsPalette="AdaptivePalette" GIFOptionsInterlaced="true" JPEGOptionsQuality="High" JPEGOptionsFormat="BaselineEncoding" ImageAlignment="AlignCenter" ImageSpaceBefore="1" ImageSpaceAfter="2" UseImagePageBreak="true" ImagePageBreak="PageBreakBefore" CustomImageAlignment="false" SpaceUnit="CssPixel" CustomLayout="true" CustomLayoutType="AlignmentAndSpacing" UseOriginalImage="false">
+      <Properties>
+        <AltMetadataProperty NamespacePrefix="dc" PropertyPath="title" />
+        <ActualMetadataProperty NamespacePrefix="xmp" PropertyPath="description" />
+      </Properties>
+    </ObjectExportOption>
+  </Rectangle>
+  <TextFrame Self="tf1" ParentStory="u1">
+    <ObjectExportOption AltTextSourceType="SourceXMLStructure" />
+  </TextFrame>
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+        let PageItem::Rectangle(rectangle) = &spread.page_items[0] else {
+            panic!("expected rectangle page item");
+        };
+        let rectangle_option = rectangle.metadata.object_export_option.as_ref().unwrap();
+        let frame_option = spread.text_frames[0]
+            .metadata
+            .object_export_option
+            .as_ref()
+            .unwrap();
+
+        assert_eq!(rectangle_option.epub_type.as_deref(), Some("Figure"));
+        assert_eq!(
+            rectangle_option.epub_aria_role.as_deref(),
+            Some("doc-cover")
+        );
+        assert_eq!(
+            rectangle_option.preserve_appearance_from_layout.as_deref(),
+            Some("PreserveAppearanceRasterize")
+        );
+        assert_eq!(rectangle_option.custom_image_conversion, Some(true));
+        assert_eq!(rectangle_option.gif_options_interlaced, Some(true));
+        assert_eq!(rectangle_option.use_image_page_break, Some(true));
+        assert_eq!(rectangle_option.custom_image_alignment, Some(false));
+        assert_eq!(rectangle_option.custom_layout, Some(true));
+        assert_eq!(rectangle_option.use_original_image, Some(false));
+        assert_eq!(
+            rectangle_option
+                .alt_metadata_property
+                .as_ref()
+                .and_then(|property| property.namespace_prefix.as_deref()),
+            Some("dc")
+        );
+        assert_eq!(
+            rectangle_option
+                .actual_metadata_property
+                .as_ref()
+                .and_then(|property| property.property_path.as_deref()),
+            Some("description")
+        );
+        assert_eq!(
+            frame_option.alt_text_source_type.as_deref(),
+            Some("SourceXMLStructure")
+        );
+
+        let serialized = spread.to_xml().unwrap();
+        assert!(serialized.contains("<ObjectExportOption"));
+        assert!(serialized.contains("EpubAriaRole=\"doc-cover\""));
+        assert!(serialized.contains("<AltMetadataProperty NamespacePrefix=\"dc\""));
         assert_eq!(Spread::from_xml(&serialized).unwrap(), spread);
     }
 

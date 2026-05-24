@@ -19,10 +19,11 @@ pub use crate::model::resources::{
     extract_resource_items, extract_resource_items_with_options,
 };
 pub use crate::model::spread::{
-    FrameFittingOption, GeometryPath, GraphicLine, Group, Guide, Image, ImageLink, Oval, Page,
-    PageItem, PageItemMetadata, PathGeometry, PathPoint, Point, Polygon, Rect, RectMm, Rectangle,
-    Spread, SpreadListItem, SpreadListProperty, SpreadParseOptions, TextFrame, TextFramePreference,
-    TextWrapOffset, TextWrapPreference,
+    FrameFittingOption, GeometryPath, GraphicLine, Group, Guide, Image, ImageLink,
+    ObjectExportMetadataProperty, ObjectExportOption, Oval, Page, PageItem, PageItemMetadata,
+    PathGeometry, PathPoint, Point, Polygon, Rect, RectMm, Rectangle, Spread, SpreadListItem,
+    SpreadListProperty, SpreadParseOptions, TextFrame, TextFramePreference, TextWrapOffset,
+    TextWrapPreference,
 };
 pub use crate::model::story::{
     CharacterStyleProperties, CharacterStyleRange, InCopyExportOption, ParagraphStyleProperties,

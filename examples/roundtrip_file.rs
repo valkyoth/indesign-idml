@@ -423,6 +423,7 @@ struct MetadataSummary {
     gradient_stroke_hilite_angle: Option<String>,
     text_wrap_preference: Option<TextWrapPreferenceSummary>,
     frame_fitting_option: Option<FrameFittingOptionSummary>,
+    object_export_option: Option<ObjectExportOptionSummary>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -451,6 +452,46 @@ struct FrameFittingOptionSummary {
     bottom_crop: Option<String>,
     fitting_on_empty_frame: Option<String>,
     fitting_alignment: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ObjectExportOptionSummary {
+    epub_type: Option<String>,
+    epub_aria_role: Option<String>,
+    size_type: Option<String>,
+    custom_size: Option<String>,
+    preserve_appearance_from_layout: Option<String>,
+    alt_text_source_type: Option<String>,
+    actual_text_source_type: Option<String>,
+    custom_alt_text: Option<String>,
+    custom_actual_text: Option<String>,
+    apply_tag_type: Option<String>,
+    custom_image_conversion: Option<bool>,
+    image_conversion_type: Option<String>,
+    custom_image_size_option: Option<String>,
+    image_export_resolution: Option<String>,
+    gif_options_palette: Option<String>,
+    gif_options_interlaced: Option<bool>,
+    jpeg_options_quality: Option<String>,
+    jpeg_options_format: Option<String>,
+    image_alignment: Option<String>,
+    image_space_before: Option<String>,
+    image_space_after: Option<String>,
+    use_image_page_break: Option<bool>,
+    image_page_break: Option<String>,
+    custom_image_alignment: Option<bool>,
+    space_unit: Option<String>,
+    custom_layout: Option<bool>,
+    custom_layout_type: Option<String>,
+    use_original_image: Option<bool>,
+    alt_metadata_property: Option<ObjectExportMetadataPropertySummary>,
+    actual_metadata_property: Option<ObjectExportMetadataPropertySummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ObjectExportMetadataPropertySummary {
+    namespace_prefix: Option<String>,
+    property_path: Option<String>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1019,6 +1060,10 @@ fn summarize_metadata(metadata: &PageItemMetadata) -> MetadataSummary {
             .frame_fitting_option
             .as_ref()
             .map(summarize_frame_fitting_option),
+        object_export_option: metadata
+            .object_export_option
+            .as_ref()
+            .map(summarize_object_export_option),
     }
 }
 
@@ -1048,6 +1093,56 @@ fn summarize_frame_fitting_option(option: &FrameFittingOption) -> FrameFittingOp
         bottom_crop: option.bottom_crop.clone(),
         fitting_on_empty_frame: option.fitting_on_empty_frame.clone(),
         fitting_alignment: option.fitting_alignment.clone(),
+    }
+}
+
+fn summarize_object_export_option(option: &ObjectExportOption) -> ObjectExportOptionSummary {
+    ObjectExportOptionSummary {
+        epub_type: option.epub_type.clone(),
+        epub_aria_role: option.epub_aria_role.clone(),
+        size_type: option.size_type.clone(),
+        custom_size: option.custom_size.clone(),
+        preserve_appearance_from_layout: option.preserve_appearance_from_layout.clone(),
+        alt_text_source_type: option.alt_text_source_type.clone(),
+        actual_text_source_type: option.actual_text_source_type.clone(),
+        custom_alt_text: option.custom_alt_text.clone(),
+        custom_actual_text: option.custom_actual_text.clone(),
+        apply_tag_type: option.apply_tag_type.clone(),
+        custom_image_conversion: option.custom_image_conversion,
+        image_conversion_type: option.image_conversion_type.clone(),
+        custom_image_size_option: option.custom_image_size_option.clone(),
+        image_export_resolution: option.image_export_resolution.clone(),
+        gif_options_palette: option.gif_options_palette.clone(),
+        gif_options_interlaced: option.gif_options_interlaced,
+        jpeg_options_quality: option.jpeg_options_quality.clone(),
+        jpeg_options_format: option.jpeg_options_format.clone(),
+        image_alignment: option.image_alignment.clone(),
+        image_space_before: option.image_space_before.clone(),
+        image_space_after: option.image_space_after.clone(),
+        use_image_page_break: option.use_image_page_break,
+        image_page_break: option.image_page_break.clone(),
+        custom_image_alignment: option.custom_image_alignment,
+        space_unit: option.space_unit.clone(),
+        custom_layout: option.custom_layout,
+        custom_layout_type: option.custom_layout_type.clone(),
+        use_original_image: option.use_original_image,
+        alt_metadata_property: option
+            .alt_metadata_property
+            .as_ref()
+            .map(summarize_object_export_metadata_property),
+        actual_metadata_property: option
+            .actual_metadata_property
+            .as_ref()
+            .map(summarize_object_export_metadata_property),
+    }
+}
+
+fn summarize_object_export_metadata_property(
+    property: &ObjectExportMetadataProperty,
+) -> ObjectExportMetadataPropertySummary {
+    ObjectExportMetadataPropertySummary {
+        namespace_prefix: property.namespace_prefix.clone(),
+        property_path: property.property_path.clone(),
     }
 }
 
