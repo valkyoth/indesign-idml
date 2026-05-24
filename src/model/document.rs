@@ -1136,6 +1136,9 @@ fn remember_structural_page_item_ids(
             if let Some(id) = &rectangle.id {
                 remember_object_id(seen, id)?;
             }
+            for image in &rectangle.images {
+                remember_image_ids(seen, image)?;
+            }
             Ok(())
         }
         crate::model::spread::PageItem::Oval(oval) => {
@@ -1168,6 +1171,21 @@ fn remember_structural_page_item_ids(
     }
 }
 
+fn remember_image_ids(
+    seen: &mut IndexSet<String>,
+    image: &crate::model::spread::Image,
+) -> Result<()> {
+    if let Some(id) = &image.id {
+        remember_object_id(seen, id)?;
+    }
+    for link in &image.links {
+        if let Some(id) = &link.id {
+            remember_object_id(seen, id)?;
+        }
+    }
+    Ok(())
+}
+
 fn reserve_page_item_object_ids(
     page_item: &crate::model::spread::PageItem,
     allocator: &mut IdmlIdAllocator,
@@ -1181,6 +1199,9 @@ fn reserve_page_item_object_ids(
         crate::model::spread::PageItem::Rectangle(rectangle) => {
             if let Some(id) = &rectangle.id {
                 allocator.reserve_existing(id);
+            }
+            for image in &rectangle.images {
+                reserve_image_object_ids(image, allocator);
             }
         }
         crate::model::spread::PageItem::Oval(oval) => {
@@ -1209,10 +1230,27 @@ fn reserve_page_item_object_ids(
     }
 }
 
+fn reserve_image_object_ids(image: &crate::model::spread::Image, allocator: &mut IdmlIdAllocator) {
+    if let Some(id) = &image.id {
+        allocator.reserve_existing(id);
+    }
+    for link in &image.links {
+        if let Some(id) = &link.id {
+            allocator.reserve_existing(id);
+        }
+    }
+}
+
 fn page_item_contains_object_id(page_item: &crate::model::spread::PageItem, id: &str) -> bool {
     match page_item {
         crate::model::spread::PageItem::TextFrame(frame) => frame.id.as_deref() == Some(id),
-        crate::model::spread::PageItem::Rectangle(rectangle) => rectangle.id.as_deref() == Some(id),
+        crate::model::spread::PageItem::Rectangle(rectangle) => {
+            rectangle.id.as_deref() == Some(id)
+                || rectangle
+                    .images
+                    .iter()
+                    .any(|image| image_contains_object_id(image, id))
+        }
         crate::model::spread::PageItem::Oval(oval) => oval.id.as_deref() == Some(id),
         crate::model::spread::PageItem::GraphicLine(line) => line.id.as_deref() == Some(id),
         crate::model::spread::PageItem::Polygon(polygon) => polygon.id.as_deref() == Some(id),
@@ -1224,6 +1262,14 @@ fn page_item_contains_object_id(page_item: &crate::model::spread::PageItem, id: 
                     .any(|child| page_item_contains_object_id(child, id))
         }
     }
+}
+
+fn image_contains_object_id(image: &crate::model::spread::Image, id: &str) -> bool {
+    image.id.as_deref() == Some(id)
+        || image
+            .links
+            .iter()
+            .any(|link| link.id.as_deref() == Some(id))
 }
 
 fn referenced_preserved_paths(design_map: &DesignMap) -> impl Iterator<Item = &IdmlPath> {
@@ -1410,8 +1456,8 @@ mod tests {
     };
     use crate::model::resources::ResourceIntegrityOptions;
     use crate::model::spread::{
-        GraphicLine, Group, Guide, Oval, Page, PageItem, Polygon, Rect, Rectangle, Spread,
-        SpreadParseOptions, TextFrame,
+        GraphicLine, Group, Guide, Image, ImageLink, Oval, Page, PageItem, Polygon, Rect,
+        Rectangle, Spread, SpreadParseOptions, TextFrame,
     };
     use crate::model::story::{Story, StoryParseOptions};
     use std::io::Cursor;
@@ -2542,12 +2588,23 @@ mod tests {
                 id: Some("u6".to_owned()),
                 layer_id: None,
                 geometric_bounds: None,
+                images: vec![Image {
+                    id: Some("u7".to_owned()),
+                    image_type_name: Some("$ID/JPEG".to_owned()),
+                    item_transform: None,
+                    graphic_bounds: None,
+                    links: vec![ImageLink {
+                        id: Some("u8".to_owned()),
+                        resource_uri: Some("file:/tmp/image.jpg".to_owned()),
+                        resource_format: Some("$ID/JPEG".to_owned()),
+                    }],
+                }],
             })],
         }));
 
         let mut allocator = document.id_allocator().unwrap();
 
-        assert_eq!(allocator.allocate().unwrap(), "u7");
+        assert_eq!(allocator.allocate().unwrap(), "u9");
     }
 
     #[test]
@@ -2977,6 +3034,7 @@ mod tests {
                     id: Some("rect1".to_owned()),
                     layer_id: Some("missing".to_owned()),
                     geometric_bounds: None,
+                    images: Vec::new(),
                 })],
             }));
 
@@ -3166,6 +3224,67 @@ mod tests {
             id: Some("tf1".to_owned()),
             layer_id: None,
             geometric_bounds: None,
+            images: Vec::new(),
+        }));
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "tf1"
+        ));
+    }
+
+    #[test]
+    fn rejects_nested_image_id_colliding_with_text_frame() {
+        let mut document = make_document();
+        let spread = document.spreads.get_mut("u10").unwrap();
+        spread.page_items.push(PageItem::Rectangle(Rectangle {
+            id: Some("rect1".to_owned()),
+            layer_id: None,
+            geometric_bounds: None,
+            images: vec![Image {
+                id: Some("tf1".to_owned()),
+                image_type_name: Some("$ID/JPEG".to_owned()),
+                item_transform: None,
+                graphic_bounds: None,
+                links: Vec::new(),
+            }],
+        }));
+
+        let err = document.validate().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::DuplicateId {
+                kind: "document object",
+                id,
+            } if id == "tf1"
+        ));
+    }
+
+    #[test]
+    fn rejects_nested_image_link_id_colliding_with_text_frame() {
+        let mut document = make_document();
+        let spread = document.spreads.get_mut("u10").unwrap();
+        spread.page_items.push(PageItem::Rectangle(Rectangle {
+            id: Some("rect1".to_owned()),
+            layer_id: None,
+            geometric_bounds: None,
+            images: vec![Image {
+                id: Some("image1".to_owned()),
+                image_type_name: None,
+                item_transform: None,
+                graphic_bounds: None,
+                links: vec![ImageLink {
+                    id: Some("tf1".to_owned()),
+                    resource_uri: Some("file:/tmp/image.jpg".to_owned()),
+                    resource_format: Some("$ID/JPEG".to_owned()),
+                }],
+            }],
         }));
 
         let err = document.validate().unwrap_err();
@@ -3223,6 +3342,7 @@ mod tests {
                 id: Some("page1".to_owned()),
                 layer_id: None,
                 geometric_bounds: None,
+                images: Vec::new(),
             })],
         }));
 

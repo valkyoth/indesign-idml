@@ -53,6 +53,9 @@ pub const DEFAULT_MAX_PAGES_PER_SPREAD: usize = 10_000;
 /// Default maximum guides accepted in one spread.
 pub const DEFAULT_MAX_GUIDES_PER_SPREAD: usize = 100_000;
 
+/// Default maximum nested images accepted in one spread.
+pub const DEFAULT_MAX_IMAGES_PER_SPREAD: usize = 100_000;
+
 /// Default maximum raw bytes accepted for one spread XML attribute value.
 pub const DEFAULT_MAX_SPREAD_ATTRIBUTE_BYTES: usize = 256 * 1024;
 
@@ -65,6 +68,8 @@ pub struct SpreadParseOptions {
     pub max_pages: usize,
     /// Maximum `Guide` elements collected from one spread.
     pub max_guides: usize,
+    /// Maximum nested `Image` elements collected from one spread.
+    pub max_images: usize,
     /// Maximum `TextFrame` elements collected from one spread.
     pub max_text_frames: usize,
     /// Maximum supported page items collected from one spread.
@@ -81,12 +86,22 @@ impl Default for SpreadParseOptions {
             max_xml_bytes: DEFAULT_MAX_XML_INPUT_BYTES,
             max_pages: DEFAULT_MAX_PAGES_PER_SPREAD,
             max_guides: DEFAULT_MAX_GUIDES_PER_SPREAD,
+            max_images: DEFAULT_MAX_IMAGES_PER_SPREAD,
             max_text_frames: DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD,
             max_page_items: DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD,
             max_attribute_bytes: DEFAULT_MAX_SPREAD_ATTRIBUTE_BYTES,
             max_xml_depth: DEFAULT_MAX_XML_DEPTH,
         }
     }
+}
+
+struct NestedSpreadParseState<'a> {
+    options: SpreadParseOptions,
+    xml_depth: &'a mut XmlDepthTracker,
+    root: &'a mut AnyRootTracker,
+    text_frames: &'a mut Vec<TextFrame>,
+    page_item_count: &'a mut usize,
+    image_count: &'a mut usize,
 }
 
 impl Spread {
@@ -107,6 +122,7 @@ impl Spread {
         let mut in_spread = false;
         let mut root_name = None;
         let mut page_item_count = 0usize;
+        let mut image_count = 0usize;
         let mut xml_depth = XmlDepthTracker::new(options.max_xml_depth, "Spread XML depth");
         let mut root = AnyRootTracker::default();
 
@@ -153,13 +169,21 @@ impl Spread {
                             options.max_text_frames,
                         )?;
                     } else if e.name().as_ref() == b"Rectangle" {
+                        let rectangle =
+                            Rectangle::from_xml_event(&e, &reader, options.max_attribute_bytes)?;
+                        let mut state = NestedSpreadParseState {
+                            options,
+                            xml_depth: &mut xml_depth,
+                            root: &mut root,
+                            text_frames: &mut spread.text_frames,
+                            page_item_count: &mut page_item_count,
+                            image_count: &mut image_count,
+                        };
+                        let rectangle =
+                            parse_rectangle_contents(&mut reader, rectangle, &mut state)?;
                         push_page_item_limited(
                             &mut spread.page_items,
-                            PageItem::Rectangle(Rectangle::from_xml_event(
-                                &e,
-                                &reader,
-                                options.max_attribute_bytes,
-                            )?),
+                            PageItem::Rectangle(rectangle),
                             &mut page_item_count,
                             options.max_page_items,
                         )?;
@@ -199,15 +223,15 @@ impl Spread {
                     } else if e.name().as_ref() == b"Group" {
                         let group =
                             Group::from_xml_event(&e, &reader, options.max_attribute_bytes)?;
-                        let group = parse_group_contents(
-                            &mut reader,
-                            group,
+                        let mut state = NestedSpreadParseState {
                             options,
-                            &mut xml_depth,
-                            &mut root,
-                            &mut spread.text_frames,
-                            &mut page_item_count,
-                        )?;
+                            xml_depth: &mut xml_depth,
+                            root: &mut root,
+                            text_frames: &mut spread.text_frames,
+                            page_item_count: &mut page_item_count,
+                            image_count: &mut image_count,
+                        };
+                        let group = parse_group_contents(&mut reader, group, &mut state)?;
                         push_page_item_limited(
                             &mut spread.page_items,
                             PageItem::Group(group),
@@ -473,6 +497,8 @@ pub struct Rectangle {
     pub layer_id: Option<String>,
     /// Geometric bounds in points, when represented directly.
     pub geometric_bounds: Option<Rect>,
+    /// Nested image graphics in XML order.
+    pub images: Vec<Image>,
 }
 
 impl Rectangle {
@@ -492,6 +518,72 @@ impl Rectangle {
             id,
             layer_id,
             geometric_bounds,
+            images: Vec::new(),
+        })
+    }
+}
+
+/// Image graphic metadata nested inside a rectangle.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Image {
+    /// Image `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Image type name, such as `$ID/JPEG`.
+    pub image_type_name: Option<String>,
+    /// Image transform matrix, preserved as an IDML string.
+    pub item_transform: Option<String>,
+    /// Graphic bounds in points, when represented directly.
+    pub graphic_bounds: Option<Rect>,
+    /// Linked resource records in XML order.
+    pub links: Vec<ImageLink>,
+}
+
+impl Image {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
+        let image_type_name = optional_attr(event, "ImageTypeName", reader, max_attribute_bytes)?;
+        let item_transform = optional_attr(event, "ItemTransform", reader, max_attribute_bytes)?;
+
+        Ok(Self {
+            id,
+            image_type_name,
+            item_transform,
+            graphic_bounds: None,
+            links: Vec::new(),
+        })
+    }
+}
+
+/// Linked image resource metadata.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImageLink {
+    /// Link `Self` identifier, when present.
+    pub id: Option<String>,
+    /// Link resource URI, when present.
+    pub resource_uri: Option<String>,
+    /// Link resource format, when present.
+    pub resource_format: Option<String>,
+}
+
+impl ImageLink {
+    fn from_xml_event(
+        event: &BytesStart<'_>,
+        reader: &Reader<&[u8]>,
+        max_attribute_bytes: usize,
+    ) -> Result<Self> {
+        let id = optional_attr(event, "Self", reader, max_attribute_bytes)?;
+        let resource_uri = optional_attr(event, "LinkResourceURI", reader, max_attribute_bytes)?;
+        let resource_format =
+            optional_attr(event, "LinkResourceFormat", reader, max_attribute_bytes)?;
+
+        Ok(Self {
+            id,
+            resource_uri,
+            resource_format,
         })
     }
 }
@@ -877,6 +969,41 @@ fn parse_geometric_bounds(element: &'static str, value: &str) -> Result<Rect> {
     Ok(rect)
 }
 
+fn parse_graphic_bounds(
+    event: &BytesStart<'_>,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<Rect> {
+    let left = required_point_attr(event, "GraphicBounds", "Left", reader, max_attribute_bytes)?;
+    let top = required_point_attr(event, "GraphicBounds", "Top", reader, max_attribute_bytes)?;
+    let right = required_point_attr(event, "GraphicBounds", "Right", reader, max_attribute_bytes)?;
+    let bottom = required_point_attr(
+        event,
+        "GraphicBounds",
+        "Bottom",
+        reader,
+        max_attribute_bytes,
+    )?;
+    let rect = Rect::new(top, left, bottom, right);
+    validate_finite_bounds("GraphicBounds", rect)?;
+    Ok(rect)
+}
+
+fn required_point_attr(
+    event: &BytesStart<'_>,
+    element: &'static str,
+    attribute: &'static str,
+    reader: &Reader<&[u8]>,
+    max_attribute_bytes: usize,
+) -> Result<Points> {
+    optional_attr(event, attribute, reader, max_attribute_bytes)?
+        .ok_or_else(|| IdmlError::MissingAttribute {
+            element: element.to_owned(),
+            attribute,
+        })
+        .and_then(|value| parse_point_attribute(element, attribute, &value))
+}
+
 fn parse_point_attribute(
     element: &'static str,
     attribute: &'static str,
@@ -1010,48 +1137,209 @@ fn push_page_item_limited(
     Ok(())
 }
 
+fn reserve_image_limited(image_count: &mut usize, max_images: usize) -> Result<()> {
+    let next_len = image_count.checked_add(1).ok_or(IdmlError::LimitExceeded {
+        what: "spread image count",
+        limit: max_images as u64,
+        actual: u64::MAX,
+    })?;
+
+    if next_len > max_images {
+        return Err(IdmlError::LimitExceeded {
+            what: "spread image count",
+            limit: max_images as u64,
+            actual: next_len as u64,
+        });
+    }
+
+    *image_count = next_len;
+    Ok(())
+}
+
+fn parse_rectangle_contents(
+    reader: &mut Reader<&[u8]>,
+    mut rectangle: Rectangle,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<Rectangle> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                if e.name().as_ref() == b"Image" {
+                    reserve_image_limited(state.image_count, state.options.max_images)?;
+                    let image =
+                        Image::from_xml_event(&e, reader, state.options.max_attribute_bytes)?;
+                    rectangle
+                        .images
+                        .push(parse_image_contents(reader, image, state)?);
+                } else if e.name().as_ref() == b"GraphicBounds" {
+                    rectangle
+                        .images
+                        .last_mut()
+                        .map(|image| {
+                            image.graphic_bounds = Some(parse_graphic_bounds(
+                                &e,
+                                reader,
+                                state.options.max_attribute_bytes,
+                            )?);
+                            Ok::<(), IdmlError>(())
+                        })
+                        .transpose()?;
+                }
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                if e.name().as_ref() == b"Image" {
+                    reserve_image_limited(state.image_count, state.options.max_images)?;
+                    rectangle.images.push(Image::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                }
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"Rectangle" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "Rectangle".to_owned(),
+                    reason: "unclosed Rectangle element",
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(rectangle)
+}
+
+fn parse_image_contents(
+    reader: &mut Reader<&[u8]>,
+    mut image: Image,
+    state: &mut NestedSpreadParseState<'_>,
+) -> Result<Image> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(e) => {
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
+                if e.name().as_ref() == b"Link" {
+                    image.links.push(ImageLink::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"GraphicBounds" {
+                    image.graphic_bounds = Some(parse_graphic_bounds(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                }
+            }
+            Event::Empty(e) => {
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
+                if e.name().as_ref() == b"Link" {
+                    image.links.push(ImageLink::from_xml_event(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                } else if e.name().as_ref() == b"GraphicBounds" {
+                    image.graphic_bounds = Some(parse_graphic_bounds(
+                        &e,
+                        reader,
+                        state.options.max_attribute_bytes,
+                    )?);
+                }
+            }
+            Event::End(e) => {
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
+                if e.name().as_ref() == b"Image" {
+                    break;
+                }
+            }
+            Event::Text(e) => {
+                state.root.visit_text(e.as_ref())?;
+            }
+            Event::CData(_) => {
+                state.root.visit_cdata()?;
+            }
+            Event::GeneralRef(_) => {
+                state.root.visit_reference()?;
+                reject_xml_entity_reference()?;
+            }
+            Event::DocType(_) => reject_xml_doctype()?,
+            Event::Eof => {
+                return Err(IdmlError::InvalidElement {
+                    element: "Image".to_owned(),
+                    reason: "unclosed Image element",
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(image)
+}
+
 fn parse_group_contents(
     reader: &mut Reader<&[u8]>,
     mut group: Group,
-    options: SpreadParseOptions,
-    xml_depth: &mut XmlDepthTracker,
-    root: &mut AnyRootTracker,
-    text_frames: &mut Vec<TextFrame>,
-    page_item_count: &mut usize,
+    state: &mut NestedSpreadParseState<'_>,
 ) -> Result<Group> {
     loop {
         match reader.read_event()? {
             Event::Start(e) => {
-                root.enter(e.name().as_ref())?;
-                xml_depth.enter()?;
+                state.root.enter(e.name().as_ref())?;
+                state.xml_depth.enter()?;
                 if e.name().as_ref() == b"TextFrame" {
                     push_text_frame_page_item_limited(
-                        text_frames,
+                        state.text_frames,
                         &mut group.page_items,
-                        TextFrame::from_xml_event(&e, reader, options.max_attribute_bytes)?,
-                        options,
-                        page_item_count,
+                        TextFrame::from_xml_event(&e, reader, state.options.max_attribute_bytes)?,
+                        state.options,
+                        state.page_item_count,
                     )?;
                 } else if e.name().as_ref() == b"TextPath" {
                     push_text_frame_index_limited(
-                        text_frames,
+                        state.text_frames,
                         TextFrame::from_text_path_xml_event(
                             &e,
                             reader,
-                            options.max_attribute_bytes,
+                            state.options.max_attribute_bytes,
                         )?,
-                        options.max_text_frames,
+                        state.options.max_text_frames,
                     )?;
                 } else if e.name().as_ref() == b"Rectangle" {
+                    let rectangle =
+                        Rectangle::from_xml_event(&e, reader, state.options.max_attribute_bytes)?;
+                    let rectangle = parse_rectangle_contents(reader, rectangle, state)?;
                     push_page_item_limited(
                         &mut group.page_items,
-                        PageItem::Rectangle(Rectangle::from_xml_event(
-                            &e,
-                            reader,
-                            options.max_attribute_bytes,
-                        )?),
-                        page_item_count,
-                        options.max_page_items,
+                        PageItem::Rectangle(rectangle),
+                        state.page_item_count,
+                        state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"Oval" {
                     push_page_item_limited(
@@ -1059,10 +1347,10 @@ fn parse_group_contents(
                         PageItem::Oval(Oval::from_xml_event(
                             &e,
                             reader,
-                            options.max_attribute_bytes,
+                            state.options.max_attribute_bytes,
                         )?),
-                        page_item_count,
-                        options.max_page_items,
+                        state.page_item_count,
+                        state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"GraphicLine" {
                     push_page_item_limited(
@@ -1070,10 +1358,10 @@ fn parse_group_contents(
                         PageItem::GraphicLine(GraphicLine::from_xml_event(
                             &e,
                             reader,
-                            options.max_attribute_bytes,
+                            state.options.max_attribute_bytes,
                         )?),
-                        page_item_count,
-                        options.max_page_items,
+                        state.page_item_count,
+                        state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"Polygon" {
                     push_page_item_limited(
@@ -1081,50 +1369,43 @@ fn parse_group_contents(
                         PageItem::Polygon(Polygon::from_xml_event(
                             &e,
                             reader,
-                            options.max_attribute_bytes,
+                            state.options.max_attribute_bytes,
                         )?),
-                        page_item_count,
-                        options.max_page_items,
+                        state.page_item_count,
+                        state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"Group" {
-                    let child = Group::from_xml_event(&e, reader, options.max_attribute_bytes)?;
-                    let child = parse_group_contents(
-                        reader,
-                        child,
-                        options,
-                        xml_depth,
-                        root,
-                        text_frames,
-                        page_item_count,
-                    )?;
+                    let child =
+                        Group::from_xml_event(&e, reader, state.options.max_attribute_bytes)?;
+                    let child = parse_group_contents(reader, child, state)?;
                     push_page_item_limited(
                         &mut group.page_items,
                         PageItem::Group(child),
-                        page_item_count,
-                        options.max_page_items,
+                        state.page_item_count,
+                        state.options.max_page_items,
                     )?;
                 }
             }
             Event::Empty(e) => {
-                root.visit_empty(e.name().as_ref())?;
-                xml_depth.visit_empty()?;
+                state.root.visit_empty(e.name().as_ref())?;
+                state.xml_depth.visit_empty()?;
                 if e.name().as_ref() == b"TextFrame" {
                     push_text_frame_page_item_limited(
-                        text_frames,
+                        state.text_frames,
                         &mut group.page_items,
-                        TextFrame::from_xml_event(&e, reader, options.max_attribute_bytes)?,
-                        options,
-                        page_item_count,
+                        TextFrame::from_xml_event(&e, reader, state.options.max_attribute_bytes)?,
+                        state.options,
+                        state.page_item_count,
                     )?;
                 } else if e.name().as_ref() == b"TextPath" {
                     push_text_frame_index_limited(
-                        text_frames,
+                        state.text_frames,
                         TextFrame::from_text_path_xml_event(
                             &e,
                             reader,
-                            options.max_attribute_bytes,
+                            state.options.max_attribute_bytes,
                         )?,
-                        options.max_text_frames,
+                        state.options.max_text_frames,
                     )?;
                 } else if e.name().as_ref() == b"Rectangle" {
                     push_page_item_limited(
@@ -1132,10 +1413,10 @@ fn parse_group_contents(
                         PageItem::Rectangle(Rectangle::from_xml_event(
                             &e,
                             reader,
-                            options.max_attribute_bytes,
+                            state.options.max_attribute_bytes,
                         )?),
-                        page_item_count,
-                        options.max_page_items,
+                        state.page_item_count,
+                        state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"Oval" {
                     push_page_item_limited(
@@ -1143,10 +1424,10 @@ fn parse_group_contents(
                         PageItem::Oval(Oval::from_xml_event(
                             &e,
                             reader,
-                            options.max_attribute_bytes,
+                            state.options.max_attribute_bytes,
                         )?),
-                        page_item_count,
-                        options.max_page_items,
+                        state.page_item_count,
+                        state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"GraphicLine" {
                     push_page_item_limited(
@@ -1154,10 +1435,10 @@ fn parse_group_contents(
                         PageItem::GraphicLine(GraphicLine::from_xml_event(
                             &e,
                             reader,
-                            options.max_attribute_bytes,
+                            state.options.max_attribute_bytes,
                         )?),
-                        page_item_count,
-                        options.max_page_items,
+                        state.page_item_count,
+                        state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"Polygon" {
                     push_page_item_limited(
@@ -1165,10 +1446,10 @@ fn parse_group_contents(
                         PageItem::Polygon(Polygon::from_xml_event(
                             &e,
                             reader,
-                            options.max_attribute_bytes,
+                            state.options.max_attribute_bytes,
                         )?),
-                        page_item_count,
-                        options.max_page_items,
+                        state.page_item_count,
+                        state.options.max_page_items,
                     )?;
                 } else if e.name().as_ref() == b"Group" {
                     push_page_item_limited(
@@ -1176,28 +1457,28 @@ fn parse_group_contents(
                         PageItem::Group(Group::from_xml_event(
                             &e,
                             reader,
-                            options.max_attribute_bytes,
+                            state.options.max_attribute_bytes,
                         )?),
-                        page_item_count,
-                        options.max_page_items,
+                        state.page_item_count,
+                        state.options.max_page_items,
                     )?;
                 }
             }
             Event::End(e) => {
-                xml_depth.exit()?;
-                root.exit(e.name().as_ref())?;
+                state.xml_depth.exit()?;
+                state.root.exit(e.name().as_ref())?;
                 if e.name().as_ref() == b"Group" {
                     break;
                 }
             }
             Event::Text(e) => {
-                root.visit_text(e.as_ref())?;
+                state.root.visit_text(e.as_ref())?;
             }
             Event::CData(_) => {
-                root.visit_cdata()?;
+                state.root.visit_cdata()?;
             }
             Event::GeneralRef(_) => {
-                root.visit_reference()?;
+                state.root.visit_reference()?;
                 reject_xml_entity_reference()?;
             }
             Event::DocType(_) => reject_xml_doctype()?,
@@ -1281,11 +1562,45 @@ fn validate_serialized_spread_counts(spread: &Spread) -> Result<()> {
         "spread text frame count",
     )?;
     enforce_serialized_spread_count(
+        serialized_image_count(spread)?,
+        DEFAULT_MAX_IMAGES_PER_SPREAD,
+        "spread image count",
+    )?;
+    enforce_serialized_spread_count(
         serialized_page_item_count(spread)?,
         DEFAULT_MAX_PAGE_ITEMS_PER_SPREAD,
         "spread page item count",
     )?;
     Ok(())
+}
+
+fn serialized_image_count(spread: &Spread) -> Result<usize> {
+    spread
+        .page_items
+        .iter()
+        .try_fold(0usize, count_images_in_page_item)
+}
+
+fn count_images_in_page_item(count: usize, page_item: &PageItem) -> Result<usize> {
+    match page_item {
+        PageItem::Rectangle(rectangle) => {
+            count
+                .checked_add(rectangle.images.len())
+                .ok_or(IdmlError::LimitExceeded {
+                    what: "spread image count",
+                    limit: DEFAULT_MAX_IMAGES_PER_SPREAD as u64,
+                    actual: u64::MAX,
+                })
+        }
+        PageItem::Group(group) => group
+            .page_items
+            .iter()
+            .try_fold(count, count_images_in_page_item),
+        PageItem::TextFrame(_)
+        | PageItem::Oval(_)
+        | PageItem::GraphicLine(_)
+        | PageItem::Polygon(_) => Ok(count),
+    }
 }
 
 fn serialized_page_item_count(spread: &Spread) -> Result<usize> {
@@ -1533,6 +1848,33 @@ fn validate_rectangle(rectangle: &Rectangle) -> Result<()> {
     if let Some(bounds) = rectangle.geometric_bounds {
         validate_finite_bounds("Rectangle", bounds)?;
     }
+    for image in &rectangle.images {
+        validate_image(image)?;
+    }
+    Ok(())
+}
+
+fn validate_image(image: &Image) -> Result<()> {
+    validate_optional_attr("Image", "Self", image.id.as_deref())?;
+    validate_optional_attr("Image", "ImageTypeName", image.image_type_name.as_deref())?;
+    validate_optional_attr("Image", "ItemTransform", image.item_transform.as_deref())?;
+    if let Some(bounds) = image.graphic_bounds {
+        validate_finite_bounds("GraphicBounds", bounds)?;
+    }
+    for link in &image.links {
+        validate_image_link(link)?;
+    }
+    Ok(())
+}
+
+fn validate_image_link(link: &ImageLink) -> Result<()> {
+    validate_optional_attr("Link", "Self", link.id.as_deref())?;
+    validate_optional_attr("Link", "LinkResourceURI", link.resource_uri.as_deref())?;
+    validate_optional_attr(
+        "Link",
+        "LinkResourceFormat",
+        link.resource_format.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -1676,6 +2018,76 @@ fn serialize_rectangle_with_indent(
     if let Some(bounds) = rectangle.geometric_bounds {
         let bounds = format_geometric_bounds("Rectangle", bounds)?;
         push_attr(xml, "Rectangle", "GeometricBounds", &bounds)?;
+    }
+    if rectangle.images.is_empty() {
+        xml.push_str(" />\n");
+        return Ok(());
+    }
+    xml.push_str(">\n");
+    for image in &rectangle.images {
+        serialize_image(xml, image, indent + 2)?;
+    }
+    push_indent(xml, indent);
+    xml.push_str("</Rectangle>\n");
+    Ok(())
+}
+
+fn serialize_image(xml: &mut String, image: &Image, indent: usize) -> Result<()> {
+    push_indent(xml, indent);
+    xml.push_str("<Image");
+    if let Some(id) = &image.id {
+        push_attr(xml, "Image", "Self", id)?;
+    }
+    if let Some(image_type_name) = &image.image_type_name {
+        push_attr(xml, "Image", "ImageTypeName", image_type_name)?;
+    }
+    if let Some(item_transform) = &image.item_transform {
+        push_attr(xml, "Image", "ItemTransform", item_transform)?;
+    }
+    if image.graphic_bounds.is_none() && image.links.is_empty() {
+        xml.push_str(" />\n");
+        return Ok(());
+    }
+
+    xml.push_str(">\n");
+    if let Some(bounds) = image.graphic_bounds {
+        push_indent(xml, indent + 2);
+        xml.push_str("<Properties>\n");
+        serialize_graphic_bounds(xml, bounds, indent + 4)?;
+        push_indent(xml, indent + 2);
+        xml.push_str("</Properties>\n");
+    }
+    for link in &image.links {
+        serialize_image_link(xml, link, indent + 2)?;
+    }
+    push_indent(xml, indent);
+    xml.push_str("</Image>\n");
+    Ok(())
+}
+
+fn serialize_graphic_bounds(xml: &mut String, bounds: Rect, indent: usize) -> Result<()> {
+    validate_finite_bounds("GraphicBounds", bounds)?;
+    push_indent(xml, indent);
+    xml.push_str("<GraphicBounds");
+    push_attr(xml, "GraphicBounds", "Left", &format_point(bounds.left))?;
+    push_attr(xml, "GraphicBounds", "Top", &format_point(bounds.top))?;
+    push_attr(xml, "GraphicBounds", "Right", &format_point(bounds.right))?;
+    push_attr(xml, "GraphicBounds", "Bottom", &format_point(bounds.bottom))?;
+    xml.push_str(" />\n");
+    Ok(())
+}
+
+fn serialize_image_link(xml: &mut String, link: &ImageLink, indent: usize) -> Result<()> {
+    push_indent(xml, indent);
+    xml.push_str("<Link");
+    if let Some(id) = &link.id {
+        push_attr(xml, "Link", "Self", id)?;
+    }
+    if let Some(resource_uri) = &link.resource_uri {
+        push_attr(xml, "Link", "LinkResourceURI", resource_uri)?;
+    }
+    if let Some(resource_format) = &link.resource_format {
+        push_attr(xml, "Link", "LinkResourceFormat", resource_format)?;
     }
     xml.push_str(" />\n");
     Ok(())
@@ -1851,7 +2263,7 @@ fn push_optional_attr(xml: &mut String, name: &'static str, value: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::{
-        GraphicLine, Group, Guide, Oval, Page, PageItem, Polygon, Rect, Rectangle, Spread,
+        GraphicLine, Group, Guide, Image, Oval, Page, PageItem, Polygon, Rect, Rectangle, Spread,
         SpreadParseOptions, TextFrame,
     };
     use crate::IdmlError;
@@ -2131,6 +2543,66 @@ mod tests {
     }
 
     #[test]
+    fn parses_rectangle_images_without_storing_embedded_contents() {
+        let xml = r#"<Spread Self="u10">
+  <Rectangle Self="r1" ItemLayer="layer1">
+    <Image Self="img1" ImageTypeName="$ID/JPEG" ItemTransform="1 0 0 1 10 20">
+      <Properties>
+        <GraphicBounds Left="0" Top="1" Right="640" Bottom="481" />
+        <Contents><![CDATA[large-payload-is-not-captured]]></Contents>
+      </Properties>
+      <Link Self="link1" LinkResourceURI="file:/tmp/image.jpg" LinkResourceFormat="$ID/JPEG" />
+    </Image>
+  </Rectangle>
+  <TextFrame Self="tf1" ParentStory="u2" />
+</Spread>"#;
+
+        let spread = Spread::from_xml(xml).unwrap();
+
+        let PageItem::Rectangle(rectangle) = &spread.page_items[0] else {
+            panic!("expected rectangle page item");
+        };
+        assert_eq!(rectangle.images.len(), 1);
+        assert_eq!(rectangle.images[0].id.as_deref(), Some("img1"));
+        assert_eq!(
+            rectangle.images[0].image_type_name.as_deref(),
+            Some("$ID/JPEG")
+        );
+        assert_eq!(
+            rectangle.images[0].item_transform.as_deref(),
+            Some("1 0 0 1 10 20")
+        );
+        assert_eq!(
+            rectangle.images[0].graphic_bounds.unwrap(),
+            Rect::new(
+                Points::new(1.0),
+                Points::new(0.0),
+                Points::new(481.0),
+                Points::new(640.0),
+            )
+        );
+        assert_eq!(rectangle.images[0].links.len(), 1);
+        assert_eq!(rectangle.images[0].links[0].id.as_deref(), Some("link1"));
+        assert_eq!(
+            rectangle.images[0].links[0].resource_uri.as_deref(),
+            Some("file:/tmp/image.jpg")
+        );
+
+        let serialized = spread.to_xml().unwrap();
+        let rectangle = serialized.find("<Rectangle").unwrap();
+        let image = serialized.find("<Image").unwrap();
+        let link = serialized.find("<Link").unwrap();
+        let frame = serialized.find("<TextFrame").unwrap();
+        let parsed = Spread::from_xml(&serialized).unwrap();
+
+        assert!(rectangle < image);
+        assert!(image < link);
+        assert!(link < frame);
+        assert!(!serialized.contains("large-payload-is-not-captured"));
+        assert_eq!(parsed, spread);
+    }
+
+    #[test]
     fn parses_ovals_and_preserves_page_item_order() {
         let xml = r#"<Spread Self="u10">
   <Oval Self="o1" ItemLayer="layer1" GeometricBounds="0 0 72 72" />
@@ -2383,6 +2855,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_image_graphic_bounds() {
+        let err = Spread::from_xml(
+            r#"<Spread><Rectangle><Image><Properties><GraphicBounds Left="0" Top="NaN" Right="1" Bottom="1" /></Properties></Image></Rectangle></Spread>"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::InvalidAttribute {
+                element,
+                attribute: "Top",
+                reason: "coordinate must be finite",
+            } if element == "GraphicBounds"
+        ));
+    }
+
+    #[test]
     fn rejects_duplicate_text_frame_parent_story_attributes() {
         let err =
             Spread::from_xml(r#"<Spread><TextFrame ParentStory="u1" ParentStory="u2" /></Spread>"#)
@@ -2486,6 +2975,27 @@ mod tests {
             err,
             IdmlError::LimitExceeded {
                 what: "spread guide count",
+                limit: 1,
+                actual: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_image_count_limit() {
+        let err = Spread::from_xml_with_options(
+            r#"<Spread><Rectangle><Image Self="img1" /><Image Self="img2" /></Rectangle></Spread>"#,
+            SpreadParseOptions {
+                max_images: 1,
+                ..SpreadParseOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread image count",
                 limit: 1,
                 actual: 2,
             }
@@ -2713,6 +3223,7 @@ mod tests {
                         Points::new(72.0),
                         Points::new(72.0),
                     )),
+                    images: Vec::new(),
                 }),
                 PageItem::TextFrame(text_frame),
             ],
@@ -2755,6 +3266,7 @@ mod tests {
                         id: Some("r1".to_owned()),
                         layer_id: None,
                         geometric_bounds: None,
+                        images: Vec::new(),
                     }),
                     PageItem::TextFrame(text_frame),
                 ],
@@ -2791,6 +3303,7 @@ mod tests {
                     id: Some("r1".to_owned()),
                     layer_id: Some("layer2".to_owned()),
                     geometric_bounds: None,
+                    images: Vec::new(),
                 }),
                 PageItem::Oval(Oval {
                     id: Some("o1".to_owned()),
@@ -2898,6 +3411,38 @@ mod tests {
     }
 
     #[test]
+    fn serializer_enforces_image_count_limit() {
+        let spread = Spread {
+            page_items: vec![PageItem::Rectangle(Rectangle {
+                id: Some("r1".to_owned()),
+                layer_id: None,
+                geometric_bounds: None,
+                images: (0..=super::DEFAULT_MAX_IMAGES_PER_SPREAD)
+                    .map(|index| Image {
+                        id: Some(format!("img{index}")),
+                        image_type_name: None,
+                        item_transform: None,
+                        graphic_bounds: None,
+                        links: Vec::new(),
+                    })
+                    .collect(),
+            })],
+            ..Spread::default()
+        };
+
+        let err = spread.to_xml().unwrap_err();
+
+        assert!(matches!(
+            err,
+            IdmlError::LimitExceeded {
+                what: "spread image count",
+                limit: 100_000,
+                actual: 100_001,
+            }
+        ));
+    }
+
+    #[test]
     fn serializer_enforces_text_frame_count_limit() {
         let spread = Spread {
             text_frames: (0..=super::DEFAULT_MAX_TEXT_FRAMES_PER_SPREAD)
@@ -2936,6 +3481,7 @@ mod tests {
                             id: Some(format!("r{index}")),
                             layer_id: None,
                             geometric_bounds: None,
+                            images: Vec::new(),
                         })
                     })
                     .collect(),

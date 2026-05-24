@@ -109,6 +109,7 @@ enum PageItemSummary {
         id: Option<String>,
         layer_id: Option<String>,
         bounds: Option<[u64; 4]>,
+        images: Vec<ImageSummary>,
     },
     Oval {
         id: Option<String>,
@@ -131,6 +132,22 @@ enum PageItemSummary {
         bounds: Option<[u64; 4]>,
         page_items: Vec<PageItemSummary>,
     },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ImageSummary {
+    id: Option<String>,
+    image_type_name: Option<String>,
+    item_transform: Option<String>,
+    graphic_bounds: Option<[u64; 4]>,
+    links: Vec<ImageLinkSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ImageLinkSummary {
+    id: Option<String>,
+    resource_uri: Option<String>,
+    resource_format: Option<String>,
 }
 
 impl Snapshot {
@@ -241,6 +258,25 @@ fn summarize_page_items(page_items: &[PageItem]) -> Vec<PageItemSummary> {
                 id: rectangle.id.clone(),
                 layer_id: rectangle.layer_id.clone(),
                 bounds: rectangle.geometric_bounds.map(rect_bits),
+                images: rectangle
+                    .images
+                    .iter()
+                    .map(|image| ImageSummary {
+                        id: image.id.clone(),
+                        image_type_name: image.image_type_name.clone(),
+                        item_transform: image.item_transform.clone(),
+                        graphic_bounds: image.graphic_bounds.map(rect_bits),
+                        links: image
+                            .links
+                            .iter()
+                            .map(|link| ImageLinkSummary {
+                                id: link.id.clone(),
+                                resource_uri: link.resource_uri.clone(),
+                                resource_format: link.resource_format.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
             }),
             PageItem::Oval(oval) => Some(PageItemSummary::Oval {
                 id: oval.id.clone(),
