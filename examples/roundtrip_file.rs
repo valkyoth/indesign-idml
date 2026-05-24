@@ -35,11 +35,29 @@ fn main() -> Result<()> {
 
 #[derive(Debug, Eq, PartialEq)]
 struct Snapshot {
+    document_id: String,
+    layers: Vec<LayerSummary>,
+    package_refs: Vec<PackageRefSummary>,
     story_count: usize,
     spread_count: usize,
     preserved_entry_count: usize,
     story_texts: Vec<(String, String)>,
     spread_summaries: Vec<SpreadSummary>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct LayerSummary {
+    id: Option<String>,
+    name: Option<String>,
+    visible: Option<bool>,
+    locked: Option<bool>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PackageRefSummary {
+    element: String,
+    id: Option<String>,
+    path: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -81,14 +99,33 @@ enum PageItemSummary {
 
 impl Snapshot {
     fn from_document(document: &IdmlDocument) -> Result<Self> {
+        let design_map = &document.design_map;
         let mut story_texts = Vec::new();
         document.try_for_each_story_text(|story_id, text| {
             story_texts.push((story_id.to_owned(), text.to_owned()));
             Ok::<(), IdmlError>(())
         })?;
+        let layers = design_map
+            .layers
+            .iter()
+            .map(|layer| LayerSummary {
+                id: layer.id.clone(),
+                name: layer.name.clone(),
+                visible: layer.visible,
+                locked: layer.locked,
+            })
+            .collect();
+        let package_refs = design_map
+            .package_refs
+            .iter()
+            .map(|reference| PackageRefSummary {
+                element: reference.element.clone(),
+                id: reference.id.clone(),
+                path: reference.path.as_str().to_owned(),
+            })
+            .collect();
         let spread_summaries =
-            document
-                .design_map
+            design_map
                 .spread_ids()
                 .map(|spread_id| {
                     let spread = document.spreads.get(spread_id).ok_or_else(|| {
@@ -123,8 +160,11 @@ impl Snapshot {
                 .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
-            story_count: document.design_map.story_srcs.len(),
-            spread_count: document.design_map.spread_srcs.len(),
+            document_id: design_map.id.clone(),
+            layers,
+            package_refs,
+            story_count: design_map.story_srcs.len(),
+            spread_count: design_map.spread_srcs.len(),
             preserved_entry_count: document.preserved_entries.len(),
             story_texts,
             spread_summaries,
